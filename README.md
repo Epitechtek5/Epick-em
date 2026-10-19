@@ -37,7 +37,7 @@ Le workflow [`ci.yml`](.github/workflows/ci.yml) détecte les composants modifi�
 
 ## Versions
 
-Les versions sont calculées automatiquement par [semantic-release](https://semantic-release.gitbook.io) à partir des messages de commit ([Conventional Commits](https://www.conventionalcommits.org/fr/)) : `fix:` → patch, `feat:` → minor, `feat!:` ou `BREAKING CHANGE:` → major. À chaque push sur `main`, le workflow [`release.yml`](.github/workflows/release.yml) crée le tag `vX.Y.Z` et la [GitHub Release](../../releases) correspondante, puis publie les images.
+Les versions sont calculées automatiquement par [semantic-release](https://semantic-release.gitbook.io) à partir des messages de commit ([Conventional Commits](https://www.conventionalcommits.org/fr/)) : `fix:` → patch, `feat:` → minor, `feat!:` ou `BREAKING CHANGE:` → major. À chaque push sur `main`, le workflow [`release.yml`](.github/workflows/release.yml) met à jour [`CHANGELOG.md`](CHANGELOG.md) et les versions de `backend/Cargo.toml` et du chart Helm (commit `chore(release)` signé `semantic-release-bot`), crée le tag `vX.Y.Z` et la [GitHub Release](../../releases) correspondante, puis publie les images.
 
 ## Contribuer
 

@@ -4,7 +4,15 @@
   "plugins": [
     ["@semantic-release/commit-analyzer", { "preset": "conventionalcommits" }],
     ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
-    "@semantic-release/github",
-    ["@semantic-release/exec", { "publishCmd": "echo \"version=${nextRelease.version}\" >> \"$GITHUB_OUTPUT\"" }]
+    ["@semantic-release/changelog", { "changelogTitle": "# Changelog\n\nGénéré automatiquement par semantic-release à partir des commits." }],
+    ["@semantic-release/exec", {
+      "prepareCmd": ".github/scripts/bump-version.sh ${nextRelease.version}",
+      "publishCmd": "echo \"version=${nextRelease.version}\" >> \"$GITHUB_OUTPUT\""
+    }],
+    ["@semantic-release/git", {
+      "assets": ["CHANGELOG.md", "backend/Cargo.toml", "backend/Cargo.lock", "deploy/helm/epickem/Chart.yaml"],
+      "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+    }],
+    "@semantic-release/github"
   ]
 }
