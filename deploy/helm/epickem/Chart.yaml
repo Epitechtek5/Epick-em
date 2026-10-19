@@ -1,0 +1,6 @@
+apiVersion: v2
+name: epickem
+description: Plateforme Epick'em (API publique, API interne, PostgreSQL, Redis, ingress)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

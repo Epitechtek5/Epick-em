@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      db: ${{ steps.filter.outputs.db }}
+      web: ${{ steps.filter.outputs.web }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+      deploy: ${{ steps.filter.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/backend.yml'
+            db:
+              - 'db/**'
+              - '.github/workflows/db.yml'
+            web:
+              - 'web/**'
+              - '.github/workflows/web.yml'
+            mobile:
+              - 'mobile/**'
+              - '.github/workflows/mobile.yml'
+            deploy:
+              - 'deploy/**'
+              - '.github/workflows/deploy.yml'
+
+  # Toujours exécuté, sur tout l'historique : aucun secret ne doit entrer dans le dépôt (ADR-007).
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rechercher des secrets
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --no-banner --redact -v
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    uses: ./.github/workflows/backend.yml
+
+  db:
+    needs: changes
+    if: needs.changes.outputs.db == 'true'
+    uses: ./.github/workflows/db.yml
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    uses: ./.github/workflows/web.yml
+
+  mobile:
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    uses: ./.github/workflows/mobile.yml
+
+  deploy:
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true'
+    uses: ./.github/workflows/deploy.yml
+
+  # Seul check requis par la protection de branche : stable quels que soient les chemins modifiés.
+  ci-ok:
+    if: always()
+    needs: [changes, gitleaks, backend, db, web, mobile, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifier qu'aucun job n'a échoué
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "Tous les jobs exécutés ont réussi."

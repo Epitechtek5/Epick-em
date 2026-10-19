@@ -1,0 +1,48 @@
+name: Backend
+
+on:
+  workflow_call:
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo test --workspace --locked
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bin: [api-public, api-internal, simulator]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          build-args: BIN=${{ matrix.bin }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.bin }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.bin }}

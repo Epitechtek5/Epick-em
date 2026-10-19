@@ -1,0 +1,29 @@
+name: DB
+
+on:
+  workflow_call:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: epickem
+          POSTGRES_USER: epickem
+          POSTGRES_PASSWORD: epickem
+        options: >-
+          --health-cmd "pg_isready -U epickem"
+          --health-interval 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t epickem-migrations db
+      - name: Appliquer les migrations sur une base vierge
+        run: |
+          docker run --rm --network ${{ job.services.postgres.network }} \
+            -e LIQUIBASE_COMMAND_URL=jdbc:postgresql://postgres:5432/epickem \
+            -e LIQUIBASE_COMMAND_USERNAME=epickem \
+            -e LIQUIBASE_COMMAND_PASSWORD=epickem \
+            epickem-migrations

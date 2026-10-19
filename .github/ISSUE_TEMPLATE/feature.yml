@@ -1,0 +1,22 @@
+name: Fonctionnalité
+description: Proposer une nouvelle fonctionnalité ou une tâche
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Composant
+      multiple: true
+      options: [backend, db, web, mobile, deploy, docs]
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Critères d'acceptation

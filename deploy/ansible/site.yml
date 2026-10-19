@@ -1,0 +1,5 @@
+# Point d'entrée : provisioning de la VM, installation de k3s, déploiement du chart.
+- name: Epick'em
+  hosts: all
+  become: true
+  tasks: []

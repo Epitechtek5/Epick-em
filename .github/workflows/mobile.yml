@@ -1,0 +1,33 @@
+name: Mobile
+
+on:
+  workflow_call:
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Projet initialisé ?
+        id: init
+        run: |
+          if [ -f package.json ]; then echo "ready=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::mobile/ pas encore initialisé, étapes ignorées."; fi
+      - uses: actions/setup-node@v4
+        if: steps.init.outputs.ready == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - if: steps.init.outputs.ready == 'true'
+        run: npm ci
+      - if: steps.init.outputs.ready == 'true'
+        run: npm run lint
+      - if: steps.init.outputs.ready == 'true'
+        run: npm test
+      - if: steps.init.outputs.ready == 'true'
+        run: npm run build

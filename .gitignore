@@ -1,0 +1,18 @@
+# Rust
+target/
+
+# Secrets (voir ADR-007)
+.env
+*.kubeconfig
+kubeconfig*
+deploy/ansible/inventories/*
+!deploy/ansible/inventories/example.ini
+*.vault.decrypted*
+
+# Node
+node_modules/
+
+# Éditeurs / OS
+.idea/
+.vscode/
+.DS_Store

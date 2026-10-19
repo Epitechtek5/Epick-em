@@ -1,0 +1,5 @@
+# Valeurs par défaut du chart. Aucun secret ici (voir ADR-007).
+image:
+  registry: ghcr.io
+  # Tag commun aux images : SHA du commit ou version semver.
+  tag: ""

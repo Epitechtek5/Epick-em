@@ -1,0 +1,19 @@
+name: Deploy (lint)
+
+on:
+  workflow_call:
+
+jobs:
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/epickem
+
+  ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx install ansible-core
+      - run: ansible-playbook --syntax-check -i deploy/ansible/inventories/example.ini deploy/ansible/site.yml

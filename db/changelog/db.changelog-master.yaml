@@ -1,0 +1,2 @@
+# Changelog maître : un fichier par changement (NNNN-description.yaml), voir ADR-006.
+databaseChangeLog: []

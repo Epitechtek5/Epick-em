@@ -1,0 +1,22 @@
+name: Bug
+description: Signaler un comportement incorrect
+labels: [bug]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Composant
+      options: [backend, db, web, mobile, deploy, docs]
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Ce qui se passe, et ce qui était attendu.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Étapes pour reproduire

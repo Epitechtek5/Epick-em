@@ -1,0 +1,84 @@
+name: Release
+
+# À chaque push sur main :
+#  1. semantic-release analyse les commits (Conventional Commits) et, s'il y a lieu,
+#     crée le tag vX.Y.Z et la GitHub Release avec les notes de version ;
+#  2. une image par service est publiée sur GHCR, taguée avec le SHA du commit
+#     et, si une version vient d'être créée, avec la version semver.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  semantic-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          npx --yes
+          -p semantic-release@25.0.9
+          -p @semantic-release/exec@7.1.0
+          -p conventional-changelog-conventionalcommits@8
+          semantic-release
+
+  image:
+    needs: semantic-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - { name: api-public, context: backend, bin: api-public }
+          - { name: api-internal, context: backend, bin: api-internal }
+          - { name: simulator, context: backend, bin: simulator }
+          - { name: migrations, context: db }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ needs.semantic-release.outputs.version }},enable=${{ needs.semantic-release.outputs.version != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.semantic-release.outputs.version }},enable=${{ needs.semantic-release.outputs.version != '' }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          build-args: ${{ matrix.bin && format('BIN={0}', matrix.bin) || '' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
