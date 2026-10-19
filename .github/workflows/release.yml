@@ -1,16 +1,18 @@
 name: Release
 
-# À chaque push sur main :
-#  1. semantic-release analyse les commits (Conventional Commits) et, s'il y a lieu,
-#     met à jour CHANGELOG.md et les versions (Cargo, Helm), les committe sur main
-#     au nom de semantic-release-bot, puis crée le tag vX.Y.Z et la GitHub Release.
-#     Le push passe par la deploy key « epickem-semantic-release » (secret
-#     RELEASE_DEPLOY_KEY), autorisée à contourner la protection de main ;
-#  2. une image par service est publiée sur GHCR, taguée avec le SHA du commit
-#     et, si une version vient d'être créée, avec la version semver.
+# 1. Uniquement au lancement manuel (Actions → Release → Run workflow) :
+#    semantic-release analyse les commits (Conventional Commits) et, s'il y a lieu,
+#    met à jour CHANGELOG.md et les versions (Cargo, Helm), les committe sur main
+#    au nom de semantic-release-bot, puis crée le tag vX.Y.Z et la GitHub Release.
+#    Le push passe par la deploy key « epickem-semantic-release » (secret
+#    RELEASE_DEPLOY_KEY), autorisée à contourner la protection de main.
+# 2. À chaque push sur main et à chaque lancement manuel : une image par service
+#    est publiée sur GHCR, taguée avec le SHA du commit et, si une version vient
+#    d'être créée, avec la version semver.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: release
@@ -21,6 +23,7 @@ permissions:
 
 jobs:
   semantic-release:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -55,6 +58,8 @@ jobs:
 
   image:
     needs: semantic-release
+    # semantic-release est sauté sur un simple push : publier quand même les images
+    if: ${{ !cancelled() && needs.semantic-release.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
