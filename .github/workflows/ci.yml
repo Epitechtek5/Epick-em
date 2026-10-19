@@ -84,7 +84,30 @@ jobs:
     needs: [changes, gitleaks, backend, db, web, mobile, deploy]
     runs-on: ubuntu-latest
     steps:
-      - name: Vérifier qu'aucun job n'a échoué
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
-      - run: echo "Tous les jobs exécutés ont réussi."
+      # Liste blanche : tout résultat autre que ceux attendus fait échouer ci-ok
+      # (échec, annulation, job jamais terminé, composant modifié mais non testé…).
+      - name: Vérifier le résultat de chaque job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          result() { jq -r --arg j "$1" '.[$j].result' <<<"$NEEDS"; }
+          ok=true
+
+          for job in changes gitleaks; do
+            r=$(result "$job")
+            echo "$job : $r"
+            [ "$r" = success ] || { echo "::error::$job doit réussir (résultat : $r)"; ok=false; }
+          done
+
+          for job in backend db web mobile deploy; do
+            r=$(result "$job")
+            changed=$(jq -r --arg j "$job" '.changes.outputs[$j]' <<<"$NEEDS")
+            echo "$job : $r (modifié : $changed)"
+            if [ "$changed" = true ]; then
+              [ "$r" = success ] || { echo "::error::$job est modifié et doit réussir (résultat : $r)"; ok=false; }
+            else
+              [ "$r" = skipped ] || { echo "::error::$job non modifié, résultat inattendu : $r"; ok=false; }
+            fi
+          done
+
+          $ok
