@@ -7,7 +7,7 @@ body:
     attributes:
       label: Composant
       multiple: true
-      options: [backend, db, web, mobile, deploy, docs]
+      options: [backend, db, web, mobile, deploy, docs, all]
     validations:
       required: true
   - type: textarea
