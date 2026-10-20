@@ -1,9 +1,11 @@
 //! Tests des endpoints utilisateurs qui échouent avant tout accès à la base :
-//! le pool est paresseux et ne se connecte jamais.
+//! le pool est paresseux et ne se connecte jamais, le cache est en mémoire.
 
 use actix_web::{App, http::StatusCode, test, web};
 use api_public::auth::USER_ID_HEADER;
+use infra::{CachedDb, MemoryCache};
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 
 macro_rules! app {
     () => {{
@@ -12,7 +14,10 @@ macro_rules! app {
             .unwrap();
         test::init_service(
             App::new()
-                .app_data(web::Data::new(pool))
+                .app_data(web::Data::new(CachedDb::new(
+                    pool,
+                    Arc::new(MemoryCache::new()),
+                )))
                 .configure(api_public::configure),
         )
         .await

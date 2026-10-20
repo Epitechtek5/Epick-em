@@ -5,14 +5,27 @@ use crate::error::ApiError;
 use crate::password;
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use domain::user::{Role, validate_password, validate_username};
+use infra::{CachedDb, Ttl};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 const DEFAULT_PAGE_SIZE: i64 = 50;
 const MAX_PAGE_SIZE: i64 = 100;
 
+/// Durée de vie d'un utilisateur en cache. Les modifications et suppressions invalident
+/// l'entrée ; le TTL ne borne que la durée d'une valeur périmée si l'invalidation échoue.
+pub(crate) const USER_TTL: Ttl = Ttl::from_mins(5);
+
+/// Clé de cache d'un utilisateur, partagée avec l'authentification ([`crate::auth`]).
+pub(crate) fn user_key(id: i64) -> String {
+    format!("user:{id}")
+}
+
+const SELECT_USER: &str = "SELECT u.id, u.username, r.name::text AS role
+     FROM users u JOIN roles r ON r.id = u.role_id
+     WHERE u.id = $1";
+
 /// Représentation publique d'un utilisateur : le hash du mot de passe n'en sort jamais.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct UserResponse {
     pub id: i64,
     pub username: String,
@@ -51,7 +64,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[post("/register")]
 async fn register(
-    pool: web::Data<PgPool>,
+    db: web::Data<CachedDb>,
     body: web::Json<RegisterRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let RegisterRequest { username, password } = body.into_inner();
@@ -71,7 +84,7 @@ async fn register(
     .bind(username)
     .bind(password_hash)
     .bind(Role::User.as_str())
-    .fetch_one(pool.get_ref())
+    .fetch_one(db.pool())
     .await?;
 
     Ok(HttpResponse::Created().json(user))
@@ -80,7 +93,7 @@ async fn register(
 #[get("/users")]
 async fn list_users(
     _: CurrentUser,
-    pool: web::Data<PgPool>,
+    db: web::Data<CachedDb>,
     page: web::Query<Pagination>,
 ) -> Result<HttpResponse, ApiError> {
     let limit = page
@@ -97,7 +110,7 @@ async fn list_users(
     )
     .bind(limit)
     .bind(offset)
-    .fetch_all(pool.get_ref())
+    .fetch_all(db.pool())
     .await?;
 
     Ok(HttpResponse::Ok().json(users))
@@ -106,17 +119,10 @@ async fn list_users(
 #[get("/user/{id}")]
 async fn get_user(
     _: CurrentUser,
-    pool: web::Data<PgPool>,
+    db: web::Data<CachedDb>,
     id: web::Path<i64>,
 ) -> Result<HttpResponse, ApiError> {
-    let user: Option<UserResponse> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name::text AS role
-         FROM users u JOIN roles r ON r.id = u.role_id
-         WHERE u.id = $1",
-    )
-    .bind(id.into_inner())
-    .fetch_optional(pool.get_ref())
-    .await?;
+    let user = find(&db, id.into_inner()).await?;
 
     user.map(|user| HttpResponse::Ok().json(user))
         .ok_or(ApiError::NotFound)
@@ -125,30 +131,30 @@ async fn get_user(
 #[patch("/user/{id}/update")]
 async fn update_user(
     current: CurrentUser,
-    pool: web::Data<PgPool>,
+    db: web::Data<CachedDb>,
     id: web::Path<i64>,
     body: web::Json<UpdateUserRequest>,
 ) -> Result<HttpResponse, ApiError> {
     current.require_admin()?;
-    let user = update(&pool, id.into_inner(), body.into_inner()).await?;
+    let user = update(&db, id.into_inner(), body.into_inner()).await?;
     Ok(HttpResponse::Ok().json(user))
 }
 
 #[delete("/user/{id}/delete")]
 async fn delete_user(
     current: CurrentUser,
-    pool: web::Data<PgPool>,
+    db: web::Data<CachedDb>,
     id: web::Path<i64>,
 ) -> Result<HttpResponse, ApiError> {
     current.require_admin()?;
-    delete(&pool, id.into_inner()).await?;
+    delete(&db, id.into_inner()).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
 #[patch("/me/update")]
 async fn update_me(
     current: CurrentUser,
-    pool: web::Data<PgPool>,
+    db: web::Data<CachedDb>,
     body: web::Json<UpdateUserRequest>,
 ) -> Result<HttpResponse, ApiError> {
     // Un utilisateur ne peut pas changer son propre rôle, administrateur compris :
@@ -156,22 +162,33 @@ async fn update_me(
     if body.role.is_some() {
         return Err(ApiError::Forbidden);
     }
-    let user = update(&pool, current.id, body.into_inner()).await?;
+    let user = update(&db, current.id, body.into_inner()).await?;
     Ok(HttpResponse::Ok().json(user))
 }
 
 #[delete("/me/delete")]
 async fn delete_me(
     current: CurrentUser,
-    pool: web::Data<PgPool>,
+    db: web::Data<CachedDb>,
 ) -> Result<HttpResponse, ApiError> {
-    delete(&pool, current.id).await?;
+    delete(&db, current.id).await?;
     Ok(HttpResponse::NoContent().finish())
+}
+
+/// Lit un utilisateur, depuis le cache si possible.
+pub(crate) async fn find(db: &CachedDb, id: i64) -> Result<Option<UserResponse>, sqlx::Error> {
+    db.read_optional(&user_key(id), USER_TTL, |pool| async move {
+        sqlx::query_as(SELECT_USER)
+            .bind(id)
+            .fetch_optional(&pool)
+            .await
+    })
+    .await
 }
 
 /// Applique une mise à jour partielle : seuls les champs fournis sont modifiés.
 async fn update(
-    pool: &PgPool,
+    db: &CachedDb,
     id: i64,
     request: UpdateUserRequest,
 ) -> Result<UserResponse, ApiError> {
@@ -199,32 +216,42 @@ async fn update(
         None => None,
     };
 
-    let user: Option<UserResponse> = sqlx::query_as(
-        "WITH updated AS (
-             UPDATE users SET
-                 username = COALESCE($2, username),
-                 password_hash = COALESCE($3, password_hash),
-                 role_id = COALESCE((SELECT id FROM roles WHERE name = $4::role_name), role_id)
-             WHERE id = $1
-             RETURNING id, username, role_id
-         )
-         SELECT u.id, u.username, r.name::text AS role
-         FROM updated u JOIN roles r ON r.id = u.role_id",
-    )
-    .bind(id)
-    .bind(username)
-    .bind(password_hash)
-    .bind(role.map(Role::as_str))
-    .fetch_optional(pool)
-    .await?;
+    // L'entrée en cache est invalidée plutôt que réécrite : la prochaine lecture la
+    // recharge, et un utilisateur introuvable n'est jamais mis en cache.
+    let user: Option<UserResponse> = db
+        .delete(&[&user_key(id)], |pool| async move {
+            sqlx::query_as(
+                "WITH updated AS (
+                     UPDATE users SET
+                         username = COALESCE($2, username),
+                         password_hash = COALESCE($3, password_hash),
+                         role_id = COALESCE((SELECT id FROM roles WHERE name = $4::role_name), role_id)
+                     WHERE id = $1
+                     RETURNING id, username, role_id
+                 )
+                 SELECT u.id, u.username, r.name::text AS role
+                 FROM updated u JOIN roles r ON r.id = u.role_id",
+            )
+            .bind(id)
+            .bind(username)
+            .bind(password_hash)
+            .bind(role.map(Role::as_str))
+            .fetch_optional(&pool)
+            .await
+        })
+        .await?;
 
     user.ok_or(ApiError::NotFound)
 }
 
-async fn delete(pool: &PgPool, id: i64) -> Result<(), ApiError> {
-    let result = sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(id)
-        .execute(pool)
+async fn delete(db: &CachedDb, id: i64) -> Result<(), ApiError> {
+    let result = db
+        .delete(&[&user_key(id)], |pool| async move {
+            sqlx::query("DELETE FROM users WHERE id = $1")
+                .bind(id)
+                .execute(&pool)
+                .await
+        })
         .await?;
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);
