@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 domain = { path = "crates/domain" }
 connectors = { path = "crates/connectors" }
+infra = { path = "crates/infra" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
