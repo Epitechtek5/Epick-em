@@ -1,48 +1,58 @@
 {
-  "name": "mobile",
+  "name": "@epickem/mobile",
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
-    "@expo/ui": "~58.0.21",
     "expo": "~58.0.16",
     "expo-constants": "~58.0.12",
-    "expo-device": "~58.0.5",
-    "expo-font": "~58.0.9",
-    "expo-glass-effect": "~58.0.4",
-    "expo-image": "~58.0.16",
     "expo-linking": "~58.0.13",
     "expo-router": "~58.0.24",
-    "expo-splash-screen": "~58.0.10",
     "expo-status-bar": "~58.0.3",
-    "expo-symbols": "~58.0.4",
-    "expo-system-ui": "~58.0.6",
-    "expo-web-browser": "~58.0.6",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.0",
     "react-native-gesture-handler": "~3.3.0",
-    "react-native-reanimated": "4.7.1",
     "react-native-safe-area-context": "~5.10.1",
-    "react-native-screens": "~4.30.0",
-    "react-native-web": "~0.21.4",
-    "react-native-worklets": "0.13.0"
+    "react-native-screens": "~4.30.0"
   },
   "devDependencies": {
+    "@testing-library/react-native": "^14.1.0",
+    "@types/jest": "30.0.0",
     "@types/react": "~19.3.0",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "^58.0.4",
+    "jest": "~30.5.2",
+    "jest-expo": "~58.0.11",
+    "prettier": "^3.9.10",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "lint": "expo lint"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "config:check": "expo config --type prebuild",
+    "build": "expo export --platform android --platform ios",
+    "build:android": "node scripts/build-native.mjs android",
+    "build:ios:simulator": "node scripts/build-native.mjs ios",
+    "validate": "npm run lint && npm run format:check && npm run typecheck && npm test -- --watch=false && npm run config:check && npm run build"
   },
   "private": true,
   "overrides": {
     "xcode@3.0.1": {
       "uuid": "11.1.1"
+    },
+    "@istanbuljs/load-nyc-config@1.1.0": {
+      "js-yaml": "4.3.2"
     }
+  },
+  "engines": {
+    "node": ">=24.21.0 <25"
   }
 }

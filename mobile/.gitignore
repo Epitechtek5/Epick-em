@@ -41,3 +41,14 @@ example
 # generated native folders
 /ios
 /android
+
+# Validation and native build outputs
+/build/
+/coverage/
+*.keystore
+.env
+.env.*
+!.env.example
+
+# Generated validation evidence
+docs/evidence/
