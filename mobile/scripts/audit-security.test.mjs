@@ -3,15 +3,15 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { inspectAudit, runAudits } from './audit-security.mjs';
 
-function fixture(file = 'npm-audit.json') {
+function fixture(file = 'audit-full.json') {
   return JSON.parse(
-    readFileSync(new URL(`../docs/evidence/${file}`, import.meta.url), 'utf8'),
+    readFileSync(new URL(`./__fixtures__/${file}`, import.meta.url), 'utf8'),
   );
 }
 const result = (report) => ({ status: 1, stdout: JSON.stringify(report) });
 
 test('accepts only the known advisories, including propagated dependencies in both trees', () => {
-  for (const file of ['npm-audit.json', 'npm-audit-production.json']) {
+  for (const file of ['audit-full.json', 'audit-production.json']) {
     const findings = inspectAudit(result(fixture(file)));
     assert.equal(findings.accepted.length, 2);
     assert.deepEqual(findings.unexpected, []);
