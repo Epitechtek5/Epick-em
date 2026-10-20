@@ -19,6 +19,7 @@ Ce dossier trace les décisions d'architecture du projet : contexte, options ét
 | [005](005-deploiement.md) | Docker Compose en local, Kubernetes (k3s) + Helm + Ansible en ligne | Accepté |
 | [006](006-migrations-liquibase.md) | Migrations de base de données avec Liquibase, publiées en image Docker | Accepté |
 | [007](007-gestion-des-secrets.md) | Gestion des secrets | Accepté |
+| [008](008-couche-infra-et-cache.md) | Crate `infra` partagée et cache Redis des requêtes SQL | Proposé |
 
 ## Créer un nouvel ADR
 
