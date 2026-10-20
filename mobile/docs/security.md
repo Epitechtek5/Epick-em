@@ -2,7 +2,7 @@
 
 ## Audit snapshot: 2026-10-20
 
-The zero moderate/high/critical target is **not met**. Full and production audits both exit with status 1. No advisory is suppressed, no audit failure is ignored in CI, and neither Expo nor React Native was downgraded. `npm audit fix --force` was not used.
+The zero moderate/high/critical target is **not met**. Full and production audits both exit with status 1. Only the exact temporary exceptions below are accepted by CI; unexpected findings and audit failures fail CI, and neither Expo nor React Native was downgraded. `npm audit fix --force` was not used.
 
 | Tree                    | Moderate | High | Critical |
 | ----------------------- | -------: | ---: | -------: |
@@ -43,4 +43,17 @@ No application secrets are configured. The Docker context excludes credentials a
 
 ## CI/CD review confirmation
 
-The review re-queried npm and the two GitHub advisories on 2026-10-20. The published latest versions remain braces 3.0.3 and node-forge 1.4.0, and both advisories still list no patched release. No dependency downgrade, advisory suppression, ignored audit result, or branch-protection exception was introduced. Fresh audit evidence and exit statuses appear in the implementation report. The PR paths-filter permission is read-only and scoped to change detection; it does not weaken the security gate.
+The review re-queried npm and the two GitHub advisories on 2026-10-20. The published latest versions remain braces 3.0.3 and node-forge 1.4.0, and both advisories still list no patched release. No dependency downgrade, ignored audit execution failure, or branch-protection exception was introduced. CI accepts only the exact temporary advisory/package pairs documented below. Fresh audit evidence and exit statuses appear in the implementation report. The PR paths-filter permission is read-only and scoped to change detection; it does not weaken the security gate.
+
+## Temporary CI exceptions
+
+Run `node scripts/audit-security.mjs` from `mobile/`. The security job runs the deterministic tests with `node --test scripts/audit-security.test.mjs` before invoking the gate. The gate executes `npm audit --json` and `npm audit --omit=dev --json` sequentially, with a two-minute timeout per command. It stops immediately on a failure.
+
+The only accepted advisory/package pairs are:
+
+- `GHSA-vfj7-8cjw-p6xm` on `braces`.
+- `GHSA-86w9-cpqp-85rv` on `node-forge`.
+
+These temporary exceptions accept the tooling risks described above; they do not remediate either vulnerability or make the production dependency tree clean. Each run prints the accepted pairs and any unexpected findings. Propagated dependency entries must resolve to advisories in the report. Any additional advisory (including low/info findings), a known advisory on another package, malformed/incomplete JSON, unsupported report format, inconsistent counts, unexpected npm status, signal, spawn error or timeout fails the job. npm status 1 is accepted only as a completed vulnerability report whose findings pass this policy. Neither audit is disabled and no step uses `continue-on-error`.
+
+Review these exceptions on every dependency or Expo SDK update and when upstream publishes a fix. Once a compatible patched version is available, update the dependency tree and lockfile, rerun both raw audits and mobile validation, and remove the corresponding pair from `exceptions` in `scripts/audit-security.mjs`. Update the deterministic fixtures/tests to assert that the removed advisory fails the gate, refresh the evidence and this document, and remove this section once both exceptions are gone. Do not broaden an exception to accommodate a new advisory.

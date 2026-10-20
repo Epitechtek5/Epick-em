@@ -48,8 +48,7 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
-      - name: Audit all dependencies
-        run: npm audit --audit-level=moderate
-      - name: Audit production dependency tree
-        if: ${{ !cancelled() }}
-        run: npm audit --omit=dev --audit-level=moderate
+      - name: Test security audit policy
+        run: node --test scripts/audit-security.test.mjs
+      - name: Audit dependencies with strict temporary exceptions
+        run: node scripts/audit-security.mjs
