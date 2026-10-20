@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 domain.workspace = true
 connectors.workspace = true
+infra.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 
 [lints]
 workspace = true
