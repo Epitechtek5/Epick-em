@@ -1,0 +1,6 @@
+# Les propriétaires listés ici sont automatiquement ajoutés en reviewers
+# sur chaque pull request qui touche les fichiers correspondants.
+# L'auteur de la PR n'est jamais ajouté en reviewer de sa propre PR.
+# Doc : https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @Quentintnrl @BxptisteM @FrEvan14
