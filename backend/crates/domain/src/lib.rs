@@ -3,6 +3,8 @@
 //! Cette crate ne fait aucune I/O (pas de réseau, pas de base de données)
 //! afin d'être entièrement testable et partagée par tous les binaires.
 
+pub mod user;
+
 /// Version du domaine, exposée par les services pour le diagnostic.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

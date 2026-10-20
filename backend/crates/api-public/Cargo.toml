@@ -6,9 +6,15 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+actix-web = { version = "4", default-features = false, features = ["macros"] }
+argon2 = "0.5"
 domain.workspace = true
 infra.workspace = true
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "derive"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json = "1"

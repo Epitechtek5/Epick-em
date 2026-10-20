@@ -1,12 +1,8 @@
-//! Squelette de api-public : se connecte à PostgreSQL et Redis, puis répond 200 sur
-//! toutes les routes en attendant le vrai serveur HTTP.
-
+use actix_web::{App, HttpServer, web};
 use std::error::Error;
 use std::process::ExitCode;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 
-#[tokio::main]
+#[actix_web::main]
 async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
@@ -20,19 +16,20 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn Error>> {
     let port = std::env::var("API_PUBLIC_PORT").unwrap_or_else(|_| "8080".into());
     let config = infra::Config::from_env()?;
-    let _db = infra::connect(&config).await?;
+    let db = infra::connect(&config).await?;
+    let pool = web::Data::new(db.pool().clone());
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await?;
     println!(
         "api-public (domain {}) en écoute sur :{port}",
         domain::VERSION
     );
-
-    loop {
-        let (mut stream, _) = listener.accept().await?;
-        let _ = stream.read(&mut [0; 1024]).await?;
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
-            .await?;
-    }
+    HttpServer::new(move || {
+        App::new()
+            .app_data(pool.clone())
+            .configure(api_public::configure)
+    })
+    .bind(format!("0.0.0.0:{port}"))?
+    .run()
+    .await?;
+    Ok(())
 }
