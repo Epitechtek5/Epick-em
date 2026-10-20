@@ -1,0 +1,43 @@
+# Rôles des utilisateurs : liste fermée portée par un type enum PostgreSQL.
+databaseChangeLog:
+  - changeSet:
+      id: 0001-create-roles
+      author: Quentin Tennerel
+      changes:
+        - sql:
+            sql: CREATE TYPE role_name AS ENUM ('admin', 'user', 'watcher')
+        - createTable:
+            tableName: roles
+            columns:
+              - column:
+                  name: id
+                  type: SMALLINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_roles
+              - column:
+                  name: name
+                  type: role_name
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uq_roles_name
+        # Données de référence (et non de démonstration) : nécessaires au fonctionnement.
+        - insert:
+            tableName: roles
+            columns:
+              - column: { name: name, value: admin }
+        - insert:
+            tableName: roles
+            columns:
+              - column: { name: name, value: user }
+        - insert:
+            tableName: roles
+            columns:
+              - column: { name: name, value: watcher }
+      rollback:
+        - dropTable:
+            tableName: roles
+        - sql:
+            sql: DROP TYPE role_name

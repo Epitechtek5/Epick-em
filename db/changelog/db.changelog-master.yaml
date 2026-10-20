@@ -1,2 +1,8 @@
 # Changelog maître : un fichier par changement (NNNN-description.yaml), voir ADR-006.
-databaseChangeLog: []
+databaseChangeLog:
+  - include:
+      file: 0001-create-roles.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: 0002-create-users.yaml
+      relativeToChangelogFile: true
