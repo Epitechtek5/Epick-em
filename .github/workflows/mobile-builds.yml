@@ -1,0 +1,91 @@
+name: Mobile native artifacts
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+        description: Immutable source commit SHA
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: android
+            runner: ubuntu-latest
+            script: build:android
+            artifact: epickem-android-demo
+            file: epickem-android-demo.apk
+          - platform: ios
+            runner: macos-26
+            script: build:ios:simulator
+            artifact: epickem-ios-simulator
+            file: epickem-ios-simulator.tar.gz
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Verify the source commit
+        env:
+          SOURCE_COMMIT: ${{ inputs.ref }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: mobile/.node-version
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        if: matrix.platform == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        if: matrix.platform == 'android'
+        with:
+          cmdline-tools-version: 16111833
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0 ndk;27.1.12297006 cmake;3.30.5
+      - uses: gradle/actions/setup-gradle@v4
+        if: matrix.platform == 'android'
+      - name: Select Xcode
+        if: matrix.platform == 'ios'
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.4.1.app/Contents/Developer
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          ruby --version
+          gem install cocoapods --version 1.17.0 --no-document --user-install
+          echo "$(ruby -r rubygems -e 'puts Gem.user_dir')/bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      - name: Verify CocoaPods
+        if: matrix.platform == 'ios'
+        run: pod _1.17.0_ --version
+      - run: npm run ${{ matrix.script }}
+      - name: Record artifact source
+        env:
+          ARTIFACT_NAME: ${{ matrix.artifact }}
+        run: git rev-parse HEAD > "build/${ARTIFACT_NAME}.commit"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            mobile/build/${{ matrix.file }}
+            mobile/build/${{ matrix.artifact }}.commit
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+          compression-level: 0

@@ -3,31 +3,52 @@ name: Mobile
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 defaults:
   run:
     working-directory: mobile
+
+env:
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Projet initialisé ?
-        id: init
-        run: |
-          if [ -f package.json ]; then echo "ready=true" >> "$GITHUB_OUTPUT"
-          else echo "::notice::mobile/ pas encore initialisé, étapes ignorées."; fi
       - uses: actions/setup-node@v4
-        if: steps.init.outputs.ready == 'true'
         with:
-          node-version: 22
+          node-version-file: mobile/.node-version
           cache: npm
           cache-dependency-path: mobile/package-lock.json
-      - if: steps.init.outputs.ready == 'true'
-        run: npm ci
-      - if: steps.init.outputs.ready == 'true'
-        run: npm run lint
-      - if: steps.init.outputs.ready == 'true'
-        run: npm test
-      - if: steps.init.outputs.ready == 'true'
-        run: npm run build
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test -- --watch=false
+      - run: npx expo install --check
+      - run: npx expo-doctor@1.21.5
+      - run: npm run config:check
+      - run: npm run build
+      - name: Validate Docker environment
+        run: |
+          docker build -t epickem-mobile .
+          docker run --rm epickem-mobile
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: mobile/.node-version
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - name: Test security audit policy
+        run: node --test scripts/audit-security.test.mjs
+      - name: Audit dependencies with strict temporary exceptions
+        run: node scripts/audit-security.mjs
