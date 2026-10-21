@@ -1,11 +1,15 @@
 {
   "expo": {
-    "name": "Epick\u2019em",
+    "name": "Epick’em",
     "slug": "epickem",
     "version": "1.0.0",
     "scheme": "epickem",
     "orientation": "default",
-    "platforms": ["ios", "android"],
+    "userInterfaceStyle": "automatic",
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "ios": {
       "bundleIdentifier": "com.epickem.mobile",
       "supportsTablet": true
@@ -13,7 +17,10 @@
     "android": {
       "package": "com.epickem.mobile"
     },
-    "plugins": ["expo-router"],
+    "plugins": [
+      "expo-router",
+      "expo-splash-screen"
+    ],
     "experiments": {
       "typedRoutes": true
     }
