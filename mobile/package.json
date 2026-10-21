@@ -57,6 +57,7 @@
     "build": "expo export --platform android --platform ios",
     "build:android": "node scripts/build-native.mjs android",
     "build:ios:simulator": "node scripts/build-native.mjs ios",
+    "build:ios:device": "node scripts/build-native.mjs ios --device",
     "build:apk": "npm run build:android && mkdir -p binaries && mv android/app/build/outputs/apk/release/app-release.apk binaries/epickem.apk",
     "validate": "npm run lint && npm run format:check && npm run typecheck && npm test -- --watch=false && npm run config:check && npm run build"
   },
