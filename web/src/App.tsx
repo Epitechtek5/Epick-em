@@ -1,13 +1,24 @@
-import { Button } from '@/components/ui/button'
+import { Navigate, Route, Routes } from 'react-router'
+
+import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
+import { AppShell } from '@/components/layout/AppShell'
+import HomePage from '@/pages/HomePage'
+import LoginPage from '@/pages/LoginPage'
+import NotFoundPage from '@/pages/NotFoundPage'
+import RegisterPage from '@/pages/RegisterPage'
 
 export default function App() {
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-4 p-6">
-      <h1 className="text-3xl font-semibold tracking-tight">Epick'em</h1>
-      <p className="text-muted-foreground">
-        Plateforme de tournois et de pronostics en temps réel.
-      </p>
-      <Button>Commencer</Button>
-    </main>
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route path="/" element={<Navigate to="/app" replace />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route element={<ProtectedRoute />}>
+          <Route path="/app" element={<HomePage />} />
+        </Route>
+        <Route path="*" element={<NotFoundPage />} />
+      </Route>
+    </Routes>
   )
 }

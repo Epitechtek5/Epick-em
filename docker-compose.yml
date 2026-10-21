@@ -67,6 +67,8 @@ services:
     build:
       context: ./web
     restart: unless-stopped
+    environment:
+      API_UPSTREAM: api-public:${API_PUBLIC_PORT}
     ports:
       - "${WEB_PORT:-3000}:8080"
 

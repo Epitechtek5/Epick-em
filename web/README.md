@@ -14,6 +14,38 @@ npm test          # vitest (une seule exécution)
 npm run build     # typecheck + build de production dans dist/
 ```
 
+## Structure
+
+| Dossier | Contenu |
+|---|---|
+| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `NotFoundPage` |
+| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/`, `auth/` (route protégée) |
+| `src/lib/api/` | Client HTTP (`client.ts`), appels d'authentification (`auth.ts`), lecture des erreurs serveur |
+| `src/lib/auth/` | `AuthProvider`, `useAuth`, stockage des tokens (`token-store.ts`) |
+| `src/lib/validation/` | Règles de validation alignées sur le backend |
+
+Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`).
+
+## Authentification
+
+- `POST /register` est branché (201 → connexion, 400 → erreurs affichées, 409 → nom déjà pris).
+- La connexion est préparée : le contrat `POST /login` → `{ access_token, refresh_token? }` est **provisoire** (voir `src/lib/api/auth.ts`, `TODO(#15)`). Tant que l'endpoint n'existe pas, l'écran affiche « La connexion n'est pas encore disponible ».
+- Seul mécanisme d'authentification : `Authorization: Bearer <JWT>`. Jamais d'en-tête `X-User-Id`.
+- Les tokens restent **en mémoire** (pas de `localStorage`, exposé au XSS) ; la persistance de session passera par un cookie httpOnly (#15).
+
+## API
+
+Le navigateur appelle `/api/*`, proxifié vers `api-public` en retirant le préfixe `/api` :
+
+- en dev, par Vite (`VITE_DEV_API_TARGET`, défaut `http://localhost:8080`) ;
+- en Docker, par nginx (`API_UPSTREAM`, défaut `api-public:8080`).
+
+Variables : voir [`.env.example`](.env.example) (`.env.local` pour surcharger).
+
+## Accessibilité
+
+Formulaires : libellés reliés, aide et erreurs liées aux champs (`aria-describedby`, `aria-invalid`), résumé d'erreurs annoncé (`role="alert"`) qui reçoit le focus, `autocomplete` adaptés, titre de page par écran, lien d'évitement, focus ramené sur le contenu à chaque navigation. Cible : WCAG 2.2 AA.
+
 ## Ajouter un composant shadcn/ui
 
 ```sh

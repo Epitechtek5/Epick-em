@@ -9,7 +9,10 @@ RUN npm run build
 
 # Étape 2 : service des fichiers statiques (non-root, port 8080)
 FROM nginxinc/nginx-unprivileged:stable-alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Rendu au démarrage en /etc/nginx/conf.d/default.conf (envsubst de l'image)
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+ENV API_UPSTREAM=api-public:8080 \
+    NGINX_RESOLVER=127.0.0.11
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \

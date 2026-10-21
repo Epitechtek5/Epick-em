@@ -1,14 +1,30 @@
-import { render, screen } from '@testing-library/react'
+import { screen } from '@testing-library/react'
 
-import App from './App'
+import { renderApp } from '@/test/render'
 
 describe('App', () => {
-  it("affiche le titre et l'action principale", () => {
-    render(<App />)
+  it('redirige un visiteur anonyme vers la connexion', async () => {
+    renderApp('/')
 
-    expect(
-      screen.getByRole('heading', { level: 1, name: "Epick'em" }),
-    ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Commencer' })).toBeEnabled()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Connexion' })).toBeInTheDocument()
+  })
+
+  it('protège la zone authentifiée', async () => {
+    renderApp('/app')
+
+    expect(await screen.findByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
+  })
+
+  it('propose un lien d\'évitement et un repère principal', () => {
+    renderApp('/register')
+
+    expect(screen.getByRole('link', { name: 'Aller au contenu principal' })).toBeInTheDocument()
+    expect(screen.getByRole('main')).toBeInTheDocument()
+  })
+
+  it('affiche une page 404', () => {
+    renderApp('/inconnue')
+
+    expect(screen.getByRole('heading', { name: 'Page introuvable' })).toBeInTheDocument()
   })
 })
