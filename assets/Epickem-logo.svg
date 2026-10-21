@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Epickem trophy logo">
+ <defs>
+  <linearGradient id="body" x1="0" x2="1" y1="1" y2="0"><stop offset="0" stop-color="#3d12bb"/><stop offset=".48" stop-color="#7728eb"/><stop offset=".8" stop-color="#a34cf6"/><stop offset="1" stop-color="#d99af8"/></linearGradient>
+  <linearGradient id="handles" x1="0" x2=".85" y1="1" y2="0"><stop offset="0" stop-color="#4111bc"/><stop offset=".52" stop-color="#6a20df"/><stop offset="1" stop-color="#a64cf4"/></linearGradient>
+  <linearGradient id="crown" x1="0" x2="1" y1="1" y2="0"><stop offset="0" stop-color="#5d1bd9"/><stop offset=".55" stop-color="#8b39ec"/><stop offset="1" stop-color="#cc86f5"/></linearGradient>
+  <linearGradient id="pedestal" x1="0" x2="1" y1=".6" y2="0"><stop offset="0" stop-color="#3f13b6"/><stop offset=".55" stop-color="#7628df"/><stop offset="1" stop-color="#c579f3"/></linearGradient>
+  <linearGradient id="shine" x1="0" x2=".9" y1="1" y2="0"><stop offset="0" stop-color="#601bda"/><stop offset="1" stop-color="#e4b0fc"/></linearGradient>
+ </defs>
+ <!-- Crown -->
+ <path fill="url(#crown)" d="M399 256 Q392 252 395 242 L382 210 Q379 199 390 203 L456 232 L503 163 Q511 151 519 163 L569 232 L634 203 Q647 198 642 212 L629 243 Q626 251 619 253 Z"/>
+ <!-- handles -->
+ <path fill="url(#handles)" d="M314 277 H361 Q375 277 372 292 Q366 310 366 333 Q337 316 317 329 Q301 342 314 378 Q343 453 405 457 L423 516 Q333 502 281 442 Q231 384 225 315 Q222 277 252 277 Z"/>
+ <path fill="url(#handles)" d="M710 277 H663 Q649 277 652 292 Q658 310 658 333 Q687 316 707 329 Q723 342 710 378 Q681 453 619 457 L601 516 Q691 502 743 442 Q793 384 799 315 Q802 277 772 277 Z"/>
+ <!-- Trophy bowl -->
+ <path fill="url(#body)" d="M376 277 Q354 277 356 306 L367 406 Q374 492 429 549 Q461 581 485 599 Q497 610 499 625 Q500 633 512 633 H524 Q536 633 537 625 Q539 610 563 593 Q661 524 672 405 L684 306 Q686 277 655 277 Z"/>
+ <path fill="url(#shine)" opacity=".58" d="M407 321 Q497 363 516 440 Q531 493 515 573 Q547 464 609 396 Q658 341 674 304 Q676 395 652 467 Q624 545 557 593 Q537 607 537 626 H500 Q499 604 466 580 Q544 477 473 400 Q450 371 407 321 Z"/>
+ <!-- Stem -->
+ <path fill="url(#pedestal)" d="M482 645 H542 Q550 645 556 655 L581 695 H443 L468 655 Q474 645 482 645 Z"/>
+ <!-- Foot -->
+ <path fill="url(#shine)" d="M440 693 H584 Q610 693 624 725 H400 Q414 693 440 693 Z"/>
+ <path fill="url(#pedestal)" d="M389 730 H635 Q648 730 654 745 L680 790 Q687 806 669 806 H355 Q337 806 344 790 L370 745 Q376 730 389 730 Z"/>
+</svg>
