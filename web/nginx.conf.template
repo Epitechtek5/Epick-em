@@ -1,0 +1,41 @@
+# Template : les variables ${...} sont remplacées au démarrage par l'entrypoint
+# de l'image (envsubst). Les variables nginx ($uri, $host…) ne sont pas touchées.
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # /api/* -> api-public, sans le préfixe /api (même origine : pas de CORS).
+    # Le nom est résolu à la requête : le front démarre même si l'API est absente.
+    location /api/ {
+        resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+        set $api_upstream "${API_UPSTREAM}";
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://$api_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Assets versionnés par Vite : cache longue durée
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # SPA : toute route inconnue renvoie index.html
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files $uri /index.html;
+    }
+}
