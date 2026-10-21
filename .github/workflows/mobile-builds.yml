@@ -35,8 +35,8 @@ jobs:
       run:
         working-directory: mobile
     env:
-      CI: "1"
-      EXPO_NO_TELEMETRY: "1"
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
       EPICKEM_BUILD_PROFILE: ${{ matrix.platform == 'android' && (vars.MOBILE_ANDROID_BUILD_PROFILE || 'demo') || 'demo' }}
       EXPO_PUBLIC_API_URL: ${{ vars[matrix.api_variable] || vars.MOBILE_API_URL }}
     steps:
@@ -61,7 +61,7 @@ jobs:
         if: matrix.platform == 'android'
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
       - uses: android-actions/setup-android@v3
         if: matrix.platform == 'android'
         with:
