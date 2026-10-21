@@ -63,5 +63,12 @@ services:
       args:
         BIN: api-internal
 
+  web:
+    build:
+      context: ./web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:8080"
+
 volumes:
   postgres-data:
