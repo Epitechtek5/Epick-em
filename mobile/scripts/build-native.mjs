@@ -1,3 +1,4 @@
+import environment from '../config/environment.js';
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,28 @@ if (platform !== 'android' && platform !== 'ios') {
 }
 if (platform === 'ios' && process.platform !== 'darwin') {
   throw new Error('iOS simulator builds require macOS and Xcode.');
+}
+
+environment.loadRootEnvironment();
+// Existing build commands produce demo artifacts. CI must choose its policy explicitly.
+if (process.env.CI && !process.env.EPICKEM_BUILD_PROFILE) {
+  throw new Error(
+    'Set EPICKEM_BUILD_PROFILE to demo (HTTPS) or demo-emulator (Android emulator only) in CI.',
+  );
+}
+process.env.EPICKEM_BUILD_PROFILE ||=
+  platform === 'android' &&
+  process.env.EXPO_PUBLIC_API_URL?.startsWith('http://10.0.2.2:')
+    ? 'demo-emulator'
+    : 'demo';
+environment.validateApiEnvironment(process.env, { required: true });
+if (
+  platform === 'ios' &&
+  process.env.EPICKEM_BUILD_PROFILE === 'demo-emulator'
+) {
+  throw new Error(
+    'demo-emulator is Android-only. iOS demo artifacts require an HTTPS API URL.',
+  );
 }
 
 const windows = process.platform === 'win32';
