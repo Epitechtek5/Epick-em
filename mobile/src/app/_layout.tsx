@@ -12,6 +12,7 @@ import { StatusBar } from 'expo-status-bar';
 import { PortalHost } from '@rn-primitives/portal';
 import { useColorScheme, vars } from 'nativewind';
 
+import { AuthProvider } from '@/features/auth/session';
 import { colors } from '@/theme/colors';
 
 export default function RootLayout() {
@@ -46,12 +47,14 @@ export default function RootLayout() {
   );
 
   return (
-    <ThemeProvider value={navigationTheme}>
-      <View className="flex-1 bg-background" style={variables}>
-        <StatusBar style={isDark ? 'light' : 'dark'} />
-        <Stack screenOptions={{ headerShown: false }} />
-        <PortalHost />
-      </View>
-    </ThemeProvider>
+    <AuthProvider>
+      <ThemeProvider value={navigationTheme}>
+        <View className="flex-1 bg-background" style={variables}>
+          <StatusBar style={isDark ? 'light' : 'dark'} />
+          <Stack screenOptions={{ headerShown: false }} />
+          <PortalHost />
+        </View>
+      </ThemeProvider>
+    </AuthProvider>
   );
 }
