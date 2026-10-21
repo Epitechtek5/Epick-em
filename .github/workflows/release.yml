@@ -1,18 +1,17 @@
 name: Release
 
-# 1. Uniquement au lancement manuel (Actions → Release → Run workflow) :
-#    semantic-release analyse les commits (Conventional Commits) et, s'il y a lieu,
-#    met à jour CHANGELOG.md et les versions (Cargo, Helm), les committe sur main
-#    au nom de semantic-release-bot, puis crée le tag vX.Y.Z et la GitHub Release.
-#    Le push passe par la deploy key « epickem-semantic-release » (secret
-#    RELEASE_DEPLOY_KEY), autorisée à contourner la protection de main.
-# 2. À chaque push sur main et à chaque lancement manuel : une image par service
-#    est publiée sur GHCR, taguée avec le SHA du commit et, si une version vient
-#    d'être créée, avec la version semver.
+# Manual dispatch runs the existing semantic-release process and publishes a vX.Y.Z release.
+# Main pushes and manual releases continue to publish service images to GHCR.
+# The deploy key allows semantic-release to push its version commit to protected main.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      build_signed_ios:
+        description: 'Build a signed IPA using preconfigured EAS credentials'
+        type: boolean
+        default: false
 
 concurrency:
   group: release
@@ -41,7 +40,7 @@ jobs:
           node-version: 24
       - id: release
         env:
-          # API GitHub (release, commentaires) : github-actions[bot] ; git push : deploy key
+          # GitHub API calls use the Actions token; git pushes use the deploy key.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_AUTHOR_NAME: semantic-release-bot
           GIT_AUTHOR_EMAIL: semantic-release-bot@martynus.net
@@ -58,7 +57,7 @@ jobs:
 
   image:
     needs: semantic-release
-    # semantic-release est sauté sur un simple push : publier quand même les images
+    # Publish images on main pushes even when semantic-release is skipped.
     if: ${{ !cancelled() && needs.semantic-release.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
@@ -72,7 +71,7 @@ jobs:
           - { name: simulator, context: backend, bin: simulator }
           - { name: migrations, context: db }
     steps:
-      # Après une release, construire depuis le tag pour embarquer les manifestes à jour
+      # Build a new release from its tag to include updated manifests.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.semantic-release.outputs.version && format('v{0}', needs.semantic-release.outputs.version) || github.sha }}
@@ -100,3 +99,90 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  mobile-source:
+    needs: semantic-release
+    if: ${{ !cancelled() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped') && (github.event_name == 'push' || needs.semantic-release.outputs.version != '') }}
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.semantic-release.outputs.version && format('refs/tags/v{0}', needs.semantic-release.outputs.version) || github.sha }}
+          persist-credentials: false
+      - name: Resolve the exact mobile source commit
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  mobile-native:
+    needs: mobile-source
+    if: ${{ !cancelled() && needs.mobile-source.result == 'success' }}
+    uses: ./.github/workflows/mobile-builds.yml
+    with:
+      ref: ${{ needs.mobile-source.outputs.commit }}
+
+  mobile-release-assets:
+    needs: [semantic-release, mobile-source, mobile-native]
+    if: ${{ !cancelled() && needs.semantic-release.result == 'success' && needs.mobile-native.result == 'success' && needs.semantic-release.outputs.version != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.mobile-source.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: epickem-android-demo
+          path: mobile-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: epickem-ios-simulator
+          path: mobile-assets
+      - name: Verify and attach assets to the existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.semantic-release.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.mobile-source.outputs.commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git rev-parse "refs/tags/v${RELEASE_VERSION}^{commit}")" = "$SOURCE_COMMIT"
+          test -s mobile-assets/epickem-android-demo.apk
+          test -s mobile-assets/epickem-ios-simulator.tar.gz
+          for artifact in epickem-android-demo epickem-ios-simulator; do
+            test "$(cat "mobile-assets/${artifact}.commit")" = "$SOURCE_COMMIT"
+          done
+          mv mobile-assets/epickem-android-demo.apk "mobile-assets/epickem-v${RELEASE_VERSION}-android-demo.apk"
+          mv mobile-assets/epickem-ios-simulator.tar.gz "mobile-assets/epickem-v${RELEASE_VERSION}-ios-simulator.tar.gz"
+          gh release view "v${RELEASE_VERSION}"
+          gh release upload "v${RELEASE_VERSION}" \
+            "mobile-assets/epickem-v${RELEASE_VERSION}-android-demo.apk" \
+            "mobile-assets/epickem-v${RELEASE_VERSION}-ios-simulator.tar.gz" --clobber
+
+  signed-ios:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_signed_ios
+    needs: semantic-release
+    runs-on: ubuntu-latest
+    environment: mobile-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.semantic-release.outputs.version && format('v{0}', needs.semantic-release.outputs.version) || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: mobile/.node-version
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: 25.2.0
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+        working-directory: mobile
+      - name: Request signed physical-device iOS build
+        working-directory: mobile
+        run: npx eas-cli@25.2.0 build --platform ios --profile production --non-interactive --wait

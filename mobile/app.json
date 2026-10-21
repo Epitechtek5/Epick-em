@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Epick’em",
+    "slug": "epickem",
+    "version": "1.0.0",
+    "scheme": "epickem",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios", "android"],
+    "icon": "../assets/Epickem-logo.png",
+    "ios": {
+      "bundleIdentifier": "com.epickem.mobile",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.epickem.mobile"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "../assets/Epickem-logo.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "image": "../assets/Epickem-logo.png",
+            "backgroundColor": "#0a0a0a"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
