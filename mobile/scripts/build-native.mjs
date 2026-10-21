@@ -1,0 +1,80 @@
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const platform = process.argv[2];
+
+function run(command, args, cwd = root) {
+  const result = spawnSync(command, args, { cwd, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+if (platform !== 'android' && platform !== 'ios') {
+  throw new Error('Expected android or ios as the build platform.');
+}
+if (platform === 'ios' && process.platform !== 'darwin') {
+  throw new Error('iOS simulator builds require macOS and Xcode.');
+}
+
+const windows = process.platform === 'win32';
+run(process.execPath, [
+  fileURLToPath(new URL('../node_modules/expo/bin/cli', import.meta.url)),
+  'prebuild',
+  '--platform',
+  platform,
+  '--no-install',
+  '--skip-dependency-update',
+  'react,react-native',
+]);
+mkdirSync(new URL('../build/', import.meta.url), { recursive: true });
+
+if (platform === 'android') {
+  // Expo's generated release variant uses the debug key until production signing is configured.
+  run(
+    windows ? 'cmd.exe' : './gradlew',
+    windows
+      ? [
+          '/c',
+          'gradlew.bat',
+          'assembleRelease',
+          '-Pandroid.cmakeVersion=3.30.5',
+          '--no-daemon',
+        ]
+      : ['assembleRelease', '-Pandroid.cmakeVersion=3.30.5', '--no-daemon'],
+    `${root}/android`,
+  );
+  copyFileSync(
+    new URL(
+      '../android/app/build/outputs/apk/release/app-release.apk',
+      import.meta.url,
+    ),
+    new URL('../build/epickem-android-demo.apk', import.meta.url),
+  );
+} else {
+  run('pod', ['_1.17.0_', 'install'], `${root}/ios`);
+  run('xcodebuild', [
+    '-workspace',
+    'ios/Epickem.xcworkspace',
+    '-scheme',
+    'Epickem',
+    '-configuration',
+    'Release',
+    '-sdk',
+    'iphonesimulator',
+    '-destination',
+    'generic/platform=iOS Simulator',
+    '-derivedDataPath',
+    'build/ios',
+    'CODE_SIGNING_ALLOWED=NO',
+    'build',
+  ]);
+  run('tar', [
+    '-czf',
+    'build/epickem-ios-simulator.tar.gz',
+    '-C',
+    'build/ios/Build/Products/Release-iphonesimulator',
+    'Epickem.app',
+  ]);
+}

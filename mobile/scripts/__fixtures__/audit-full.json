@@ -1,0 +1,93 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "braces": {
+      "name": "braces",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1,
+          "name": "braces",
+          "dependency": "braces",
+          "title": "Synthetic braces advisory",
+          "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+          "severity": "high",
+          "range": "*"
+        }
+      ],
+      "effects": ["micromatch"],
+      "range": "*",
+      "nodes": ["node_modules/braces"],
+      "fixAvailable": false
+    },
+    "node-forge": {
+      "name": "node-forge",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 2,
+          "name": "node-forge",
+          "dependency": "node-forge",
+          "title": "Synthetic node-forge advisory",
+          "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+          "severity": "high",
+          "range": "*"
+        }
+      ],
+      "effects": ["@expo/cli"],
+      "range": "*",
+      "nodes": ["node_modules/node-forge"],
+      "fixAvailable": false
+    },
+    "micromatch": {
+      "name": "micromatch",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["braces"],
+      "effects": ["jest-haste-map"],
+      "range": "*",
+      "nodes": ["node_modules/micromatch"],
+      "fixAvailable": false
+    },
+    "@expo/cli": {
+      "name": "@expo/cli",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["node-forge"],
+      "effects": [],
+      "range": "*",
+      "nodes": ["node_modules/@expo/cli"],
+      "fixAvailable": false
+    },
+    "jest-haste-map": {
+      "name": "jest-haste-map",
+      "severity": "high",
+      "isDirect": false,
+      "via": ["micromatch"],
+      "effects": [],
+      "range": "*",
+      "nodes": ["node_modules/jest-haste-map"],
+      "fixAvailable": false
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 5,
+      "critical": 0,
+      "total": 5
+    },
+    "dependencies": {
+      "prod": 4,
+      "dev": 1,
+      "optional": 0,
+      "peer": 0,
+      "peerOptional": 0,
+      "total": 5
+    }
+  }
+}

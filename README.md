@@ -42,3 +42,7 @@ Les versions sont calculées automatiquement par [semantic-release](https://sema
 ## Contribuer
 
 Voir [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Mobile development
+
+The Expo SDK 58 / React Native 0.88 starter lives in [`mobile/`](mobile/README.md). Its README links to local setup, testing, Docker, native builds, CI/CD, and dependency security documentation. The backend Docker Compose environment is not required to run the starter.
