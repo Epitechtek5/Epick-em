@@ -6,10 +6,7 @@
     "scheme": "epickem",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
-    "platforms": [
-      "ios",
-      "android"
-    ],
+    "platforms": ["ios", "android"],
     "ios": {
       "bundleIdentifier": "com.epickem.mobile",
       "supportsTablet": true
@@ -17,10 +14,7 @@
     "android": {
       "package": "com.epickem.mobile"
     },
-    "plugins": [
-      "expo-router",
-      "expo-splash-screen"
-    ],
+    "plugins": ["expo-router", "expo-splash-screen"],
     "experiments": {
       "typedRoutes": true
     }

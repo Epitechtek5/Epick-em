@@ -5,7 +5,9 @@
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.5",
     "@hugeicons/react-native": "^1.0.16",
+    "@react-navigation/native": "^7.5.1",
     "@rn-primitives/portal": "^1.5.3",
+    "@rn-primitives/slot": "^1.5.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "expo": "~58.0.16",
@@ -32,7 +34,6 @@
     "@testing-library/react-native": "^14.1.0",
     "@types/jest": "30.0.0",
     "@types/react": "~19.3.0",
-    "colorjs.io": "^0.7.1",
     "eslint": "^9.39.5",
     "eslint-config-expo": "^58.0.4",
     "jest": "~30.5.2",
@@ -56,6 +57,7 @@
     "build": "expo export --platform android --platform ios",
     "build:android": "node scripts/build-native.mjs android",
     "build:ios:simulator": "node scripts/build-native.mjs ios",
+    "build:apk": "npm run build:android && mkdir -p binaries && mv android/app/build/outputs/apk/release/app-release.apk binaries/epickem.apk",
     "validate": "npm run lint && npm run format:check && npm run typecheck && npm test -- --watch=false && npm run config:check && npm run build"
   },
   "private": true,
