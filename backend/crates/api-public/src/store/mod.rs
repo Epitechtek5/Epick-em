@@ -14,8 +14,8 @@ mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::matches::{
-    Bracket, Match, MatchFinish, MatchInput, MatchParticipant, MatchResult, MatchScore,
-    MatchStatus, MatchUpdate,
+    Bracket, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchResult,
+    MatchScore, MatchStatus, MatchUpdate,
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
@@ -610,6 +610,16 @@ pub trait AuthStore: Send + Sync {
     /// Termine le match en une seule opération (voir [`MatchFinish`]) ; `None` s'il n'existe pas,
     /// [`StoreError::MatchState`] s'il est déjà `finished` ou `cancelled`.
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError>;
+
+    /// Remplace les matchs de l'étape (et leurs participants) par `matches`, en une seule
+    /// opération ; `false` si l'étape n'existe pas. Les groupes et les inscrits appartiennent à
+    /// l'étape, et `next` désigne un autre match de la liste.
+    async fn replace_step_matches(
+        &self,
+        step_id: Uuid,
+        game_id: Uuid,
+        matches: Vec<MatchImport>,
+    ) -> Result<bool, StoreError>;
 
     /// Crée ou met à jour (par jeu et nom, sans tenir compte de la casse) les tournois donnés,
     /// en une seule opération : en cas d'erreur, aucun n'est modifié. Le barème d'un tournoi

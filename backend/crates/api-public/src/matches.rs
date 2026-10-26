@@ -34,7 +34,7 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
 
-const ROUND_MAX: i32 = 1_000;
+pub(crate) const ROUND_MAX: i32 = 1_000;
 const STAT_VALUE_MAX: f64 = 1_000_000_000.0;
 
 /// Routes des matchs, avec leur documentation OpenAPI.
@@ -822,21 +822,35 @@ fn match_error(err: StoreError) -> ApiError {
 
 /// Nombre maximum de participants d'un match.
 fn capacity(step: &Step) -> usize {
-    match step.match_type {
+    capacity_of(step.match_type, step.group_size)
+}
+
+pub(crate) fn capacity_of(match_type: MatchType, group_size: i32) -> usize {
+    match match_type {
         MatchType::Duel => 2,
-        MatchType::Ffa => usize::try_from(step.group_size).unwrap_or(2),
+        MatchType::Ffa => usize::try_from(group_size).unwrap_or(2),
     }
 }
 
 /// Ce qui empêche de jouer un match de `count` participants.
 fn participants_problem(step: &Step, count: usize) -> Option<String> {
-    match step.match_type {
+    playable_problem(step.match_type, step.group_size, count)
+}
+
+/// Ce qui empêche de jouer, pour une étape de ce type et de cette taille de groupe, un match de
+/// `count` participants.
+pub(crate) fn playable_problem(
+    match_type: MatchType,
+    group_size: i32,
+    count: usize,
+) -> Option<String> {
+    let capacity = capacity_of(match_type, group_size);
+    match match_type {
         MatchType::Duel if count != 2 => Some(format!(
             "Un match en duel oppose exactement 2 participants, il y en a {count}."
         )),
-        MatchType::Ffa if !(2..=capacity(step)).contains(&count) => Some(format!(
-            "Un match en ffa réunit de 2 à {} participants, il y en a {count}.",
-            capacity(step)
+        MatchType::Ffa if !(2..=capacity).contains(&count) => Some(format!(
+            "Un match en ffa réunit de 2 à {capacity} participants, il y en a {count}."
         )),
         _ => None,
     }
@@ -1037,7 +1051,11 @@ fn flat_stats(
 
 /// Points rapportés par les statistiques : la somme des règles du barème dont la statistique est
 /// renseignée.
-fn points_of(values: &HashMap<String, f64>, rules: &[ScoringRule], stats: &[Stat]) -> f64 {
+pub(crate) fn points_of(
+    values: &HashMap<String, f64>,
+    rules: &[ScoringRule],
+    stats: &[Stat],
+) -> f64 {
     rules
         .iter()
         .filter_map(|rule| {
@@ -1050,7 +1068,7 @@ fn points_of(values: &HashMap<String, f64>, rules: &[ScoringRule], stats: &[Stat
 /// Résultats définitifs d'un match qui se termine : chaque participant a des statistiques ou un
 /// rang ; sans aucun rang, ils sont déduits des points (les égalités le partagent) ; un résultat
 /// absent vaut `win` pour la première place, `draw` si elle est partagée, `loss` sinon.
-fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, String> {
+pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, String> {
     let empty =
         |m: &MatchParticipant| m.rank.is_none() && m.stats.as_object().is_none_or(|o| o.is_empty());
     let missing: Vec<String> = members

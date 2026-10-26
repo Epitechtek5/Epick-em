@@ -2,13 +2,14 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchInput, MatchParticipant,
-    MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
-    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step,
-    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepStart, StoreError,
-    Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
-    TournamentInput, TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
+    MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
+    ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
+    StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
+    StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate,
+    Tournament, TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus,
+    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
+    UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
@@ -2251,6 +2252,63 @@ impl AuthStore for PgStore {
         .await?;
         tx.commit().await?;
         Ok(Some(match_from(row)?))
+    }
+
+    async fn replace_step_matches(
+        &self,
+        step_id: Uuid,
+        game_id: Uuid,
+        matches: Vec<MatchImport>,
+    ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM step WHERE id = $1)")
+                .bind(step_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if !exists {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM match WHERE step_id = $1")
+            .bind(step_id)
+            .execute(&mut *tx)
+            .await?;
+        let mut ids = Vec::with_capacity(matches.len());
+        for import in &matches {
+            let id = sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match (game_id, step_id, group_id, round, bracket, scheduled_at, \
+                     started_at, ended_at, status) \
+                 VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, \
+                     $8::timestamptz, $9) RETURNING id",
+            )
+            .bind(game_id)
+            .bind(step_id)
+            .bind(import.group_id)
+            .bind(import.round)
+            .bind(import.bracket.map(|b| b.as_str()))
+            .bind(&import.scheduled_at)
+            .bind(&import.started_at)
+            .bind(&import.ended_at)
+            .bind(import.status.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            ids.push(id);
+        }
+        for (import, id) in matches.into_iter().zip(&ids) {
+            if let Some(next) = import.next.and_then(|next| ids.get(next)) {
+                sqlx::query("UPDATE match SET next_match_id = $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(next)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            for score in import.participants {
+                insert_match_participant(&mut tx, *id, score.participant_id).await?;
+                save_match_scores_in(&mut tx, *id, vec![score]).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 
     async fn import_tournaments(

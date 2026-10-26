@@ -1018,7 +1018,7 @@ async fn step_files_are_validated_before_any_write() {
             "n'est pas qualifié",
         ),
         (
-            "matchs non pris en charge",
+            "matchs d'une étape non lancée",
             vec![step(json!({ "matches": [{}] }))],
             "matchs",
         ),
