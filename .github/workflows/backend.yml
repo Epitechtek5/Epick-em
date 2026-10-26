@@ -31,6 +31,51 @@ jobs:
           workspaces: backend
       - run: cargo test --workspace --locked
 
+  # Tests marqués #[ignore] : ils exigent un vrai PostgreSQL migré (image db/, ADR-006) et Redis.
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://epickem:epickem@localhost:5432/epickem
+      REDIS_URL: redis://localhost:6379
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: epickem
+          POSTGRES_USER: epickem
+          POSTGRES_PASSWORD: epickem
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U epickem"
+          --health-interval 2s
+          --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: docker build -t epickem-migrations db
+        working-directory: .
+      - name: Appliquer les migrations
+        working-directory: .
+        run: |
+          docker run --rm --network host \
+            -e LIQUIBASE_COMMAND_URL=jdbc:postgresql://localhost:5432/epickem \
+            -e LIQUIBASE_COMMAND_USERNAME=epickem \
+            -e LIQUIBASE_COMMAND_PASSWORD=epickem \
+            epickem-migrations
+      - run: cargo test --workspace --locked -- --ignored
+
   build:
     runs-on: ubuntu-latest
     strategy:
