@@ -12,15 +12,18 @@ export function validateRegisterForm(form: RegisterForm): RegisterErrors {
   const errors: RegisterErrors = {};
 
   if (!USERNAME_PATTERN.test(form.username)) {
-    errors.username = 'Username must contain 3–32 letters, numbers, _, . or -.';
+    errors.username = 'validation.username';
   }
 
-  if (form.password.length < 8 || form.password.length > 128) {
-    errors.password = 'Password must contain 8–128 characters.';
+  if (
+    Array.from(form.password).length < 8 ||
+    Array.from(form.password).length > 128
+  ) {
+    errors.password = 'validation.password';
   }
 
   if (form.confirmPassword !== form.password) {
-    errors.confirmPassword = 'Passwords do not match.';
+    errors.confirmPassword = 'validation.match';
   }
 
   return errors;

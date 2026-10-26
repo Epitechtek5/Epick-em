@@ -23,18 +23,19 @@ export function validateUserForm(
     form.username !== originalUsername &&
     !USERNAME_PATTERN.test(form.username)
   ) {
-    errors.username = 'Username must contain 3–32 letters, numbers, _, . or -.';
+    errors.username = 'validation.username';
   }
 
   if (
     form.password &&
-    (form.password.length < 8 || form.password.length > 128)
+    (Array.from(form.password).length < 8 ||
+      Array.from(form.password).length > 128)
   ) {
-    errors.password = 'Password must contain 8–128 characters.';
+    errors.password = 'validation.password';
   }
 
   if (form.password !== form.confirmPassword) {
-    errors.confirmPassword = 'Passwords do not match.';
+    errors.confirmPassword = 'validation.match';
   }
 
   return errors;

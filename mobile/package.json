@@ -16,13 +16,17 @@
     "expo-build-properties": "~58.0.11",
     "expo-constants": "~58.0.13",
     "expo-linking": "~58.0.14",
+    "expo-localization": "~58.0.5",
     "expo-router": "~58.0.26",
+    "expo-secure-store": "~58.0.2",
     "expo-splash-screen": "~58.0.11",
     "expo-status-bar": "~58.0.4",
     "expo-system-ui": "~58.0.6",
+    "i18next": "^26.5.11",
     "nativewind": "^4.2.7",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-i18next": "^17.1.9",
     "react-native": "0.88.0",
     "react-native-gesture-handler": "~3.3.0",
     "react-native-reanimated": "4.7.1",
@@ -84,9 +88,6 @@
     },
     "postcss-nested": {
       "postcss-selector-parser": "7.1.6"
-    },
-    "@expo/cli": {
-      "zod": "4.6.7"
     },
     "openapi-typescript": {
       "typescript": "$typescript"
