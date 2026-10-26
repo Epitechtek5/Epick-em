@@ -2,8 +2,11 @@
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, MemberImport, PgStore, Role, StatInput, StatType, StatUpdate,
-    StoreError, TeamImport, TeamInput, TeamRole, TeamUpdate, TournamentTeamInput, UserUpdate,
+    AuthStore, GameInput, GameUpdate, MemberImport, ParticipantInput, ParticipantStatus,
+    ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition, ScoringRuleInput,
+    StatInput, StatType, StatUpdate, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode,
+    TeamUpdate, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
+    UserUpdate,
 };
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
@@ -978,4 +981,344 @@ async fn teams_are_upserted_with_their_members_in_one_transaction() {
         .map(|t| t.name)
         .collect();
     assert_eq!(names, [name.to_uppercase()]);
+}
+
+fn tournament_input(game_id: Uuid) -> TournamentInput {
+    TournamentInput {
+        game_id,
+        name: unique("Open"),
+        description: Some("Ouvert".into()),
+        start_date: "2026-11-14T18:00:00.000000Z".into(),
+        end_date: "2026-11-15T18:00:00.000000Z".into(),
+        registration_open_at: Some("2026-11-01T00:00:00.000000Z".into()),
+        registration_close_at: None,
+        participant_type: ParticipantType::Solo,
+        team_size: None,
+        max_participants: 2,
+        team_scoring_mode: TeamScoringMode::TopN,
+        team_scoring_n: Some(2),
+    }
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn tournaments_round_trip_and_update_partially() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let created = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    assert_eq!(created.status, TournamentStatus::Draft);
+    assert_eq!(created.start_date, "2026-11-14T18:00:00.000000Z");
+    assert_eq!(created.team_scoring_mode, TeamScoringMode::TopN);
+    assert_eq!(
+        store.find_tournament(created.id).await.unwrap(),
+        Some(created.clone())
+    );
+
+    let updated = store
+        .update_tournament(
+            created.id,
+            TournamentUpdate {
+                name: Some(unique("Cup")),
+                description: Some(None),
+                registration_open_at: Some(None),
+                max_participants: Some(4),
+                team_scoring_mode: Some(TeamScoringMode::Sum),
+                team_scoring_n: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.description, None);
+    assert_eq!(updated.registration_open_at, None);
+    assert_eq!(updated.max_participants, 4);
+    assert_eq!(updated.end_date, created.end_date);
+    assert!(
+        store
+            .update_tournament(Uuid::new_v4(), TournamentUpdate::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let started = store
+        .set_tournament_status(created.id, TournamentStatus::Registration)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(started.status, TournamentStatus::Registration);
+    let listed = store
+        .list_tournaments(Some(game_id), Some(TournamentStatus::Registration), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(
+        store
+            .list_tournaments(Some(game_id), Some(TournamentStatus::Draft), 10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Les contraintes de la base refusent un tournoi incohérent.
+    let mut bad = tournament_input(game_id);
+    bad.team_size = Some(3);
+    assert!(store.create_tournament(bad).await.is_err());
+
+    assert!(store.delete_tournament(created.id).await.unwrap());
+    assert!(!store.delete_tournament(created.id).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn scoring_rules_need_a_stat_of_the_game_and_lock_it_when_ongoing() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let other_game = game(&store).await;
+    let key = unique("kills").replace('-', "_").to_lowercase();
+    let stat = store
+        .create_stat(StatInput {
+            name: "Kills".into(),
+            key,
+            kind: StatType::Flat,
+        })
+        .await
+        .unwrap();
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let linear = ScoringRuleDefinition {
+        mode: ScoringMode::Linear,
+        coefficient: Some(1.5),
+        points_table: None,
+    };
+    let rule = |definition: &ScoringRuleDefinition| ScoringRuleInput {
+        tournament_id: tournament.id,
+        stat_id: stat.id,
+        definition: definition.clone(),
+    };
+
+    // Statistique non liée au jeu du tournoi : refusée.
+    assert!(
+        store
+            .create_scoring_rule(rule(&linear))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(store.link_stat(other_game, stat.id).await.unwrap());
+    assert!(
+        store
+            .create_scoring_rule(rule(&linear))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(store.link_stat(game_id, stat.id).await.unwrap());
+    let created = store
+        .create_scoring_rule(rule(&linear))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(created.coefficient, Some(1.5));
+    assert!(matches!(
+        store.create_scoring_rule(rule(&linear)).await,
+        Err(StoreError::ScoringRuleTaken)
+    ));
+
+    let table = ScoringRuleDefinition {
+        mode: ScoringMode::Table,
+        coefficient: None,
+        points_table: Some(serde_json::json!({ "1": 8, "2": 7 })),
+    };
+    let replaced = store
+        .replace_scoring_rule(created.id, table)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replaced.coefficient, None);
+    assert_eq!(
+        replaced.points_table,
+        Some(serde_json::json!({ "1": 8, "2": 7 }))
+    );
+    assert_eq!(
+        store.list_scoring_rules(tournament.id).await.unwrap().len(),
+        1
+    );
+    assert_eq!(
+        store.find_scoring_rule(created.id).await.unwrap(),
+        Some(replaced)
+    );
+
+    // Tournoi `ongoing` : la statistique et sa liaison au jeu ne se retirent plus.
+    store
+        .set_tournament_status(tournament.id, TournamentStatus::Ongoing)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.delete_stat(stat.id).await,
+        Err(StoreError::StatInUse)
+    ));
+    assert!(matches!(
+        store.unlink_stat(game_id, stat.id).await,
+        Err(StoreError::StatInUse)
+    ));
+    assert!(matches!(
+        store.set_game_stats(game_id, Vec::new()).await,
+        Err(StoreError::StatInUse)
+    ));
+    assert!(matches!(
+        store.set_stat_games(stat.id, vec![other_game]).await,
+        Err(StoreError::StatInUse)
+    ));
+    // Une autre liaison se retire, et le remplacement qui garde la liaison passe.
+    assert!(store.unlink_stat(other_game, stat.id).await.unwrap());
+    assert!(store.set_game_stats(game_id, vec![stat.id]).await.unwrap());
+
+    // Fini : la statistique redevient supprimable et le barème disparaît avec elle.
+    store
+        .set_tournament_status(tournament.id, TournamentStatus::Finished)
+        .await
+        .unwrap();
+    assert!(store.delete_stat(stat.id).await.unwrap());
+    assert!(
+        store
+            .list_scoring_rules(tournament.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!store.delete_scoring_rule(created.id).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn participants_are_unique_and_capped_by_max_participants() {
+    let store = store().await;
+    let (alice, bob, carol) = (
+        user(&store, "alice").await,
+        user(&store, "bob").await,
+        user(&store, "carol").await,
+    );
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let solo = |user_id: Uuid| ParticipantInput {
+        tournament_id: tournament.id,
+        user_id: Some(user_id),
+        tournament_team_id: None,
+    };
+
+    let first = store.add_participant(solo(alice)).await.unwrap().unwrap();
+    assert_eq!(first.status, ParticipantStatus::Registered);
+    assert!(matches!(
+        store.add_participant(solo(alice)).await,
+        Err(StoreError::AlreadyParticipant)
+    ));
+    let second = store.add_participant(solo(bob)).await.unwrap().unwrap();
+    assert!(matches!(
+        store.add_participant(solo(carol)).await,
+        Err(StoreError::TournamentFull)
+    ));
+    assert!(
+        store
+            .add_participant(ParticipantInput {
+                tournament_id: Uuid::new_v4(),
+                user_id: Some(carol),
+                tournament_team_id: None,
+            })
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Un retrait libère la place sans effacer la ligne.
+    let withdrawn = store
+        .set_participant_status(second.id, ParticipantStatus::Withdrawn)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(withdrawn.status, ParticipantStatus::Withdrawn);
+    store.add_participant(solo(carol)).await.unwrap().unwrap();
+    let listed = store.list_participants(tournament.id, 10, 0).await.unwrap();
+    assert_eq!(listed.len(), 3);
+    assert_eq!(listed[0], first);
+    assert_eq!(
+        store.find_participant(first.id).await.unwrap(),
+        Some(first.clone())
+    );
+    assert!(
+        store
+            .participant_points(tournament.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    assert!(store.delete_participant(first.id).await.unwrap());
+    assert!(!store.delete_participant(first.id).await.unwrap());
+    assert!(
+        store
+            .set_participant_status(first.id, ParticipantStatus::CheckedIn)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Solo avec équipe : plusieurs joueurs pour la même équipe ; équipe seule : une fois.
+    let team_tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let team = store
+        .create_tournament_team(TournamentTeamInput {
+            tournament_id: team_tournament.id,
+            team_id: None,
+            name: unique("Alpha"),
+            tag: None,
+            picture_url: None,
+            owner_id: alice,
+            members: vec![(alice, TeamRole::Owner), (bob, TeamRole::Member)],
+        })
+        .await
+        .unwrap();
+    for user_id in [alice, bob] {
+        store
+            .add_participant(ParticipantInput {
+                tournament_id: team_tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: Some(team.id),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    // Une équipe d'un autre tournoi est refusée par la base.
+    assert!(
+        store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(carol),
+                tournament_team_id: Some(team.id),
+            })
+            .await
+            .is_err()
+    );
+    // Supprimer le tournoi emporte ses inscrits.
+    assert!(store.delete_tournament(team_tournament.id).await.unwrap());
+    assert!(
+        store
+            .list_participants(team_tournament.id, 10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.find_tournament_team(team.id).await.unwrap().is_none());
 }

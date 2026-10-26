@@ -150,6 +150,47 @@ pub struct ScoringRule {
     pub points_table: Option<serde_json::Value>,
 }
 
+/// Modification partielle d'un tournoi : seuls les champs renseignés changent ; `Some(None)`
+/// efface une valeur facultative. Les dates sont normalisées (RFC 3339, UTC, six décimales).
+#[derive(Debug, Default, Clone)]
+pub struct TournamentUpdate {
+    pub name: Option<String>,
+    pub description: Option<Option<String>>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub registration_open_at: Option<Option<String>>,
+    pub registration_close_at: Option<Option<String>>,
+    pub team_size: Option<Option<i32>>,
+    pub max_participants: Option<i32>,
+    pub team_scoring_mode: Option<TeamScoringMode>,
+    pub team_scoring_n: Option<Option<i32>>,
+}
+
+/// Règle de barème à créer ; `coefficient` est renseigné pour `linear`, `points_table` pour
+/// `table`.
+#[derive(Debug, Clone)]
+pub struct ScoringRuleInput {
+    pub tournament_id: Uuid,
+    pub stat_id: Uuid,
+    pub definition: ScoringRuleDefinition,
+}
+
+/// Façon de convertir une statistique en points.
+#[derive(Debug, Clone)]
+pub struct ScoringRuleDefinition {
+    pub mode: ScoringMode,
+    pub coefficient: Option<f64>,
+    pub points_table: Option<serde_json::Value>,
+}
+
+/// Inscription à créer : un joueur, une équipe de tournoi, ou un joueur pour son équipe.
+#[derive(Debug, Clone)]
+pub struct ParticipantInput {
+    pub tournament_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub tournament_team_id: Option<Uuid>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

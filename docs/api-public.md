@@ -1,4 +1,4 @@
-# API publique — authentification, comptes, jeux, statistiques et équipes
+# API publique — authentification, comptes, jeux, statistiques, équipes et tournois
 
 Référence des routes de `api-public` (décisions : [ADR-009](adr/009-authentification-jwt-et-roles.md)). Les routes sont exposées sans préfixe ; le front les appelle en `/api/*` et nginx (ou le proxy Vite) retire le préfixe.
 
@@ -59,6 +59,23 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /tournament-teams/{id}/members` | JWT valide, **propriétaire** | `{ user_id, role }` (`member` ou `substitute`) | `201` le membre ; `409` s'il est déjà dans une équipe du tournoi |
 | `PATCH /tournament-teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | `{ role }` | `200` le membre |
 | `DELETE /tournament-teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | — | `204` |
+| `GET /tournaments` | JWT valide | `?game_id`, `?status`, `?limit`, `?offset` | `200` `[Tournament]`, par date de début |
+| `GET /tournaments/{id}` | JWT valide | — | `200` le tournoi |
+| `POST /tournaments` | JWT valide, **administrateur** | `{ game_id, name, description?, start_date, end_date, registration_open_at?, registration_close_at?, participant_type, team_size?, max_participants, team_scoring_mode?, team_scoring_n? }` | `201` le tournoi, au statut `draft` |
+| `PATCH /tournaments/{id}` | JWT valide, **administrateur** | champs de la création sauf `game_id` et `participant_type` ; `null` efface une valeur facultative | `200` le tournoi ; `409` si la capacité ou le score d'équipe change alors que le tournoi est `ongoing` ou `finished` |
+| `DELETE /tournaments/{id}` | JWT valide, **administrateur** | — | `204` ; supprime équipes, barème et inscrits ; `409` si le tournoi est `ongoing` |
+| `POST /tournaments/{id}/status` | JWT valide, **administrateur** | `{ status }` | `200` le tournoi ; `409` si la transition est impossible, `400` si le démarrage est impossible |
+| `GET /tournaments/{id}/scoring-rules` | JWT valide | — | `200` `[{ id, tournament_id, stat_id, mode, coefficient, points_table }]` |
+| `POST /tournaments/{id}/scoring-rules` | JWT valide, **administrateur** | `{ stat_id, mode, coefficient? }` (`linear`) ou `{ stat_id, mode, points_table }` (`table`) | `201` la règle ; `400` si la statistique n'est pas liée au jeu ; `409` si elle a déjà une règle ou si le barème est verrouillé |
+| `PATCH /tournaments/{id}/scoring-rules/{rule_id}` | JWT valide, **administrateur** | `{ mode, coefficient? }` ou `{ mode, points_table }` | `200` la règle ; `409` si le barème est verrouillé |
+| `DELETE /tournaments/{id}/scoring-rules/{rule_id}` | JWT valide, **administrateur** | — | `204` ; `409` si le barème est verrouillé |
+| `GET /tournaments/{id}/participants` | JWT valide | `?limit`, `?offset` | `200` `[{ id, tournament_id, user_id, tournament_team_id, status, registered_at }]` |
+| `POST /tournaments/{id}/participants` | JWT valide | `{ user_id?, tournament_team_id? }` | `201` l'inscription ; `409` si les inscriptions sont fermées, si le participant est déjà inscrit ou si le tournoi est complet |
+| `PATCH /tournaments/{id}/participants/{participant_id}` | JWT valide, **administrateur**, ou l'inscrit pour `withdrawn` | `{ status }` | `200` l'inscription |
+| `DELETE /tournaments/{id}/participants/{participant_id}` | JWT valide, l'inscrit, le propriétaire de son équipe ou un **administrateur** | — | `204` ; `409` une fois le tournoi `ongoing` |
+| `POST /tournaments/{id}/participants/{participant_id}/check-in` | JWT valide, l'inscrit, le propriétaire de son équipe ou un **administrateur** | — | `200` l'inscription au statut `checked_in` |
+| `GET /tournaments/{id}/ranking` | JWT valide | — | `200` `[{ rank, participant_id, user_id, tournament_team_id, points }]` |
+| `GET /tournaments/{id}/team-ranking` | JWT valide | — | `200` `[{ rank, tournament_team_id, name, points }]` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -102,7 +119,15 @@ Même principe, portée `stat` et `stat - game` uniquement.
 - **Import :** une statistique dont la clé existe déjà met à jour cette statistique (nom, type) et **remplace** ses jeux liés, sinon elle est créée. Le fichier est validé en entier avant toute écriture (mêmes règles que `POST /stats`, clés distinctes, jeux existants et distincts) ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus).
 
 - **Équipes :** nom de 1 à 64 caractères, unique par jeu sans tenir compte de la casse ; tag de 1 à 8 caractères ; photo : URL `http(s)` de 2048 caractères au maximum. Seul le **propriétaire** (l'appelant de `POST /teams`) modifie ou supprime l'équipe et gère ses membres, les administrateurs n'ont pas ce droit. Le propriétaire est membre `owner` : son rôle est fixe, il ne peut pas être retiré et `owner` n'est pas attribuable.
-- **Équipes de tournoi :** créées de zéro ou par **copie** d'une équipe globale (nom, tag, photo, propriétaire et membres actifs, éventuellement restreints par `member_ids`, qui doivent être membres actifs). La copie est indépendante : aucune modification ne se propage de l'une à l'autre, et supprimer l'équipe globale garde la copie (`team_id` devient `null`). Une équipe globale s'inscrit une seule fois par tournoi, un joueur n'est que dans une équipe par tournoi. La table des tournois (#62) n'existe pas encore : `tournament_id` n'est pas vérifié, ni la règle « le jeu de l'équipe est celui du tournoi ».
+- **Équipes de tournoi :** créées de zéro ou par **copie** d'une équipe globale (nom, tag, photo, propriétaire et membres actifs, éventuellement restreints par `member_ids`, qui doivent être membres actifs). La copie est indépendante : aucune modification ne se propage de l'une à l'autre, et supprimer l'équipe globale garde la copie (`team_id` devient `null`). Une équipe globale s'inscrit une seule fois par tournoi, un joueur n'est que dans une équipe par tournoi. Le tournoi doit exister et être en `draft` ou `registration`, et l'équipe globale copiée doit être du jeu du tournoi.
+
+### Tournois
+
+- **Champs :** `name` de 1 à 128 caractères ; `start_date`, `end_date`, `registration_open_at` et `registration_close_at` en RFC 3339 UTC (`2026-11-14T18:00:00Z`), la fin ne précède pas le début ni la clôture l'ouverture ; `max_participants` de 1 à 10 000 ; `participant_type` vaut `solo` ou `team` et ne se change pas ; `team_size` (1 à 100) est renseigné si et seulement si le tournoi est `team` ; `team_scoring_mode` vaut `none` (défaut), `sum`, `best` ou `top_n`, et `team_scoring_n` (1 à 100) est renseigné si et seulement si le mode est `top_n`.
+- **Statuts :** `draft` → `registration` → `ongoing` → `finished`, et `draft`, `registration` ou `ongoing` → `cancelled`. Le passage en `ongoing` exige au moins deux inscrits actifs (ni `withdrawn` ni `disqualified`) et, pour un tournoi par équipes, exactement `team_size` titulaires (propriétaire et membres, remplaçants exclus) dans chaque équipe inscrite ; la validation des étapes s'y ajoutera avec #52.
+- **Barème :** une règle par statistique, qui doit être liée au jeu du tournoi. `linear` : points = valeur × `coefficient` ; `table` : `points_table` associe une valeur à des points (`{"1": 8, "2": 7}`). Le barème est modifiable en `draft` et `registration` seulement. Dès qu'un tournoi est `ongoing`, ses statistiques ne peuvent plus être supprimées ni déliées du jeu (`409 stat_in_use`).
+- **Inscriptions :** seulement au statut `registration` et dans la fenêtre d'inscription, si elle est définie. En **solo**, l'appelant s'inscrit lui-même (un administrateur peut désigner `user_id`), seul ou pour une équipe du tournoi dont il est membre (`tournament_team_id`) : les joueurs d'une même équipe s'affrontent mais marquent pour elle. Dans un tournoi **par équipes**, le propriétaire (ou un administrateur) inscrit son équipe (`tournament_team_id` seul), qui doit compter exactement `team_size` titulaires. Un joueur ou une équipe ne s'inscrit qu'une fois ; un inscrit `withdrawn` libère sa place mais garde sa ligne. Le check-in n'est possible qu'au statut `registration`.
+- **Classements :** les points d'un inscrit viennent des résultats des étapes (#52), qui n'existent pas encore : tant qu'aucun résultat n'est enregistré, tous les inscrits sont à 0. Les ex æquo partagent le même rang (1, 2, 2, 4) et les inscrits `withdrawn` ou `disqualified` n'y figurent pas. `ranking` classe les joueurs d'un tournoi solo (vide pour un tournoi par équipes) : le gagnant est le rang 1. `team-ranking` classe les équipes : dans un tournoi par équipes, chaque équipe marque ses propres points ; en solo, les points des joueurs d'une même équipe sont agrégés selon `team_scoring_mode` (`sum`, `best`, `top_n` des `team_scoring_n` meilleurs), et le classement est vide avec `none`.
 
 ### Import et export des équipes
 
@@ -122,7 +147,7 @@ Format `{ "error", "message", "errors"? }` :
 | `400` | `invalid_request` | corps illisible ou champs invalides (`errors` donne le détail par champ) |
 | `401` | `unauthorized` | jeton absent, invalide ou expiré ; identifiants ou jeton de rafraîchissement refusés |
 | `403` | `forbidden` | action réservée aux administrateurs ou au propriétaire de l'équipe, ou changement de son propre rôle |
-| `404` | `not_found` | compte, jeu, statistique ou équipe introuvable (ou identifiant qui n'est pas un UUID) |
+| `404` | `not_found` | compte, jeu, statistique, équipe, tournoi ou inscription introuvable (ou identifiant qui n'est pas un UUID) |
 | `409` | `username_taken` | nom d'utilisateur déjà pris |
 | `409` | `game_name_taken` | nom de jeu déjà pris |
 | `409` | `stat_key_taken` | clé de statistique déjà prise |
@@ -131,6 +156,12 @@ Format `{ "error", "message", "errors"? }` :
 | `409` | `already_team_member` | compte déjà membre actif de l'équipe |
 | `409` | `team_already_registered` | équipe globale déjà inscrite à ce tournoi |
 | `409` | `player_already_registered` | joueur déjà dans une équipe de ce tournoi |
+| `409` | `scoring_rule_taken` | le barème définit déjà cette statistique |
+| `409` | `already_registered` | joueur ou équipe déjà inscrit au tournoi |
+| `409` | `tournament_full` | `max_participants` atteint |
+| `409` | `tournament_locked` | tournoi en cours ou terminé : barème, capacité, suppression ou équipes verrouillés |
+| `409` | `registration_closed` | tournoi hors `registration` ou hors de la fenêtre d'inscription |
+| `409` | `invalid_status_transition` | changement de statut impossible depuis le statut actuel |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
 ## Configuration

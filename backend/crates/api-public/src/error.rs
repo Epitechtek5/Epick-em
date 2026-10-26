@@ -46,6 +46,18 @@ pub enum ApiError {
     TeamAlreadyRegistered,
     /// Joueur déjà dans une équipe de ce tournoi.
     PlayerAlreadyRegistered,
+    /// Le barème contient déjà une règle pour cette statistique.
+    ScoringRuleTaken,
+    /// Joueur ou équipe déjà inscrit à ce tournoi.
+    AlreadyRegistered,
+    /// Le tournoi a atteint son nombre maximum de participants.
+    TournamentFull,
+    /// Barème ou paramètres verrouillés : le tournoi est en cours ou terminé.
+    TournamentLocked,
+    /// Les inscriptions ne sont pas ouvertes.
+    RegistrationClosed,
+    /// Changement de statut impossible depuis le statut actuel.
+    InvalidTransition,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -108,6 +120,36 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "player_already_registered",
                 "Ce joueur est déjà dans une équipe de ce tournoi",
+            ),
+            ApiError::ScoringRuleTaken => (
+                StatusCode::CONFLICT,
+                "scoring_rule_taken",
+                "Le barème de ce tournoi définit déjà cette statistique",
+            ),
+            ApiError::AlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "already_registered",
+                "Ce participant est déjà inscrit à ce tournoi",
+            ),
+            ApiError::TournamentFull => (
+                StatusCode::CONFLICT,
+                "tournament_full",
+                "Ce tournoi a atteint son nombre maximum de participants",
+            ),
+            ApiError::TournamentLocked => (
+                StatusCode::CONFLICT,
+                "tournament_locked",
+                "Le tournoi est en cours ou terminé : cette modification est verrouillée",
+            ),
+            ApiError::RegistrationClosed => (
+                StatusCode::CONFLICT,
+                "registration_closed",
+                "Les inscriptions à ce tournoi ne sont pas ouvertes",
+            ),
+            ApiError::InvalidTransition => (
+                StatusCode::CONFLICT,
+                "invalid_status_transition",
+                "Ce changement de statut n'est pas possible depuis le statut actuel",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
