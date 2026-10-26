@@ -48,6 +48,13 @@ describe('apiRequest', () => {
     expect(new ApiError(400, null)).toBeInstanceOf(Error)
   })
 
+  it('lève ApiError si le statut de succès diffère de celui attendu', async () => {
+    mockFetch(jsonResponse(200, {}), jsonResponse(201, {}))
+
+    await expect(apiRequest('/x', { expectedStatus: 201 })).rejects.toMatchObject({ status: 200 })
+    await expect(apiRequest('/x', { expectedStatus: 201 })).resolves.toEqual({})
+  })
+
   it('lève NetworkError si le serveur est injoignable', async () => {
     mockFetch(new TypeError('Failed to fetch'))
 

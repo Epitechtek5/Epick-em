@@ -1,5 +1,6 @@
 import { screen } from '@testing-library/react'
 
+import { tokenStore } from '@/lib/auth/token-store'
 import { renderApp } from '@/test/render'
 
 describe('App', () => {
@@ -7,6 +8,13 @@ describe('App', () => {
     renderApp('/')
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Connexion' })).toBeInTheDocument()
+  })
+
+  it('renvoie un utilisateur déjà connecté de /login vers la page principale', async () => {
+    tokenStore.set({ accessToken: 'jwt' })
+    renderApp('/login')
+
+    expect(await screen.findByRole('heading', { level: 1, name: /Bonjour/ })).toBeInTheDocument()
   })
 
   it('protège la zone authentifiée', async () => {

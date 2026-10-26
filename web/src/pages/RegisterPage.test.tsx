@@ -108,6 +108,18 @@ describe('RegisterPage', () => {
     expect(screen.getByLabelText('Mot de passe')).toHaveAccessibleDescription(/Trop faible/)
   })
 
+  it('200 (et non 201) : ne prétend pas que le compte est créé', async () => {
+    mockFetch(jsonResponse(200, 'ok'))
+    const user = userEvent.setup()
+    renderApp('/register')
+
+    await fillForm(user)
+    await submit(user)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('erreur inattendue')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   it('affiche une erreur réseau', async () => {
     mockFetch(new TypeError('Failed to fetch'))
     const user = userEvent.setup()

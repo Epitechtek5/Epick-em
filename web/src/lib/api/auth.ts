@@ -6,12 +6,13 @@ export interface Credentials {
   password: string
 }
 
-// POST /register -> 201 (créé), 400 (invalide), 409 (username déjà pris).
+// POST /register -> 201 { id, username } | 400 | 409 (username déjà pris).
 export async function register(credentials: Credentials): Promise<void> {
   await apiRequest('/register', {
     method: 'POST',
     body: credentials,
     skipAuth: true,
+    expectedStatus: 201,
   })
 }
 
@@ -20,8 +21,7 @@ interface LoginResponse {
   refresh_token?: unknown
 }
 
-// TODO(#15) : contrat provisoire. Les endpoints JWT ne sont pas encore livrés ;
-// on suppose POST /login -> { access_token, refresh_token? }. À ajuster ici seulement.
+// POST /login -> 200 { access_token, refresh_token, token_type, expires_in } | 400 | 401.
 export async function login(credentials: Credentials): Promise<AuthTokens> {
   const data = await apiRequest<LoginResponse>('/login', {
     method: 'POST',
@@ -36,4 +36,12 @@ export async function login(credentials: Credentials): Promise<AuthTokens> {
     refreshToken:
       typeof data.refresh_token === 'string' ? data.refresh_token : undefined,
   }
+}
+
+// POST /logout -> 204. Révoque le refresh token côté serveur (idempotent).
+export async function logout(refreshToken: string): Promise<void> {
+  await apiRequest('/logout', {
+    method: 'POST',
+    body: { refresh_token: refreshToken },
+  })
 }

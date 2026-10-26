@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router'
+import { Link, useLocation } from 'react-router'
 
 import { ErrorSummary, type ErrorSummaryItem } from '@/components/form/ErrorSummary'
 import { TextField } from '@/components/form/TextField'
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/card'
 import { useDocumentTitle } from '@/hooks/use-document-title'
 import { ApiError, NetworkError } from '@/lib/api/client'
+import { getErrorMessage, getFieldErrors } from '@/lib/api/errors'
 import { useAuth } from '@/lib/auth/auth-context'
 import {
   validateLogin,
@@ -28,13 +29,11 @@ const FIELD_IDS: Record<LoginField, string> = {
 
 interface LocationState {
   registered?: boolean
-  from?: string
 }
 
 export default function LoginPage() {
   useDocumentTitle('Connexion')
   const { login } = useAuth()
-  const navigate = useNavigate()
   const location = useLocation()
   const state = (location.state ?? {}) as LocationState
   const summaryRef = useRef<HTMLDivElement>(null)
@@ -73,17 +72,19 @@ export default function LoginPage() {
     setErrors({})
     setFormError(null)
     try {
+      // Succès : GuestRoute redirige vers la page visée (ou l'accueil).
       await login(values)
-      navigate(state.from ?? '/app', { replace: true })
     } catch (error) {
-      if (error instanceof ApiError && (error.status === 400 || error.status === 401)) {
+      if (error instanceof ApiError && error.status === 401) {
         fail({}, "Nom d'utilisateur ou mot de passe incorrect.")
-      } else if (
-        error instanceof ApiError &&
-        [404, 405, 501].includes(error.status)
-      ) {
-        // Endpoints JWT pas encore livrés (issue #15).
-        fail({}, "La connexion n'est pas encore disponible. Réessayez plus tard.")
+      } else if (error instanceof ApiError && error.status === 400) {
+        const fieldErrors = getFieldErrors(error.body, ['username', 'password'])
+        fail(
+          fieldErrors,
+          Object.keys(fieldErrors).length > 0
+            ? null
+            : (getErrorMessage(error.body) ?? 'Les informations saisies sont refusées par le serveur.'),
+        )
       } else if (error instanceof NetworkError) {
         fail({}, 'Impossible de joindre le serveur. Vérifiez votre connexion et réessayez.')
       } else {
