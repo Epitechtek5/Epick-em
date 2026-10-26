@@ -3,7 +3,8 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, MatchType, MemberImport, ParticipantImport, ParticipantInput,
+    AuthStore, Bracket, GameInput, GameUpdate, MatchFinish, MatchInput, MatchResult, MatchScore,
+    MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
     ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
     ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
     StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
@@ -2191,4 +2192,261 @@ async fn match_tables_enforce_their_constraints() {
     .await
     .unwrap();
     assert_eq!(left, 0);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn matches_are_stored_scored_and_finished_atomically() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: StepDefinition {
+                format: StepFormat::SingleElim,
+                match_type: MatchType::Duel,
+                ..step_definition(1, 1, 4, 1)
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![players.clone()],
+        })
+        .await
+        .unwrap();
+    let group = store.list_step_groups(step.id).await.unwrap()[0].id;
+    let input = |round: i32, next: Option<Uuid>, participants: Vec<Uuid>| MatchInput {
+        game_id,
+        step_id: step.id,
+        group_id: group,
+        round: Some(round),
+        bracket: None,
+        next_match_id: next,
+        scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+        participants,
+    };
+
+    let last = store.create_match(input(2, None, vec![])).await.unwrap();
+    let semi = store
+        .create_match(input(1, Some(last.id), vec![players[0], players[1]]))
+        .await
+        .unwrap();
+    assert_eq!(semi.status, MatchStatus::Scheduled);
+    assert_eq!(semi.step_id, Some(step.id));
+    assert_eq!(
+        semi.scheduled_at.as_deref(),
+        Some("2026-11-14T18:00:00.000000Z")
+    );
+    let listed = store.list_matches(step.id, None, None).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|m| m.round).collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
+    assert_eq!(
+        store
+            .list_matches(step.id, Some(group), Some(MatchStatus::Finished))
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(store.find_match(semi.id).await.unwrap(), Some(semi.clone()));
+
+    // Modification partielle : `Some(None)` efface, les participants gardent leurs résultats.
+    let updated = store
+        .update_match(
+            semi.id,
+            MatchUpdate {
+                round: Some(None),
+                bracket: Some(Some(Bracket::Winners)),
+                scheduled_at: Some(None),
+                participants: Some(vec![players[0], players[2]]),
+                ..MatchUpdate::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (updated.round, updated.bracket, updated.scheduled_at),
+        (None, Some(Bracket::Winners), None)
+    );
+    assert_eq!(updated.next_match_id, Some(last.id));
+    store
+        .update_match(
+            semi.id,
+            MatchUpdate {
+                round: Some(Some(1)),
+                participants: Some(vec![players[0], players[1]]),
+                ..MatchUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    let in_semi: Vec<Uuid> = members
+        .iter()
+        .filter(|p| p.match_id == semi.id)
+        .map(|p| p.participant_id)
+        .collect();
+    assert_eq!(in_semi.len(), 2);
+    assert!(in_semi.contains(&players[0]) && in_semi.contains(&players[1]));
+    assert!(
+        store
+            .update_match(Uuid::new_v4(), MatchUpdate::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Résultats : statistiques jsonb, points décimaux, rang et résultat.
+    let score = |participant_id: Uuid, kills: u32, points: f64, rank: i32, result| MatchScore {
+        participant_id,
+        stats: serde_json::json!({ "kills": kills }),
+        points,
+        rank: Some(rank),
+        result: Some(result),
+    };
+    let scores = vec![
+        score(players[0], 3, 4.5, 1, MatchResult::Win),
+        score(players[1], 1, 1.5, 2, MatchResult::Loss),
+    ];
+    assert!(
+        store
+            .save_match_scores(semi.id, scores.clone())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .save_match_scores(Uuid::new_v4(), scores.clone())
+            .await
+            .unwrap()
+    );
+    let saved = store.list_step_match_participants(step.id).await.unwrap();
+    let winner = saved
+        .iter()
+        .find(|p| p.participant_id == players[0] && p.match_id == semi.id)
+        .unwrap();
+    assert_eq!(winner.stats, serde_json::json!({ "kills": 3 }));
+    assert_eq!((winner.points, winner.rank), (4.5, Some(1)));
+    assert_eq!(winner.result, Some(MatchResult::Win));
+
+    let ongoing = store
+        .set_match_status(semi.id, MatchStatus::Ongoing)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ongoing.status, MatchStatus::Ongoing);
+    assert!(ongoing.started_at.is_some());
+    assert!(
+        store
+            .set_match_status(Uuid::new_v4(), MatchStatus::Ongoing)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Clôture : résultats, vainqueur dans le match suivant et points de l'étape, ensemble.
+    let finished = store
+        .finish_match(MatchFinish {
+            match_id: semi.id,
+            scores,
+            advance: Some((last.id, players[0])),
+            step_points: vec![(players[0], 4.5), (players[1], 1.5)],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.status, MatchStatus::Finished);
+    assert!(finished.ended_at.is_some());
+    let in_last: Vec<Uuid> = store
+        .list_step_match_participants(step.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.match_id == last.id)
+        .map(|p| p.participant_id)
+        .collect();
+    assert_eq!(in_last, [players[0]]);
+    let totals: Vec<f64> = store
+        .list_step_participants(step.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.participant_id == players[0] || m.participant_id == players[1])
+        .map(|m| m.points)
+        .collect();
+    assert_eq!(totals.iter().sum::<f64>(), 6.0);
+    for attempt in [
+        store
+            .finish_match(MatchFinish {
+                match_id: semi.id,
+                scores: vec![],
+                advance: None,
+                step_points: vec![],
+            })
+            .await
+            .map(|_| ()),
+        store
+            .set_match_status(semi.id, MatchStatus::Cancelled)
+            .await
+            .map(|_| ()),
+        store.save_match_scores(semi.id, vec![]).await.map(|_| ()),
+    ] {
+        assert!(matches!(attempt, Err(StoreError::MatchState)));
+    }
+
+    // Un match annulé garde sa date de fin ; supprimer le suivant détache le précédent.
+    let cancelled = store
+        .set_match_status(last.id, MatchStatus::Cancelled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cancelled.ended_at.is_some());
+    assert!(store.delete_match(last.id).await.unwrap());
+    assert!(!store.delete_match(last.id).await.unwrap());
+    assert_eq!(
+        store
+            .find_match(semi.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .next_match_id,
+        None
+    );
+
+    // Supprimer l'étape emporte ses matchs et leurs participants.
+    assert!(store.delete_step(step.id).await.unwrap());
+    assert_eq!(store.find_match(semi.id).await.unwrap(), None);
+    assert!(
+        store
+            .list_step_match_participants(step.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

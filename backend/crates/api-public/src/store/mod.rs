@@ -13,7 +13,10 @@ mod teams;
 mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
-pub use self::matches::{Bracket, Match, MatchParticipant, MatchResult, MatchStatus};
+pub use self::matches::{
+    Bracket, Match, MatchFinish, MatchInput, MatchParticipant, MatchResult, MatchScore,
+    MatchStatus, MatchUpdate,
+};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
@@ -139,6 +142,8 @@ pub enum StoreError {
     StepPositionTaken,
     /// L'étape n'est pas dans l'état attendu pour cette opération.
     StepState,
+    /// Le match n'est pas dans l'état attendu pour cette opération.
+    MatchState,
     Other(String),
 }
 
@@ -163,6 +168,7 @@ impl fmt::Display for StoreError {
             StoreError::TournamentFull => f.write_str("tournoi complet"),
             StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
+            StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -551,6 +557,60 @@ pub trait AuthStore: Send + Sync {
         participant_id: Uuid,
         points: f64,
     ) -> Result<bool, StoreError>;
+
+    /// Matchs de l'étape par groupe, manche puis création, éventuellement d'un seul groupe ou
+    /// d'un seul statut.
+    async fn list_matches(
+        &self,
+        step_id: Uuid,
+        group_id: Option<Uuid>,
+        status: Option<MatchStatus>,
+    ) -> Result<Vec<Match>, StoreError>;
+
+    async fn find_match(&self, id: Uuid) -> Result<Option<Match>, StoreError>;
+
+    /// Participants des matchs de l'étape, par match puis par inscrit.
+    async fn list_step_match_participants(
+        &self,
+        step_id: Uuid,
+    ) -> Result<Vec<MatchParticipant>, StoreError>;
+
+    /// Crée le match `scheduled` et ses participants (sans statistiques) en une seule opération.
+    /// L'étape, le groupe, le match suivant et les inscrits existent et sont cohérents.
+    async fn create_match(&self, input: MatchInput) -> Result<Match, StoreError>;
+
+    /// Applique `update` ; `None` si le match n'existe pas.
+    async fn update_match(
+        &self,
+        id: Uuid,
+        update: MatchUpdate,
+    ) -> Result<Option<Match>, StoreError>;
+
+    /// Passe le match en `ongoing` (`started_at` prend l'instant présent s'il est vide) ou
+    /// `cancelled` (`ended_at` prend l'instant présent) ; `None` s'il n'existe pas,
+    /// [`StoreError::MatchState`] s'il est `finished` ou `cancelled`.
+    async fn set_match_status(
+        &self,
+        id: Uuid,
+        status: MatchStatus,
+    ) -> Result<Option<Match>, StoreError>;
+
+    /// Supprime le match et ses participants ; `false` s'il n'existait pas.
+    async fn delete_match(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Enregistre les statistiques, les points, le rang et le résultat de participants du match
+    /// `scheduled` ou `ongoing` ; `false` si le match n'existe pas, [`StoreError::MatchState`]
+    /// s'il est `finished` ou `cancelled`. Les participants sont ceux du match.
+    async fn save_match_scores(
+        &self,
+        match_id: Uuid,
+        scores: Vec<MatchScore>,
+    ) -> Result<bool, StoreError>;
+
+    /// Termine le match en une seule opération (voir [`MatchFinish`]) ; `None` s'il n'existe pas,
+    /// [`StoreError::MatchState`] s'il est déjà `finished` ou `cancelled`.
+    async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError>;
+
     /// Crée ou met à jour (par jeu et nom, sans tenir compte de la casse) les tournois donnés,
     /// en une seule opération : en cas d'erreur, aucun n'est modifié. Le barème d'un tournoi
     /// existant est **remplacé** ; ses inscrits, ses équipes, ses étapes et ses matchs sont

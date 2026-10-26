@@ -72,6 +72,53 @@ pub struct MatchParticipant {
     pub result: Option<MatchResult>,
 }
 
+/// Match à créer dans un groupe d'étape, avec ses participants éventuels (en élimination, les
+/// matchs suivants se remplissent par propagation du vainqueur).
+#[derive(Debug, Clone)]
+pub struct MatchInput {
+    pub game_id: Uuid,
+    pub step_id: Uuid,
+    pub group_id: Uuid,
+    pub round: Option<i32>,
+    pub bracket: Option<Bracket>,
+    pub next_match_id: Option<Uuid>,
+    pub scheduled_at: Option<String>,
+    pub participants: Vec<Uuid>,
+}
+
+/// Modification partielle d'un match : seuls les champs renseignés changent ; `Some(None)`
+/// efface une valeur facultative. `participants` remplace la liste (les statistiques des
+/// participants conservés sont gardées).
+#[derive(Debug, Default, Clone)]
+pub struct MatchUpdate {
+    pub round: Option<Option<i32>>,
+    pub bracket: Option<Option<Bracket>>,
+    pub next_match_id: Option<Option<Uuid>>,
+    pub scheduled_at: Option<Option<String>>,
+    pub participants: Option<Vec<Uuid>>,
+}
+
+/// Résultat d'un participant : ses statistiques et ce qui en est déduit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchScore {
+    pub participant_id: Uuid,
+    pub stats: serde_json::Value,
+    pub points: f64,
+    pub rank: Option<i32>,
+    pub result: Option<MatchResult>,
+}
+
+/// Clôture d'un match, en une seule opération : les résultats de chaque participant, le
+/// vainqueur placé dans le match suivant (`advance` : match, inscrit) et le total de points de
+/// chaque participant dans l'étape.
+#[derive(Debug, Clone)]
+pub struct MatchFinish {
+    pub match_id: Uuid,
+    pub scores: Vec<MatchScore>,
+    pub advance: Option<(Uuid, Uuid)>,
+    pub step_points: Vec<(Uuid, f64)>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
