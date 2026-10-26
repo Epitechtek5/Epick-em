@@ -21,6 +21,11 @@ fn api_routes() -> OpenApiRouter<AppState> {
         .merge(crate::auth::routes())
 }
 
+/// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    api_routes().split_for_parts().1
+}
+
 /// Routeur et spécification, séparés pour pouvoir inspecter la spécification en test.
 pub fn router_with_spec(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
     let (router, spec) = api_routes().split_for_parts();

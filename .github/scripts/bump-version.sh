@@ -9,3 +9,6 @@ sed -i "0,/^version = .*/s//version = \"${version}\"/" "$root/backend/Cargo.toml
 (cd "$root/backend" && cargo update --workspace)
 
 sed -i -E "s/^(version|appVersion): .*/\1: \"${version}\"/" "$root/deploy/helm/epickem/Chart.yaml"
+
+# Spec OpenAPI (sa version suit celle du workspace) et clients TS qui en dérivent
+"$root/.github/scripts/generate-openapi.sh"

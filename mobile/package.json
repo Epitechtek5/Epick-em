@@ -23,6 +23,7 @@
     "eslint-config-expo": "^58.0.4",
     "jest": "~30.5.2",
     "jest-expo": "~58.0.12",
+    "openapi-typescript": "^7.13.0",
     "prettier": "^3.9.10",
     "typescript": "~6.0.3"
   },
@@ -41,7 +42,9 @@
     "build": "expo export --platform android --platform ios",
     "build:android": "node scripts/build-native.mjs android",
     "build:ios:simulator": "node scripts/build-native.mjs ios",
-    "validate": "npm run lint && npm run format:check && npm run typecheck && npm test -- --watch=false && npm run config:check && npm run build"
+    "validate": "npm run lint && npm run format:check && npm run typecheck && npm test -- --watch=false && npm run config:check && npm run build",
+    "openapi:generate": "node ../openapi/fetch.mjs",
+    "openapi:build": "openapi-typescript ../openapi/openapi.json -o src/api/generated/schema.ts"
   },
   "private": true,
   "overrides": {
@@ -53,6 +56,9 @@
     },
     "@istanbuljs/load-nyc-config@1.1.0": {
       "js-yaml": "4.3.2"
+    },
+    "openapi-typescript": {
+      "typescript": "$typescript"
     }
   },
   "engines": {
