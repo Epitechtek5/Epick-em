@@ -30,12 +30,13 @@ export async function apiRequest<T>(
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
 
+    // L'API répond `{ error, message }` : `error` est un code stable, `message` son libellé.
     const message =
       typeof body === 'object' &&
       body !== null &&
-      'error' in body &&
-      typeof body.error === 'string'
-        ? body.error
+      'message' in body &&
+      typeof body.message === 'string'
+        ? body.message
         : `HTTP error ${response.status}`;
 
     throw new ApiError(response.status, message);

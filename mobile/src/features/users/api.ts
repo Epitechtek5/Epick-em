@@ -44,7 +44,7 @@ export async function listUsers(
   });
 }
 
-export function getUser(token: string, id: number): Promise<User> {
+export function getUser(token: string, id: string): Promise<User> {
   return apiRequest<User>(`/user/${id}`, {
     headers: authenticatedHeaders(token),
   });
@@ -70,7 +70,7 @@ export function deleteMe(token: string): Promise<void> {
 
 export function updateUser(
   token: string,
-  id: number,
+  id: string,
   changes: UpdateUserRequest,
 ): Promise<User> {
   return apiRequest<User>(`/user/${id}/update`, {
@@ -80,7 +80,7 @@ export function updateUser(
   });
 }
 
-export function deleteUser(token: string, id: number): Promise<void> {
+export function deleteUser(token: string, id: string): Promise<void> {
   return apiRequest<void>(`/user/${id}/delete`, {
     method: 'DELETE',
     headers: authenticatedHeaders(token),

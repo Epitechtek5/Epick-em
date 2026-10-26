@@ -8,6 +8,7 @@ import {
 } from '../src/features/users/api';
 
 const TOKEN = 'test-token';
+const UID = '22222222-2222-4222-8222-222222222222';
 const API_URL = 'http://10.0.2.2:8080';
 
 function response(status: number, body?: unknown): Response {
@@ -52,14 +53,14 @@ describe('User API', () => {
   });
 
   it('reads one user', async () => {
-    const user = { id: 2, username: 'Player2', role: 'user' };
+    const user = { id: UID, username: 'Player2', role: 'user' };
     jest.mocked(fetch).mockResolvedValue(response(200, user));
 
-    await expect(getUser(TOKEN, 2)).resolves.toEqual(user);
+    await expect(getUser(TOKEN, UID)).resolves.toEqual(user);
   });
 
   it('updates the current account', async () => {
-    const user = { id: 2, username: 'Updated', role: 'user' };
+    const user = { id: UID, username: 'Updated', role: 'user' };
     jest.mocked(fetch).mockResolvedValue(response(200, user));
 
     await updateMe(TOKEN, { username: 'Updated' });
@@ -85,13 +86,13 @@ describe('User API', () => {
     jest
       .mocked(fetch)
       .mockResolvedValue(
-        response(200, { id: 2, username: 'Player2', role: 'admin' }),
+        response(200, { id: UID, username: 'Player2', role: 'admin' }),
       );
 
-    await updateUser(TOKEN, 2, { role: 'admin' });
+    await updateUser(TOKEN, UID, { role: 'admin' });
 
     expect(fetch).toHaveBeenCalledWith(
-      `${API_URL}/user/2/update`,
+      `${API_URL}/user/${UID}/update`,
       expect.objectContaining({
         method: 'PATCH',
         body: JSON.stringify({ role: 'admin' }),
@@ -102,7 +103,7 @@ describe('User API', () => {
   it('deletes a user with a 204 response', async () => {
     jest.mocked(fetch).mockResolvedValue(response(204));
 
-    await expect(deleteUser(TOKEN, 2)).resolves.toBeUndefined();
+    await expect(deleteUser(TOKEN, UID)).resolves.toBeUndefined();
   });
 
   it('rejects requests without authentication', async () => {
@@ -114,11 +115,14 @@ describe('User API', () => {
   it.each([400, 401, 403, 404, 409])(
     'preserves HTTP status %i',
     async (status) => {
-      jest
-        .mocked(fetch)
-        .mockResolvedValue(response(status, { error: 'Backend error' }));
+      jest.mocked(fetch).mockResolvedValue(
+        response(status, {
+          error: 'invalid_request',
+          message: 'Backend error',
+        }),
+      );
 
-      await expect(getUser(TOKEN, 2)).rejects.toMatchObject({
+      await expect(getUser(TOKEN, UID)).rejects.toMatchObject({
         status,
         message: 'Backend error',
       });

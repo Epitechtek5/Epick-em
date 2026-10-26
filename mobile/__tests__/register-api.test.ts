@@ -19,9 +19,8 @@ describe('Registration API', () => {
 
   it('sends registration data and returns the created user', async () => {
     const user = {
-      id: 1,
+      id: '11111111-1111-4111-8111-111111111111',
       username: 'TestMobile',
-      role: 'user',
     };
 
     const fetchMock = jest.fn().mockResolvedValue({
@@ -54,7 +53,10 @@ describe('Registration API', () => {
     globalThis.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 409,
-      json: async () => ({ error: 'Username already exists' }),
+      json: async () => ({
+        error: 'username_taken',
+        message: 'Username already exists',
+      }),
     }) as typeof fetch;
 
     await expect(

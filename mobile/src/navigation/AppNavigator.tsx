@@ -8,8 +8,8 @@ import AdminUserScreen from '@/screens/AdminUserScreen';
 
 export type AppStackParamList = {
   MainTabs: undefined;
-  UserDetails: { id: number };
-  AdminUser: { id: number };
+  UserDetails: { id: string };
+  AdminUser: { id: string };
 };
 
 type AppTabParamList = {
