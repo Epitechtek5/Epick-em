@@ -6,3 +6,5 @@ databaseChangeLog:
       file: changelog/0002-create-refresh-tokens.yaml
   - include:
       file: changelog/0003-add-user-role.yaml
+  - include:
+      file: changelog/0004-allow-watcher-role.yaml

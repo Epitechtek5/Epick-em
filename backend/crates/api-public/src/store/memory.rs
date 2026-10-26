@@ -1,6 +1,6 @@
 //! Implémentation en mémoire de [`AuthStore`], pour les tests.
 
-use super::{AuthStore, Role, StoreError, UserRecord};
+use super::{AuthStore, Role, StoreError, UserProfile, UserRecord, UserUpdate};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -90,6 +90,63 @@ impl AuthStore for MemoryStore {
             .iter()
             .find(|user| user.id == id)
             .cloned())
+    }
+
+    async fn find_profile(&self, id: Uuid) -> Result<Option<UserProfile>, StoreError> {
+        Ok(self
+            .state()
+            .users
+            .iter()
+            .find(|user| user.id == id)
+            .map(UserProfile::from))
+    }
+
+    async fn list_profiles(&self, limit: i64, offset: i64) -> Result<Vec<UserProfile>, StoreError> {
+        Ok(self
+            .state()
+            .users
+            .iter()
+            .skip(usize::try_from(offset).unwrap_or(0))
+            .take(usize::try_from(limit).unwrap_or(0))
+            .map(UserProfile::from)
+            .collect())
+    }
+
+    async fn update_user(
+        &self,
+        id: Uuid,
+        update: UserUpdate,
+    ) -> Result<Option<UserProfile>, StoreError> {
+        let mut state = self.state();
+        if let Some(username) = &update.username
+            && state
+                .users
+                .iter()
+                .any(|u| u.id != id && u.username.eq_ignore_ascii_case(username))
+        {
+            return Err(StoreError::UsernameTaken);
+        }
+        let Some(user) = state.users.iter_mut().find(|user| user.id == id) else {
+            return Ok(None);
+        };
+        if let Some(username) = update.username {
+            user.username = username;
+        }
+        if let Some(password_hash) = update.password_hash {
+            user.password_hash = password_hash;
+        }
+        if let Some(role) = update.role {
+            user.role = role;
+        }
+        Ok(Some(UserProfile::from(&*user)))
+    }
+
+    async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let before = state.users.len();
+        state.users.retain(|user| user.id != id);
+        state.tokens.retain(|_, token| token.user_id != id);
+        Ok(state.users.len() != before)
     }
 
     async fn insert_refresh_token(

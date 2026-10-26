@@ -1,11 +1,16 @@
-//! Assemblage du routeur : routes des modules, garde d'authentification, Swagger UI.
+//! Assemblage de l'application : routes des modules, garde d'authentification, Swagger UI.
 
 use crate::auth::AppState;
+use crate::error::ApiError;
+use crate::guard::require_auth;
 use crate::openapi::ApiDoc;
-use axum::Router;
+use actix_web::body::MessageBody;
+use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
+use actix_web::middleware::from_fn;
+use actix_web::{App, Error, get, web};
 use utoipa::OpenApi;
-use utoipa_axum::router::OpenApiRouter;
-use utoipa_axum::routes;
+use utoipa_actix_web::AppExt;
+use utoipa_actix_web::service_config::ServiceConfig;
 use utoipa_swagger_ui::{Config, SwaggerUi};
 
 /// Chemin de l'interface Swagger UI.
@@ -13,40 +18,55 @@ pub const DOCS_PATH: &str = "/docs";
 /// Chemin de la spécification OpenAPI (JSON).
 pub const SPEC_PATH: &str = "/openapi.json";
 
-/// Toutes les routes documentées ; y fusionner les routes des futurs modules.
-fn api_routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .routes(routes!(health))
-        .routes(routes!(hello))
-        .merge(crate::auth::routes())
+/// Toutes les routes documentées ; y ajouter les routes des futurs modules.
+fn api_routes(cfg: &mut ServiceConfig) {
+    cfg.service(health)
+        .service(hello)
+        .configure(crate::auth::routes)
+        .configure(crate::users::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    api_routes().split_for_parts().1
+    App::new()
+        .into_utoipa_app()
+        .openapi(ApiDoc::openapi())
+        .configure(api_routes)
+        .split_for_parts()
+        .1
 }
 
-/// Routeur et spécification, séparés pour pouvoir inspecter la spécification en test.
-pub fn router_with_spec(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
-    let (router, spec) = api_routes().split_for_parts();
-    let router = router
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::guard::require_auth,
-        ))
-        .with_state(state)
-        // Fusionné après la garde : la documentation est publique.
+/// L'application complète, à servir avec `HttpServer::new(move || app(state.clone()))`.
+pub fn app(
+    state: AppState,
+) -> App<
+    impl ServiceFactory<
+        ServiceRequest,
+        Config = (),
+        Response = ServiceResponse<impl MessageBody>,
+        Error = Error,
+        InitError = (),
+    >,
+> {
+    let (app, spec) = App::new()
+        .app_data(web::Data::new(state))
+        // Corps JSON, identifiant ou paramètres invalides : même format d'erreur que les handlers.
+        .app_data(web::JsonConfig::default().error_handler(|err, _| ApiError::from(err).into()))
+        .app_data(web::PathConfig::default().error_handler(|_, _| ApiError::NotFound.into()))
+        .app_data(
+            web::QueryConfig::default()
+                .error_handler(|_, _| ApiError::Validation(Vec::new()).into()),
+        )
+        .into_utoipa_app()
+        .openapi(ApiDoc::openapi())
+        .configure(api_routes)
+        .split_for_parts();
+    app.wrap(from_fn(require_auth)).service(
         // URL relative à la page : fonctionne aussi sous `/api/docs/` derrière nginx ou Vite.
-        .merge(
-            SwaggerUi::new(DOCS_PATH)
-                .url(SPEC_PATH, spec.clone())
-                .config(Config::from("../openapi.json")),
-        );
-    (router, spec)
-}
-
-pub fn router(state: AppState) -> Router {
-    router_with_spec(state).0
+        SwaggerUi::new(format!("{DOCS_PATH}/{{_:.*}}"))
+            .url(SPEC_PATH, spec)
+            .config(Config::from("../openapi.json")),
+    )
 }
 
 /// Vérifie que le service répond.
@@ -56,6 +76,7 @@ pub fn router(state: AppState) -> Router {
     tag = "system",
     responses((status = 200, description = "Service opérationnel", body = String, example = "ok")),
 )]
+#[get("/health")]
 async fn health() -> &'static str {
     "ok"
 }
@@ -66,6 +87,7 @@ async fn health() -> &'static str {
     tag = "system",
     responses((status = 200, description = "Message de bienvenue", body = String, example = "Hello, world!")),
 )]
+#[get("/hello")]
 async fn hello() -> &'static str {
     "Hello, world!"
 }
@@ -73,26 +95,12 @@ async fn hello() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AuthConfig;
     use crate::guard::{RoutePolicy, route_policy};
-    use crate::store::MemoryStore;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    fn spec() -> utoipa::openapi::OpenApi {
-        let config = AuthConfig {
-            jwt_secret: "s".repeat(32),
-            access_token_ttl: Duration::from_secs(60),
-            refresh_token_ttl: Duration::from_secs(60),
-        };
-        let state = AppState::new(Arc::new(MemoryStore::new()), config).unwrap();
-        router_with_spec(state).1
-    }
 
     /// Chaque opération déclare `security` si et seulement si la garde exige un jeton.
     #[test]
     fn spec_matches_route_policy() {
-        let spec = spec();
+        let spec = openapi();
         assert!(!spec.paths.paths.is_empty());
         for (path, item) in &spec.paths.paths {
             let operations = [

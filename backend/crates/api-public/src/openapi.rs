@@ -3,8 +3,9 @@
 //! Pour ajouter un endpoint :
 //! 1. annoter le handler avec `#[utoipa::path(...)]` (méthode, chemin, tag, réponses) ;
 //! 2. les types de requête/réponse dérivent `utoipa::ToSchema` ;
-//! 3. l'enregistrer avec `.routes(routes!(handler))` dans le `routes()` de son module
-//!    (nouveau module : le fusionner dans `router::router`).
+//! 3. l'enregistrer avec `cfg.service(handler)` dans le `routes()` de son module, qui doit
+//!    porter aussi l'attribut actix (`#[get("/chemin")]`, …) ; un nouveau module est ajouté
+//!    à `router::api_routes`.
 //!
 //! Le chemin et le tag sont déduits de l'annotation : rien d'autre à déclarer ici. Un endpoint
 //! protégé ajoute `security(("bearer" = []))` ; le test `spec_matches_route_policy` vérifie
@@ -22,6 +23,7 @@ use utoipa::{Modify, OpenApi};
     servers((url = "/api", description = "Via nginx / proxy Vite")),
     tags(
         (name = "auth", description = "Inscription, connexion et jetons"),
+        (name = "users", description = "Consultation et gestion des comptes"),
         (name = "system", description = "Santé du service"),
     ),
     modifiers(&BearerAuth),

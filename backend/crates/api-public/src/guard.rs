@@ -3,10 +3,11 @@
 
 use crate::auth::{AppState, decode_access_token, decode_access_token_ignoring_expiry};
 use crate::error::ApiError;
-use axum::extract::{Request, State};
-use axum::http::{HeaderMap, header};
-use axum::middleware::Next;
-use axum::response::Response;
+use actix_web::body::BoxBody;
+use actix_web::dev::{ServiceRequest, ServiceResponse};
+use actix_web::http::header::{self, HeaderMap};
+use actix_web::middleware::Next;
+use actix_web::{Error, HttpMessage, ResponseError, web};
 
 /// Exigence d'authentification d'une route.
 #[derive(Debug, PartialEq, Eq)]
@@ -20,9 +21,12 @@ pub enum RoutePolicy {
 }
 
 /// Par défaut une route est protégée : une nouvelle route doit être listée ici pour être publique.
+/// La documentation OpenAPI (`/docs`, `/openapi.json`) est publique.
 pub fn route_policy(path: &str) -> RoutePolicy {
     match path {
-        "/register" | "/login" | "/hello" | "/health" => RoutePolicy::Public,
+        "/register" | "/login" | "/hello" | "/health" | "/openapi.json" => RoutePolicy::Public,
+        "/docs" => RoutePolicy::Public,
+        _ if path.starts_with("/docs/") => RoutePolicy::Public,
         "/refresh" => RoutePolicy::SignatureOnly,
         _ => RoutePolicy::Authenticated,
     }
@@ -30,23 +34,29 @@ pub fn route_policy(path: &str) -> RoutePolicy {
 
 /// Place les [`Claims`](crate::auth::Claims) du jeton dans les extensions de la requête.
 pub async fn require_auth(
-    State(state): State<AppState>,
-    mut request: Request,
-    next: Next,
-) -> Result<Response, ApiError> {
-    let policy = route_policy(request.uri().path());
-    if policy == RoutePolicy::Public {
-        return Ok(next.run(request).await);
+    req: ServiceRequest,
+    next: Next<BoxBody>,
+) -> Result<ServiceResponse<BoxBody>, Error> {
+    let policy = route_policy(req.path());
+    // Un chemin inconnu reste un 404, que l'appelant soit authentifié ou non.
+    if policy == RoutePolicy::Public || !req.resource_map().has_resource(req.path()) {
+        return next.call(req).await;
     }
-    let token = bearer_token(request.headers()).ok_or(ApiError::Unauthorized)?;
+    let Some(state) = req.app_data::<web::Data<AppState>>() else {
+        return Ok(req.into_response(ApiError::internal("AppState absent").error_response()));
+    };
     let secret = &state.config.jwt_secret;
-    let claims = match policy {
+    let claims = bearer_token(req.headers()).and_then(|token| match policy {
         RoutePolicy::SignatureOnly => decode_access_token_ignoring_expiry(token, secret),
         _ => decode_access_token(token, secret),
+    });
+    match claims {
+        Some(claims) => {
+            req.extensions_mut().insert(claims);
+            next.call(req).await
+        }
+        None => Ok(req.into_response(ApiError::Unauthorized.error_response())),
     }
-    .ok_or(ApiError::Unauthorized)?;
-    request.extensions_mut().insert(claims);
-    Ok(next.run(request).await)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
@@ -61,12 +71,23 @@ mod tests {
 
     #[test]
     fn policies() {
-        for path in ["/register", "/login", "/hello", "/health"] {
+        for path in [
+            "/register",
+            "/login",
+            "/hello",
+            "/health",
+            "/openapi.json",
+            "/docs",
+            "/docs/",
+            "/docs/swagger-ui.css",
+        ] {
             assert_eq!(route_policy(path), RoutePolicy::Public, "{path}");
         }
         assert_eq!(route_policy("/refresh"), RoutePolicy::SignatureOnly);
         assert_eq!(route_policy("/logout"), RoutePolicy::Authenticated);
+        assert_eq!(route_policy("/users"), RoutePolicy::Authenticated);
         assert_eq!(route_policy("/autre"), RoutePolicy::Authenticated);
+        assert_eq!(route_policy("/documents"), RoutePolicy::Authenticated);
     }
 
     #[test]
