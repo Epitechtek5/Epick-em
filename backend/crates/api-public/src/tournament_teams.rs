@@ -5,13 +5,14 @@
 //! l'autre. Seul le propriétaire de l'équipe de tournoi peut la modifier, la supprimer ou gérer
 //! ses membres.
 //!
-//! La table des tournois (#62) n'existe pas encore : `tournament_id` n'est pas vérifié, et la
-//! règle « le jeu de l'équipe globale est celui du tournoi » s'ajoutera avec elle.
+//! Le tournoi doit exister, être en préparation ou en inscription (`draft` ou `registration`),
+//! et l'équipe globale copiée doit être du jeu du tournoi.
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
 use crate::store::{
-    StoreError, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput, TournamentTeamMember,
+    StoreError, TeamRole, TeamUpdate, Tournament, TournamentStatus, TournamentTeam,
+    TournamentTeamInput, TournamentTeamMember,
 };
 use crate::teams::{
     AddMemberRequest, Pagination, UpdateMemberRequest, owner_is_fixed, require_assignable,
@@ -78,6 +79,7 @@ struct UpdateTournamentTeamRequest {
     responses(
         (status = 200, description = "Équipes, par ordre alphabétique", body = Vec<TournamentTeam>),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 404, description = "Tournoi introuvable", body = ErrorResponse),
     ),
 )]
 #[get("/tournaments/{tournament_id}/teams")]
@@ -87,9 +89,11 @@ async fn list_tournament_teams(
     page: web::Query<Pagination>,
 ) -> Result<HttpResponse, ApiError> {
     let (limit, offset) = page.bounds();
+    let tournament_id = tournament_id.into_inner();
+    find_tournament(&state, tournament_id).await?;
     let teams = state
         .store
-        .list_tournament_teams(tournament_id.into_inner(), limit, offset)
+        .list_tournament_teams(tournament_id, limit, offset)
         .await
         .map_err(ApiError::internal)?;
     Ok(HttpResponse::Ok().json(teams))
@@ -113,7 +117,8 @@ async fn list_tournament_teams(
         (status = 400, description = "Requête invalide ou équipe globale introuvable", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé au propriétaire de l'équipe globale", body = ErrorResponse),
-        (status = 409, description = "Équipe déjà inscrite ou joueur déjà dans une équipe du tournoi", body = ErrorResponse),
+        (status = 404, description = "Tournoi introuvable", body = ErrorResponse),
+        (status = 409, description = "Équipe déjà inscrite, joueur déjà dans une équipe du tournoi, ou tournoi en cours ou terminé", body = ErrorResponse),
     ),
 )]
 #[post("/tournaments/{tournament_id}/teams")]
@@ -123,7 +128,14 @@ async fn create_tournament_team(
     tournament_id: web::Path<Uuid>,
     body: web::Json<CreateTournamentTeamRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    let tournament_id = tournament_id.into_inner();
+    let tournament = find_tournament(&state, tournament_id.into_inner()).await?;
+    if !matches!(
+        tournament.status,
+        TournamentStatus::Draft | TournamentStatus::Registration
+    ) {
+        return Err(ApiError::TournamentLocked);
+    }
+    let tournament_id = tournament.id;
     let CreateTournamentTeamRequest {
         team_id,
         member_ids,
@@ -141,7 +153,7 @@ async fn create_tournament_team(
                         .to_string(),
                 )]));
             }
-            copy_of_team(&state, &claims, tournament_id, team_id, member_ids).await?
+            copy_of_team(&state, &claims, &tournament, team_id, member_ids).await?
         }
         None => {
             if member_ids.is_some() {
@@ -436,7 +448,7 @@ async fn find(state: &AppState, id: Uuid) -> Result<TournamentTeam, ApiError> {
 async fn copy_of_team(
     state: &AppState,
     claims: &Claims,
-    tournament_id: Uuid,
+    tournament: &Tournament,
     team_id: Uuid,
     member_ids: Option<Vec<Uuid>>,
 ) -> Result<TournamentTeamInput, ApiError> {
@@ -447,6 +459,12 @@ async fn copy_of_team(
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::Validation(vec![("team_id", "Équipe introuvable.".into())]))?;
     require_owner(claims, team.owner_id)?;
+    if team.game_id != tournament.game_id {
+        return Err(ApiError::Validation(vec![(
+            "team_id",
+            "Cette équipe n'est pas du jeu du tournoi.".to_string(),
+        )]));
+    }
     let active: Vec<(Uuid, TeamRole)> = state
         .store
         .list_team_members(team_id)
@@ -477,7 +495,7 @@ async fn copy_of_team(
         }
     };
     Ok(TournamentTeamInput {
-        tournament_id,
+        tournament_id: tournament.id,
         team_id: Some(team.id),
         name: team.name,
         tag: team.tag,
@@ -493,4 +511,13 @@ fn store_error(err: StoreError) -> ApiError {
         StoreError::PlayerAlreadyRegistered => ApiError::PlayerAlreadyRegistered,
         other => ApiError::internal(other),
     }
+}
+
+async fn find_tournament(state: &AppState, id: Uuid) -> Result<Tournament, ApiError> {
+    state
+        .store
+        .find_tournament(id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or(ApiError::NotFound)
 }

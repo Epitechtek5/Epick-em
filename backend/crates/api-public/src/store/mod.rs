@@ -14,17 +14,20 @@ pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
+pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
     MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
     TournamentTeamInput, TournamentTeamMember,
 };
 pub use self::tournaments::{
-    ParticipantStatus, ParticipantType, ScoringMode, ScoringRule, TeamScoringMode, Tournament,
-    TournamentInput, TournamentParticipant, TournamentStatus,
+    ParticipantInput, ParticipantStatus, ParticipantType, ScoringMode, ScoringRule,
+    ScoringRuleDefinition, ScoringRuleInput, TeamScoringMode, Tournament, TournamentInput,
+    TournamentParticipant, TournamentStatus, TournamentUpdate,
 };
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
@@ -116,6 +119,12 @@ pub enum StoreError {
     TeamAlreadyRegistered,
     /// Le joueur est déjà dans une équipe de ce tournoi.
     PlayerAlreadyRegistered,
+    /// Une règle de barème existe déjà pour cette statistique dans ce tournoi.
+    ScoringRuleTaken,
+    /// Le joueur ou l'équipe est déjà inscrit à ce tournoi.
+    AlreadyParticipant,
+    /// Le tournoi a atteint son nombre maximum de participants.
+    TournamentFull,
     Other(String),
 }
 
@@ -132,6 +141,11 @@ impl fmt::Display for StoreError {
             StoreError::PlayerAlreadyRegistered => {
                 f.write_str("joueur déjà dans une équipe du tournoi")
             }
+            StoreError::ScoringRuleTaken => {
+                f.write_str("règle de barème déjà définie pour cette statistique")
+            }
+            StoreError::AlreadyParticipant => f.write_str("participant déjà inscrit au tournoi"),
+            StoreError::TournamentFull => f.write_str("tournoi complet"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -376,4 +390,101 @@ pub trait AuthStore: Send + Sync {
         id: Uuid,
         user_id: Uuid,
     ) -> Result<bool, StoreError>;
+    /// Tournois par date de début, éventuellement d'un seul jeu ou d'un seul statut, `limit` à
+    /// partir de `offset`.
+    async fn list_tournaments(
+        &self,
+        game_id: Option<Uuid>,
+        status: Option<TournamentStatus>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Tournament>, StoreError>;
+
+    async fn find_tournament(&self, id: Uuid) -> Result<Option<Tournament>, StoreError>;
+
+    /// Crée le tournoi au statut `draft`. Le jeu existe et les champs sont cohérents.
+    async fn create_tournament(
+        &self,
+        tournament: TournamentInput,
+    ) -> Result<Tournament, StoreError>;
+
+    /// Applique `update` ; `None` si le tournoi n'existe pas.
+    async fn update_tournament(
+        &self,
+        id: Uuid,
+        update: TournamentUpdate,
+    ) -> Result<Option<Tournament>, StoreError>;
+
+    /// Change le statut ; `None` si le tournoi n'existe pas. Les transitions autorisées sont
+    /// vérifiées par l'appelant.
+    async fn set_tournament_status(
+        &self,
+        id: Uuid,
+        status: TournamentStatus,
+    ) -> Result<Option<Tournament>, StoreError>;
+
+    /// Supprime le tournoi, ses équipes, son barème et ses inscriptions ; `false` s'il n'existait
+    /// pas.
+    async fn delete_tournament(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Barème du tournoi, par statistique.
+    async fn list_scoring_rules(&self, tournament_id: Uuid)
+    -> Result<Vec<ScoringRule>, StoreError>;
+
+    async fn find_scoring_rule(&self, id: Uuid) -> Result<Option<ScoringRule>, StoreError>;
+
+    /// Ajoute la règle ; `None` si le tournoi n'existe pas ou si la statistique n'est pas liée
+    /// à son jeu, [`StoreError::ScoringRuleTaken`] si la statistique a déjà une règle.
+    async fn create_scoring_rule(
+        &self,
+        rule: ScoringRuleInput,
+    ) -> Result<Option<ScoringRule>, StoreError>;
+
+    /// Remplace la façon de calculer les points ; `None` si la règle n'existe pas.
+    async fn replace_scoring_rule(
+        &self,
+        id: Uuid,
+        definition: ScoringRuleDefinition,
+    ) -> Result<Option<ScoringRule>, StoreError>;
+
+    /// Supprime la règle ; `false` si elle n'existait pas.
+    async fn delete_scoring_rule(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Inscrits du tournoi par date d'inscription, `limit` à partir de `offset`.
+    async fn list_participants(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentParticipant>, StoreError>;
+
+    async fn find_participant(&self, id: Uuid)
+    -> Result<Option<TournamentParticipant>, StoreError>;
+
+    /// Inscrit au statut `registered` ; `None` si le tournoi n'existe pas,
+    /// [`StoreError::AlreadyParticipant`] si le joueur ou l'équipe est déjà inscrit,
+    /// [`StoreError::TournamentFull`] si `max_participants` inscrits (hors `withdrawn`) sont
+    /// atteints. Le compte et l'équipe existent, l'équipe appartient au tournoi.
+    async fn add_participant(
+        &self,
+        participant: ParticipantInput,
+    ) -> Result<Option<TournamentParticipant>, StoreError>;
+
+    /// Change le statut d'un inscrit ; `None` s'il n'existe pas.
+    async fn set_participant_status(
+        &self,
+        id: Uuid,
+        status: ParticipantStatus,
+    ) -> Result<Option<TournamentParticipant>, StoreError>;
+
+    /// Supprime l'inscription ; `false` si elle n'existait pas.
+    async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Points de chaque inscrit (par identifiant d'inscription) ; un inscrit absent n'a aucun
+    /// point. Les points viennent des résultats des étapes (#52) : tant qu'aucun résultat n'est
+    /// enregistré, la table est vide.
+    async fn participant_points(
+        &self,
+        tournament_id: Uuid,
+    ) -> Result<HashMap<Uuid, f64>, StoreError>;
 }
