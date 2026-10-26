@@ -27,6 +27,7 @@
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::export_cache;
 use crate::game_io::{Format, FormatQuery};
 use crate::store::{
     AuthStore, ParticipantImport, ParticipantStatus, ParticipantType, ScoringMode,
@@ -36,7 +37,6 @@ use crate::store::{
 use crate::team_io::normalize_timestamp;
 use crate::tournaments::{check as check_fields, definition_checked};
 use crate::users::require_admin;
-use actix_web::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use actix_web::{HttpResponse, get, post, web};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -260,6 +260,9 @@ pub(crate) async fn export_tournaments(
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let format = query.format.unwrap_or_default();
+    if let Some(body) = export_cache::lookup(&state, "tournaments", format).await {
+        return Ok(export_cache::response("tournaments", format, body));
+    }
     let store = &state.store;
     let games: HashMap<Uuid, String> = store
         .list_games(i64::MAX, 0)
@@ -358,16 +361,8 @@ pub(crate) async fn export_tournaments(
     }
     exported.sort_by_cached_key(|t| (t.game.to_lowercase(), t.name.to_lowercase()));
     let body = encode(format, exported).map_err(ApiError::internal)?;
-    Ok(HttpResponse::Ok()
-        .insert_header((CONTENT_TYPE, format.content_type()))
-        .insert_header((
-            CONTENT_DISPOSITION,
-            format!(
-                "attachment; filename=\"tournaments.{}\"",
-                format.extension()
-            ),
-        ))
-        .body(body))
+    export_cache::save(&state, "tournaments", format, &body).await;
+    Ok(export_cache::response("tournaments", format, body))
 }
 
 /// Nom d'utilisateur d'un compte, mémorisé pour la durée de l'export.

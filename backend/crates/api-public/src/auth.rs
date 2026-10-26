@@ -21,6 +21,7 @@ use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use infra::{Cache, MemoryCache};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -53,6 +54,8 @@ pub struct AppState {
     pub(crate) tournament_teams: Arc<dyn TournamentChild>,
     pub(crate) steps: Arc<dyn TournamentChild>,
     pub(crate) matches: Arc<dyn TournamentChild>,
+    /// Cache des fichiers d'export ([`export_cache`](crate::export_cache)). Par défaut en mémoire.
+    pub(crate) cache: Arc<dyn Cache>,
 }
 
 impl AppState {
@@ -66,6 +69,7 @@ impl AppState {
             tournament_teams: Arc::new(StoreTournamentTeams(store.clone())),
             steps: Arc::new(StoreSteps::new(store.clone())),
             matches: Arc::new(InSteps),
+            cache: Arc::new(MemoryCache::new()),
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
@@ -87,6 +91,12 @@ impl AppState {
     /// Branche le sous-niveau qui importe et exporte les matchs des tournois.
     pub fn with_matches(mut self, matches: Arc<dyn TournamentChild>) -> Self {
         self.matches = matches;
+        self
+    }
+
+    /// Branche le cache des exports (Redis en production).
+    pub fn with_cache(mut self, cache: Arc<dyn Cache>) -> Self {
+        self.cache = cache;
         self
     }
 
