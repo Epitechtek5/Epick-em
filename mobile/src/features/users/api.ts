@@ -1,5 +1,5 @@
 import type { User } from '@/features/auth/types';
-import { apiRequest } from '@/lib/api';
+import { authenticatedRequest } from '@/lib/api';
 
 export type UserRole = User['role'];
 
@@ -39,13 +39,13 @@ export async function listUsers(
     offset: String(offset),
   });
 
-  return apiRequest<User[]>(`/users?${params.toString()}`, {
+  return authenticatedRequest<User[]>(`/users?${params.toString()}`, {
     headers: authenticatedHeaders(token),
   });
 }
 
 export function getUser(token: string, id: string): Promise<User> {
-  return apiRequest<User>(`/user/${id}`, {
+  return authenticatedRequest<User>(`/user/${accountId(id)}`, {
     headers: authenticatedHeaders(token),
   });
 }
@@ -54,7 +54,7 @@ export function updateMe(
   token: string,
   changes: UpdateAccountRequest,
 ): Promise<User> {
-  return apiRequest<User>('/me/update', {
+  return authenticatedRequest<User>('/me/update', {
     method: 'PATCH',
     headers: authenticatedHeaders(token),
     body: JSON.stringify(changes),
@@ -62,7 +62,7 @@ export function updateMe(
 }
 
 export function deleteMe(token: string): Promise<void> {
-  return apiRequest<void>('/me/delete', {
+  return authenticatedRequest<void>('/me/delete', {
     method: 'DELETE',
     headers: authenticatedHeaders(token),
   });
@@ -73,7 +73,7 @@ export function updateUser(
   id: string,
   changes: UpdateUserRequest,
 ): Promise<User> {
-  return apiRequest<User>(`/user/${id}/update`, {
+  return authenticatedRequest<User>(`/user/${accountId(id)}/update`, {
     method: 'PATCH',
     headers: authenticatedHeaders(token),
     body: JSON.stringify(changes),
@@ -81,8 +81,17 @@ export function updateUser(
 }
 
 export function deleteUser(token: string, id: string): Promise<void> {
-  return apiRequest<void>(`/user/${id}/delete`, {
+  return authenticatedRequest<void>(`/user/${accountId(id)}/delete`, {
     method: 'DELETE',
     headers: authenticatedHeaders(token),
   });
+}
+
+export function accountId(id: string): string {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+  ) {
+    throw new Error('Invalid account UUID');
+  }
+  return id;
 }

@@ -1,6 +1,6 @@
 import '../../global.css';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import {
@@ -8,6 +8,8 @@ import {
   DefaultTheme,
   ThemeProvider,
 } from '@react-navigation/native';
+import * as SystemUI from 'expo-system-ui';
+import { PreferencesProvider } from '@/features/preferences/provider';
 import { StatusBar } from 'expo-status-bar';
 import { PortalHost } from '@rn-primitives/portal';
 import { useColorScheme, vars } from 'nativewind';
@@ -16,9 +18,23 @@ import { AuthProvider } from '@/features/auth/session';
 import { colors } from '@/theme/colors';
 
 export default function RootLayout() {
+  return (
+    <PreferencesProvider>
+      <ThemedLayout />
+    </PreferencesProvider>
+  );
+}
+
+function ThemedLayout() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const palette = isDark ? colors.dark : colors.light;
+
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(palette.background).catch(
+      () => undefined,
+    );
+  }, [palette.background]);
 
   const variables = useMemo(
     () =>

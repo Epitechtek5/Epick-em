@@ -34,3 +34,37 @@ python3 docs/evidence/verify-ci-workflows.py
 ```
 
 Run from a full repository checkout. The helper executes the real `ci-ok` Bash body with synthetic inputs and the release-upload body with mocked Git/GitHub commands. It also checks tool versions, package wiring and preserved workflow definitions against the recorded review baseline. No real native artifact or release upload occurs. It writes results to `docs/evidence/ci-review-checks.json`. It does not replace actionlint or an actual GitHub Actions run.
+
+## Authentication and account verification
+
+Run the complete required suite from `mobile/`:
+
+```sh
+npm ci
+npm run lint
+npm run format:check
+npm run typecheck
+npm test -- --watch=false
+npx expo install --check
+node scripts/audit-security.mjs
+npm run build
+git diff --check
+```
+
+Session tests mock fetch and SecureStore to verify login contracts, restoration, rotation, concurrent requests, bounded retries, refresh failures, logout and late refresh cancellation. Account API tests cover UUID routes, pagination, partial updates, status errors and 204 deletion. Navigation tests mount Expo Router layouts and tabs to catch nested navigator regressions, restoration guards and forbidden administrative deep links. These tests do not establish real backend or device interoperability.
+
+With a configured emulator, build `npm run build:apk`, install `binaries/epickem.apk` with ADB and use a reachable HTTPS backend according to the existing release network policy. Register a new account, sign in with invalid then valid credentials, restart the app, edit username/password, browse pages/details, and confirm/cancel account deletion. Verify user/watcher cannot open administrative routes and a real backend administrator can edit/delete accounts and safely demote/delete itself. Check refresh after backend access expiry, revoked refresh tokens and logout followed by restart. On macOS repeat these flows on an iOS simulator. Report native testing separately from bundle exports and mocked tests; never use fixture accounts in production code.
+
+## Settings, localization and appearance
+
+The preference tests verify immediate System/Light/Dark switching, SecureStore persistence/restoration, French device defaults, unsupported-language fallback, language changes and storage failures. Resource tests compare complete English/French key sets and interpolation variables, and check status-based backend errors. Registration confirmation tests check centered NativeWind classes and up-to-date login guidance in both languages. Navigation tests mount the real Expo Router stack/tabs, including SVG icons and localized Settings labels; existing authentication, account and permission regressions remain in the suite.
+
+NativeWind classes and SVG elements in Jest are structural checks, not visual device verification. Build a new native client after adding Expo Localization. When a device is available, install the Release APK, check both tab icons in selected/unselected states, switch all appearance modes and toggle the OS appearance while System is selected. Check status/navigation bars, safe areas, headers, forms and cards in both languages, including large text. Restart to verify persistence; sign out and confirm protected deep links return to Login while preferences remain selected. Repeat on an iOS simulator when macOS/Xcode are available.
+
+## UI modernization regressions
+
+The interaction suite covers masked password defaults and visibility toggles, disabled controls, input focus/validation feedback and forwarded callbacks, expandable account editing with retained drafts, and press behavior with reduced motion both at startup and after an accessibility change. Registration tests also assert that both password fields start masked. Existing API, authentication, pagination, permission, logout, theme/language and navigation tests remain mandatory.
+
+Jest uses the installed Reanimated/Worklets resolver and official Reanimated mock through `jest.setup.js`; no native Worklets runtime runs inside Jest. These tests verify interaction behavior and motion policy, not device frame rates or final pixels. Run all standard checks above, then `npm run build:apk` for a Release artifact.
+
+For native visual review, inspect Login, Register/success, Settings with its editor open and closed, Users, user details and administration. Repeat with English/French, both palettes, large system text, keyboard open/closed, and reduced motion enabled/disabled. Verify long usernames/UUIDs, selected radios, disabled controls, error/loading states, pull-to-refresh, pagination and tab safe areas. Compare token files directly to the pre-change baseline; do not change palette values to fix layout or contrast issues. Report simulator/device checks separately from mocked tests and bundle/APK builds.

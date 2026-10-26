@@ -1,75 +1,98 @@
 import {
-  createContext,
   useCallback,
+  createContext,
   useContext,
-  useMemo,
+  useEffect,
   useState,
   type PropsWithChildren,
 } from 'react';
-
-import type { User } from './types';
+import { AppState } from 'react-native';
+import { configureSessionRequest } from '@/lib/api';
+import { SessionClient } from './client';
+import type { RegisterRequest, User } from './types';
 
 interface AuthSession {
   token: string | null;
   user: User | null;
-  setAuthenticatedSession: (token: string, user: User) => void;
+  initializing: boolean;
+  signIn: (credentials: RegisterRequest) => Promise<void>;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
   updateCurrentUser: (user: User) => void;
-  clearSession: () => void;
+  clearSession: () => Promise<void>;
 }
-
 const AuthContext = createContext<AuthSession | null>(null);
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
-
-  const setAuthenticatedSession = useCallback(
-    (accessToken: string, authenticatedUser: User) => {
-      if (!accessToken) {
-        throw new Error('An access token is required');
-      }
-
-      setToken(accessToken);
-      setUser(authenticatedUser);
-    },
-    [],
+  const [initializing, setInitializing] = useState(true);
+  const [, rerender] = useState(0);
+  const [client] = useState(
+    () =>
+      new SessionClient((session) => {
+        if (!session) setUser(null);
+        rerender((value) => value + 1);
+      }),
   );
 
-  const updateCurrentUser = useCallback((updatedUser: User) => {
-    setUser((previous) => {
-      if (!previous || previous.id !== updatedUser.id) {
-        return previous;
-      }
+  const refreshUser = useCallback(async () => {
+    if (client.session) setUser(await client.currentUser());
+  }, [client]);
 
-      return updatedUser;
+  useEffect(() => {
+    configureSessionRequest(client.request);
+    void (async () => {
+      try {
+        await client.restore();
+        if (client.session) setUser(await client.currentUser());
+      } catch {
+        await client.clear().catch(() => undefined);
+      } finally {
+        setInitializing(false);
+      }
+    })();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && client.session) {
+        void client
+          .currentUser()
+          .then(setUser)
+          .catch(() => undefined);
+      }
     });
-  }, []);
+    return () => {
+      configureSessionRequest(null);
+      subscription.remove();
+    };
+  }, [client]);
 
-  const clearSession = useCallback(() => {
-    setToken(null);
-    setUser(null);
-  }, []);
-
-  const value = useMemo(
-    () => ({
-      token,
-      user,
-      setAuthenticatedSession,
-      updateCurrentUser,
-      clearSession,
-    }),
-    [token, user, setAuthenticatedSession, updateCurrentUser, clearSession],
+  return (
+    <AuthContext.Provider
+      value={{
+        token: client.session?.access_token ?? null,
+        user,
+        initializing,
+        async signIn(credentials) {
+          try {
+            await client.authenticate(credentials);
+            setUser(await client.currentUser());
+          } catch (error) {
+            await client.clear();
+            throw error;
+          }
+        },
+        logout: () => client.logout(),
+        refreshUser,
+        updateCurrentUser: setUser,
+        clearSession: () => client.clear(),
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
   );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthSession {
-  const context = useContext(AuthContext);
-
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
-  }
-
-  return context;
+  const value = useContext(AuthContext);
+  if (!value) throw new Error('useAuth must be used within AuthProvider');
+  return value;
 }
