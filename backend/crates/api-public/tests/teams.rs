@@ -72,7 +72,7 @@ async fn create_tournament(app: &app_type!(), admin: &str, game: &str) -> String
         admin,
         Some(json!({
             "game_id": game,
-            "name": "Open",
+            "name": format!("Open {}", Uuid::new_v4()),
             "start_date": "2026-11-14T18:00:00Z",
             "end_date": "2026-11-15T18:00:00Z",
             "participant_type": "solo",

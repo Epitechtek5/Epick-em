@@ -191,6 +191,31 @@ pub struct ParticipantInput {
     pub tournament_team_id: Option<Uuid>,
 }
 
+/// Tournoi à créer ou à mettre à jour (par jeu et nom, sans tenir compte de la casse) depuis un
+/// fichier d'import, avec son statut et son barème.
+#[derive(Debug, Clone)]
+pub struct TournamentImport {
+    pub input: TournamentInput,
+    pub status: TournamentStatus,
+    pub rules: Vec<ScoringRuleImport>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoringRuleImport {
+    pub stat_id: Uuid,
+    pub definition: ScoringRuleDefinition,
+}
+
+/// Inscription importée ; `registered_at` (RFC 3339 UTC, six décimales) vaut l'instant présent
+/// s'il est absent.
+#[derive(Debug, Clone)]
+pub struct ParticipantImport {
+    pub user_id: Option<Uuid>,
+    pub tournament_team_id: Option<Uuid>,
+    pub status: ParticipantStatus,
+    pub registered_at: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

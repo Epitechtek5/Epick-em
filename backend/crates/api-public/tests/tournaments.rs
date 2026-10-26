@@ -5,10 +5,15 @@ mod common;
 
 use actix_web::http::StatusCode;
 use actix_web::test::TestRequest;
-use api_public::store::{AuthStore, MemoryStore, Role};
+use api_public::config::AuthConfig;
+use api_public::store::{AuthStore, MemoryStore, Role, StoreError};
+use api_public::tournament_io::TournamentChild;
+use api_public::{AppState, app};
+use async_trait::async_trait;
 use common::{access, app_with, call, logged_in_as, login, request};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -138,6 +143,7 @@ fn tournament_body(s: &Setup) -> Value {
 /// Crée un tournoi avec les champs de `tournament_body` complétés par `extra`.
 async fn create(app: &app_type!(), s: &Setup, extra: Value) -> Value {
     let mut body = tournament_body(s);
+    body["name"] = json!(format!("TFT Open {}", Uuid::new_v4()));
     for (key, value) in extra.as_object().unwrap() {
         body[key] = value.clone();
     }
@@ -1340,4 +1346,595 @@ async fn deleting_a_user_keeps_the_store_consistent() {
             .unwrap()
             .is_empty()
     );
+}
+
+async fn send_raw(app: &app_type!(), path: &str, token: &str, body: &str) -> (StatusCode, Value) {
+    call(
+        app,
+        request(TestRequest::post(), path, Some(token)).set_payload(body.to_string()),
+    )
+    .await
+}
+
+async fn export(app: &app_type!(), token: &str, format: &str) -> (StatusCode, String) {
+    let response = actix_web::test::call_service(
+        app,
+        request(
+            TestRequest::get(),
+            &format!("/tournaments/export?format={format}"),
+            Some(token),
+        )
+        .to_request(),
+    )
+    .await;
+    let status = response.status();
+    let bytes = actix_web::test::read_body(response).await;
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+/// Deux tournois riches : un solo avec équipes et barème, un par équipes.
+async fn populate(app: &app_type!(), s: &Setup) {
+    let solo = open_tournament(
+        app,
+        s,
+        json!({
+            "name": "Solo Cup",
+            "description": "Avec équipes, \"guillemets\" et\nretour à la ligne",
+            "team_scoring_mode": "top_n",
+            "team_scoring_n": 2,
+            "registration_open_at": "2020-11-01T00:00:00Z",
+            "registration_close_at": "2999-01-01T00:00:00Z",
+        }),
+    )
+    .await;
+    for body in [
+        json!({ "stat_id": s.kills, "mode": "linear", "coefficient": 1.5 }),
+        json!({ "stat_id": s.placement, "mode": "table", "points_table": { "1": 8, "2": 7 } }),
+    ] {
+        let (status, rule) = post(
+            app,
+            &format!("/tournaments/{solo}/scoring-rules"),
+            &s.admin,
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{rule}");
+    }
+    let team = team_of(app, &solo, &s.alice, "Alpha", &[&s.bob]).await;
+    let participants = format!("/tournaments/{solo}/participants");
+    for (account, with_team) in [(&s.alice, true), (&s.bob, true), (&s.carol, false)] {
+        let body = if with_team {
+            json!({ "tournament_team_id": team })
+        } else {
+            json!({})
+        };
+        let (status, participant) = post(app, &participants, &account.token, body).await;
+        assert_eq!(status, StatusCode::CREATED, "{participant}");
+    }
+    let (_, list) = get(app, &participants, &s.admin).await;
+    let carol = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["user_id"] == json!(s.carol.id))
+        .unwrap();
+    let (status, _) = post(
+        app,
+        &format!("{participants}/{}/check-in", id(carol)),
+        &s.carol.token,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let teams = open_tournament(
+        app,
+        s,
+        json!({ "name": "Team Cup", "participant_type": "team", "team_size": 1, "max_participants": 4 }),
+    )
+    .await;
+    for (account, name) in [(&s.alice, "Rouge"), (&s.bob, "Bleue")] {
+        let team = team_of(app, &teams, account, name, &[]).await;
+        let (status, _) = post(
+            app,
+            &format!("/tournaments/{teams}/participants"),
+            &account.token,
+            json!({ "tournament_team_id": team }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    // Un tournoi vide, au statut d'origine.
+    let (status, _) = post(
+        app,
+        "/tournaments",
+        &s.admin,
+        json!({
+            "game_id": s.game, "name": "Brouillon", "start_date": "2027-01-01T00:00:00Z",
+            "end_date": "2027-01-02T00:00:00Z", "participant_type": "solo", "max_participants": 2,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+async fn delete_all(app: &app_type!(), s: &Setup) {
+    let (_, list) = get(app, "/tournaments", &s.admin).await;
+    for tournament in list.as_array().unwrap() {
+        let (status, _) = send(
+            app,
+            TestRequest::delete(),
+            &format!("/tournaments/{}", id(tournament)),
+            &s.admin,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+}
+
+#[actix_web::test]
+async fn export_then_import_reproduces_the_tournaments() {
+    for format in ["json", "csv"] {
+        let (app, s) = setup().await;
+        populate(&app, &s).await;
+        let (status, file) = export(&app, &s.admin, format).await;
+        assert_eq!(status, StatusCode::OK, "{format}");
+        if format == "json" {
+            let document: Value = serde_json::from_str(&file).unwrap();
+            let tournaments = document["tournaments"].as_array().unwrap();
+            assert_eq!(tournaments.len(), 3);
+            let solo = tournaments
+                .iter()
+                .find(|t| t["name"] == "Solo Cup")
+                .unwrap();
+            assert_eq!(solo["scoring_rules"].as_array().unwrap().len(), 2);
+            assert_eq!(solo["scoring_rules"][0]["stat"], "kills");
+            assert_eq!(solo["participants"].as_array().unwrap().len(), 3);
+            assert_eq!(solo["teams"][0]["name"], "Alpha");
+            assert_eq!(solo["teams"][0]["members"].as_array().unwrap().len(), 2);
+            let in_team = solo["participants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["team"] == 0)
+                .count();
+            assert_eq!(in_team, 2);
+        }
+
+        // Vider la base puis réimporter le fichier redonne exactement le même export.
+        delete_all(&app, &s).await;
+        let (status, report) = send_raw(
+            &app,
+            &format!("/tournaments/import?format={format}"),
+            &s.admin,
+            &file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{format}: {report}");
+        assert_eq!(report, json!({ "created": 3, "updated": 0 }));
+        let (_, again) = export(&app, &s.admin, format).await;
+        assert_eq!(again, file, "{format}");
+
+        // Un second import met tout à jour, sans rien créer ni perdre.
+        let (status, report) = send_raw(
+            &app,
+            &format!("/tournaments/import?format={format}"),
+            &s.admin,
+            &file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{format}: {report}");
+        assert_eq!(report, json!({ "created": 0, "updated": 3 }));
+        let (_, again) = export(&app, &s.admin, format).await;
+        assert_eq!(again, file, "{format}");
+        let (_, list) = get(&app, "/tournaments", &s.admin).await;
+        assert_eq!(list.as_array().unwrap().len(), 3);
+    }
+}
+
+#[actix_web::test]
+async fn importing_an_existing_tournament_replaces_its_content() {
+    let (app, s) = setup().await;
+    let tid = open_tournament(&app, &s, json!({ "name": "Cup", "max_participants": 4 })).await;
+    post(
+        &app,
+        &format!("/tournaments/{tid}/participants"),
+        &s.alice.token,
+        json!({}),
+    )
+    .await;
+    post(
+        &app,
+        &format!("/tournaments/{tid}/scoring-rules"),
+        &s.admin,
+        json!({ "stat_id": s.kills, "mode": "linear", "coefficient": 1 }),
+    )
+    .await;
+
+    let file = json!({ "version": 1, "tournaments": [{
+        "game": "tft", "name": "CUP", "description": "Mis à jour",
+        "start_date": "2026-12-01T10:00:00Z", "end_date": "2026-12-02T10:00:00Z",
+        "participant_type": "solo", "max_participants": 3, "status": "registration",
+        "scoring_rules": [{ "stat": "placement", "mode": "table", "points_table": { "1": 5 } }],
+        "participants": [
+            { "user": "BOB", "status": "checked_in", "registered_at": "2026-11-02T08:00:00Z" },
+            { "user": "carol", "registered_at": "2026-11-03T08:00:00Z" },
+        ],
+        "teams": [{ "name": "Gamma", "owner": "bob", "members": [{ "username": "bob", "role": "owner" }] }],
+    }] });
+    let (status, report) = send_raw(&app, "/tournaments/import", &s.admin, &file.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report, json!({ "created": 0, "updated": 1 }));
+
+    let (_, tournament) = get(&app, &format!("/tournaments/{tid}"), &s.admin).await;
+    assert_eq!(tournament["name"], "CUP");
+    assert_eq!(tournament["description"], "Mis à jour");
+    assert_eq!(tournament["max_participants"], 3);
+    let (_, rules) = get(&app, &format!("/tournaments/{tid}/scoring-rules"), &s.admin).await;
+    assert_eq!(rules.as_array().unwrap().len(), 1);
+    assert_eq!(rules[0]["stat_id"], json!(s.placement));
+    let (_, participants) = get(&app, &format!("/tournaments/{tid}/participants"), &s.admin).await;
+    let users: Vec<&str> = participants
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["user_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(users, [s.bob.id.as_str(), s.carol.id.as_str()]);
+    assert_eq!(participants[0]["status"], "checked_in");
+    assert_eq!(
+        participants[0]["registered_at"],
+        "2026-11-02T08:00:00.000000Z"
+    );
+    assert_eq!(participants[1]["status"], "registered");
+    assert_eq!(
+        participants[1]["registered_at"],
+        "2026-11-03T08:00:00.000000Z"
+    );
+    let (_, teams) = get(&app, &format!("/tournaments/{tid}/teams"), &s.admin).await;
+    assert_eq!(teams.as_array().unwrap().len(), 1);
+    assert_eq!(teams[0]["name"], "Gamma");
+}
+
+#[actix_web::test]
+async fn invalid_files_are_refused_without_any_write() {
+    let (app, s) = setup().await;
+    let running = open_tournament(&app, &s, json!({ "name": "En cours" })).await;
+    for account in [&s.alice, &s.bob] {
+        post(
+            &app,
+            &format!("/tournaments/{running}/participants"),
+            &account.token,
+            json!({}),
+        )
+        .await;
+    }
+    assert_eq!(
+        set_status(&app, &s, &running, "ongoing").await,
+        StatusCode::OK
+    );
+
+    let valid = |extra: Value| {
+        let mut tournament = json!({
+            "game": "TFT", "name": "Nouveau", "start_date": "2026-12-01T10:00:00Z",
+            "end_date": "2026-12-02T10:00:00Z", "participant_type": "solo", "max_participants": 4,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            tournament[key] = value.clone();
+        }
+        tournament
+    };
+    let cases = [
+        ("jeu inconnu", valid(json!({ "game": "Inconnu" })), "game"),
+        (
+            "dates",
+            valid(json!({ "end_date": "2026-11-01T00:00:00Z" })),
+            "end_date",
+        ),
+        (
+            "team_size",
+            valid(json!({ "participant_type": "team" })),
+            "team_size",
+        ),
+        (
+            "statistique inconnue",
+            valid(
+                json!({ "scoring_rules": [{ "stat": "nope", "mode": "linear", "coefficient": 1 }] }),
+            ),
+            "statistique inconnue",
+        ),
+        (
+            "règle incomplète",
+            valid(json!({ "scoring_rules": [{ "stat": "kills", "mode": "linear" }] })),
+            "coefficient",
+        ),
+        (
+            "règle en double",
+            valid(json!({ "scoring_rules": [
+            { "stat": "kills", "mode": "linear", "coefficient": 1 },
+            { "stat": "kills", "mode": "linear", "coefficient": 2 }] })),
+            "plusieurs fois",
+        ),
+        (
+            "compte inconnu",
+            valid(json!({ "participants": [{ "user": "fantôme" }] })),
+            "compte inconnu",
+        ),
+        (
+            "solo sans joueur",
+            valid(json!({ "participants": [{}] })),
+            "tournoi solo",
+        ),
+        (
+            "joueur en double",
+            valid(json!({ "participants": [{ "user": "alice" }, { "user": "ALICE" }] })),
+            "plusieurs fois",
+        ),
+        (
+            "trop d'inscrits",
+            valid(
+                json!({ "max_participants": 1, "participants": [{ "user": "alice" }, { "user": "bob" }] }),
+            ),
+            "places",
+        ),
+        (
+            "équipe absente",
+            valid(json!({ "participants": [{ "user": "alice", "team": 0 }] })),
+            "n'existe pas",
+        ),
+        (
+            "date d'inscription",
+            valid(json!({ "participants": [{ "user": "alice", "registered_at": "hier" }] })),
+            "registered_at",
+        ),
+        (
+            "équipe invalide",
+            valid(json!({ "teams": [{ "name": "X", "owner": "alice", "members": [] }] })),
+            "propriétaire",
+        ),
+        (
+            "étapes non prises en charge",
+            valid(json!({ "steps": [{ "format": "pool" }] })),
+            "étapes",
+        ),
+        (
+            "matchs non pris en charge",
+            valid(json!({ "matches": [{}] })),
+            "matchs",
+        ),
+        ("en cours", valid(json!({ "name": "en cours" })), "en cours"),
+        (
+            "doublon",
+            json!([valid(json!({})), valid(json!({ "name": "NOUVEAU" }))]),
+            "plusieurs fois",
+        ),
+    ];
+    for (label, tournaments, needle) in cases {
+        let tournaments = if tournaments.is_array() {
+            tournaments
+        } else {
+            json!([tournaments])
+        };
+        let file = json!({ "version": 1, "tournaments": tournaments }).to_string();
+        let (status, body) = send_raw(&app, "/tournaments/import", &s.admin, &file).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {body}");
+        assert!(
+            body["errors"]["file"].as_str().unwrap().contains(needle),
+            "{label}: {body}"
+        );
+    }
+    for file in [
+        "pas du json".to_string(),
+        json!({ "version": 2, "tournaments": [] }).to_string(),
+        json!({ "version": 1, "tournaments": [], "extra": 1 }).to_string(),
+        json!({ "version": 1, "tournaments": [valid(json!({ "inconnu": 1 }))] }).to_string(),
+    ] {
+        let (status, body) = send_raw(&app, "/tournaments/import", &s.admin, &file).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{file}: {body}");
+    }
+    let (status, _) = send_raw(&app, "/tournaments/import?format=csv", &s.admin, "a,b\n1,2").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Un seul tournoi invalide fait refuser tout le fichier.
+    let mixed = json!({ "version": 1, "tournaments": [valid(json!({})), valid(json!({ "name": "Autre", "game": "?" }))] });
+    let (status, _) = send_raw(&app, "/tournaments/import", &s.admin, &mixed.to_string()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (_, list) = get(&app, "/tournaments", &s.admin).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
+#[actix_web::test]
+async fn import_and_export_are_reserved_to_administrators() {
+    let (app, s) = setup().await;
+    let (status, _) = export(&app, &s.alice.token, "json").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = send_raw(
+        &app,
+        "/tournaments/import",
+        &s.alice.token,
+        r#"{ "version": 1, "tournaments": [] }"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(
+        &app,
+        request(TestRequest::get(), "/tournaments/export", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(
+        &app,
+        request(TestRequest::post(), "/tournaments/import", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[actix_web::test]
+async fn tournament_names_are_unique_per_game() {
+    let (app, s) = setup().await;
+    let first = create(&app, &s, json!({ "name": "Open" })).await;
+    let (status, error) = post(&app, "/tournaments", &s.admin, {
+        let mut body = tournament_body(&s);
+        body["name"] = json!("OPEN");
+        body
+    })
+    .await;
+    assert_eq!(
+        (status, error_code(&error)),
+        (StatusCode::CONFLICT, "tournament_name_taken")
+    );
+    let other = create(&app, &s, json!({})).await;
+    let (status, error) = send(
+        &app,
+        TestRequest::patch(),
+        &format!("/tournaments/{}", id(&other)),
+        &s.admin,
+        Some(json!({ "name": "open" })),
+    )
+    .await;
+    assert_eq!(
+        (status, error_code(&error)),
+        (StatusCode::CONFLICT, "tournament_name_taken")
+    );
+    // Renommer un tournoi avec son propre nom (autre casse) reste permis.
+    let (status, _) = send(
+        &app,
+        TestRequest::patch(),
+        &format!("/tournaments/{}", id(&first)),
+        &s.admin,
+        Some(json!({ "name": "OPEN" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// Sous-niveau de test : des valeurs opaques, conservées telles quelles.
+#[derive(Default)]
+struct FakeChild {
+    by_tournament: Mutex<HashMap<Uuid, Vec<Value>>>,
+}
+
+#[async_trait]
+impl TournamentChild for FakeChild {
+    async fn export(&self, tournament_id: Uuid) -> Result<Vec<(Uuid, Value)>, StoreError> {
+        Ok(self
+            .by_tournament
+            .lock()
+            .unwrap()
+            .get(&tournament_id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|value| (Uuid::new_v4(), value))
+            .collect())
+    }
+
+    async fn validate(&self, _: Uuid, items: &[Value]) -> Result<Option<String>, StoreError> {
+        Ok(items
+            .iter()
+            .any(|item| !item.is_object())
+            .then(|| "chaque élément doit être un objet".to_string()))
+    }
+
+    async fn import(
+        &self,
+        tournament_id: Uuid,
+        items: Vec<Value>,
+    ) -> Result<Vec<Uuid>, StoreError> {
+        let ids = items.iter().map(|_| Uuid::new_v4()).collect();
+        self.by_tournament
+            .lock()
+            .unwrap()
+            .insert(tournament_id, items);
+        Ok(ids)
+    }
+}
+
+#[actix_web::test]
+async fn steps_and_matches_are_delegated_to_their_levels() {
+    let store = Arc::new(MemoryStore::new());
+    let config = AuthConfig {
+        jwt_secret: common::SECRET.into(),
+        access_token_ttl: Duration::from_secs(900),
+        refresh_token_ttl: Duration::from_secs(3600),
+    };
+    let (steps, matches) = (
+        Arc::new(FakeChild::default()),
+        Arc::new(FakeChild::default()),
+    );
+    let state = AppState::new(store.clone(), config)
+        .unwrap()
+        .with_steps(steps.clone())
+        .with_matches(matches.clone());
+    let app = actix_web::test::init_service(app(state)).await;
+    logged_in_as(&app, "root", "secret123").await;
+    store.set_role("root", Role::Admin);
+    let (_, session) = login(&app, "root", "secret123").await;
+    let admin = access(&session).to_string();
+    let (_, game) = post(&app, "/games", &admin, json!({ "name": "TFT" })).await;
+    assert!(game["id"].is_string());
+
+    let tournament = |extra: Value| {
+        let mut base = json!({
+            "game": "TFT", "name": "Cup", "start_date": "2026-12-01T10:00:00Z",
+            "end_date": "2026-12-02T10:00:00Z", "participant_type": "solo", "max_participants": 4,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            base[key] = value.clone();
+        }
+        json!({ "version": 1, "tournaments": [base] }).to_string()
+    };
+    let file = tournament(json!({
+        "steps": [{ "format": "pool", "anything": [1, 2] }, { "whatever": true }],
+        "matches": [{ "round": 1 }],
+    }));
+    let (status, body) = send_raw(&app, "/tournaments/import", &admin, &file).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        steps
+            .by_tournament
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        matches
+            .by_tournament
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // L'export embarque les valeurs telles que les sous-niveaux les fournissent.
+    let (_, exported) = export(&app, &admin, "json").await;
+    let exported: Value = serde_json::from_str(&exported).unwrap();
+    assert_eq!(
+        exported["tournaments"][0]["steps"],
+        json!([{ "format": "pool", "anything": [1, 2] }, { "whatever": true }])
+    );
+    assert_eq!(
+        exported["tournaments"][0]["matches"],
+        json!([{ "round": 1 }])
+    );
+    let (_, csv) = export(&app, &admin, "csv").await;
+    let (status, _) = send_raw(&app, "/tournaments/import?format=csv", &admin, &csv).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Leur validation décide : un fichier refusé n'écrit rien.
+    let bad = tournament(json!({ "name": "Autre", "steps": [42] }));
+    let (status, body) = send_raw(&app, "/tournaments/import", &admin, &bad).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["errors"]["file"].as_str().unwrap().contains("objet"));
+    let (_, list) = get(&app, "/tournaments", &admin).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
 }

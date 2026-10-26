@@ -2,11 +2,12 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, ParticipantInput, ParticipantStatus, Role, ScoringRule,
-    ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, StoreError, Team,
-    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentInput,
-    TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
+    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate,
+    StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament,
+    TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus, TournamentTeam,
+    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
+    UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
@@ -332,6 +333,7 @@ fn tournament_conflict(err: sqlx::Error) -> StoreError {
                 return StoreError::AlreadyParticipant;
             }
             Some("scoring_rule_tournament_stat_key") => return StoreError::ScoringRuleTaken,
+            Some("tournaments_game_name_lower_key") => return StoreError::TournamentNameTaken,
             _ => {}
         }
     }
@@ -1337,7 +1339,8 @@ impl AuthStore for PgStore {
         .bind(input.team_scoring_mode.as_str())
         .bind(input.team_scoring_n)
         .fetch_one(&self.pool)
-        .await?;
+        .await
+        .map_err(tournament_conflict)?;
         tournament(row)
     }
 
@@ -1379,7 +1382,8 @@ impl AuthStore for PgStore {
         .bind(update.team_scoring_n.is_some())
         .bind(update.team_scoring_n.flatten())
         .fetch_optional(&self.pool)
-        .await?
+        .await
+        .map_err(tournament_conflict)?
         .map(tournament)
         .transpose()
     }
@@ -1599,5 +1603,110 @@ impl AuthStore for PgStore {
         // Les points d'un inscrit viennent des résultats des étapes (`step_participant`, #52),
         // qui n'existent pas encore : aucun point n'est enregistré.
         Ok(HashMap::new())
+    }
+
+    async fn import_tournaments(
+        &self,
+        tournaments: Vec<TournamentImport>,
+    ) -> Result<Vec<(Tournament, bool)>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let mut result = Vec::with_capacity(tournaments.len());
+        for import in tournaments {
+            let TournamentImport {
+                input,
+                status,
+                rules,
+            } = import;
+            // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour.
+            let (id, created) = sqlx::query_as::<_, (Uuid, bool)>(
+                "INSERT INTO tournaments (game_id, name, description, start_date, end_date, \
+                     registration_open_at, registration_close_at, participant_type, team_size, \
+                     max_participants, team_scoring_mode, team_scoring_n, status) \
+                 VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6::timestamptz, \
+                     $7::timestamptz, $8, $9, $10, $11, $12, $13) \
+                 ON CONFLICT (game_id, lower(name)) DO UPDATE SET \
+                     name = EXCLUDED.name, description = EXCLUDED.description, \
+                     start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date, \
+                     registration_open_at = EXCLUDED.registration_open_at, \
+                     registration_close_at = EXCLUDED.registration_close_at, \
+                     participant_type = EXCLUDED.participant_type, team_size = EXCLUDED.team_size, \
+                     max_participants = EXCLUDED.max_participants, \
+                     team_scoring_mode = EXCLUDED.team_scoring_mode, \
+                     team_scoring_n = EXCLUDED.team_scoring_n, status = EXCLUDED.status, \
+                     updated_at = now() \
+                 RETURNING id, (xmax = 0)",
+            )
+            .bind(input.game_id)
+            .bind(input.name)
+            .bind(input.description)
+            .bind(input.start_date)
+            .bind(input.end_date)
+            .bind(input.registration_open_at)
+            .bind(input.registration_close_at)
+            .bind(input.participant_type.as_str())
+            .bind(input.team_size)
+            .bind(input.max_participants)
+            .bind(input.team_scoring_mode.as_str())
+            .bind(input.team_scoring_n)
+            .bind(status.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM scoring_rule WHERE tournament_id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            for rule in rules {
+                sqlx::query(
+                    "INSERT INTO scoring_rule (tournament_id, game_id, stat_id, mode, coefficient, points_table) \
+                     VALUES ($1, $2, $3, $4, $5::float8::numeric, $6::jsonb)",
+                )
+                .bind(id)
+                .bind(input.game_id)
+                .bind(rule.stat_id)
+                .bind(rule.definition.mode.as_str())
+                .bind(rule.definition.coefficient)
+                .bind(rule.definition.points_table.map(|table| table.to_string()))
+                .execute(&mut *tx)
+                .await?;
+            }
+            let row = sqlx::query_as::<_, TournamentRow>(&format!(
+                "SELECT {} FROM tournaments WHERE id = $1",
+                tournament_columns()
+            ))
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            result.push((tournament(row)?, created));
+        }
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    async fn replace_participants(
+        &self,
+        tournament_id: Uuid,
+        participants: Vec<ParticipantImport>,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM tournament_participant WHERE tournament_id = $1")
+            .bind(tournament_id)
+            .execute(&mut *tx)
+            .await?;
+        for participant in participants {
+            sqlx::query(
+                "INSERT INTO tournament_participant \
+                     (tournament_id, user_id, tournament_team_id, status, registered_at) \
+                 VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()))",
+            )
+            .bind(tournament_id)
+            .bind(participant.user_id)
+            .bind(participant.tournament_team_id)
+            .bind(participant.status.as_str())
+            .bind(participant.registered_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 }
