@@ -20,7 +20,10 @@ const KEY_MAX: usize = 64;
 
 /// Routes des statistiques, avec leur documentation OpenAPI.
 pub fn routes(cfg: &mut ServiceConfig) {
-    cfg.service(list_stats)
+    // `/stats/export` et `/stats/import` avant `/stats/{id}`.
+    cfg.service(crate::stat_io::export_stats)
+        .service(crate::stat_io::import_stats)
+        .service(list_stats)
         .service(get_stat)
         .service(create_stat)
         .service(update_stat)

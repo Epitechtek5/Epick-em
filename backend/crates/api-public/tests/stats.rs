@@ -96,6 +96,8 @@ async fn every_route_requires_a_token() {
         (TestRequest::get(), format!("/stats/{id}")),
         (TestRequest::patch(), format!("/stats/{id}")),
         (TestRequest::delete(), format!("/stats/{id}")),
+        (TestRequest::get(), "/stats/export".to_string()),
+        (TestRequest::post(), "/stats/import".to_string()),
         (TestRequest::get(), format!("/games/{game}/stats")),
         (TestRequest::put(), format!("/games/{game}/stats/{id}")),
         (TestRequest::delete(), format!("/games/{game}/stats/{id}")),
@@ -470,4 +472,232 @@ async fn a_stat_used_by_an_ongoing_tournament_cannot_be_deleted() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+async fn send_raw(app: &app_type!(), path: &str, token: &str, body: &str) -> (StatusCode, Value) {
+    call(
+        app,
+        request(TestRequest::post(), path, Some(token)).set_payload(body.to_string()),
+    )
+    .await
+}
+
+async fn export(app: &app_type!(), path: &str, token: &str) -> (StatusCode, String) {
+    let response = actix_web::test::call_service(
+        app,
+        request(TestRequest::get(), path, Some(token)).to_request(),
+    )
+    .await;
+    let status = response.status();
+    let bytes = actix_web::test::read_body(response).await;
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+async fn link(app: &app_type!(), admin: &str, game: &str, stat: &Value) {
+    let (status, _) = send(
+        app,
+        TestRequest::put(),
+        &format!("/games/{game}/stats/{}", stat["id"].as_str().unwrap()),
+        admin,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[actix_web::test]
+async fn exported_stats_are_imported_without_loss() {
+    for format in ["json", "csv"] {
+        let (_, app, admin, _) = setup().await;
+        let valorant = create_game(&app, &admin, "Valorant, \"FPS\"").await;
+        let dota = create_game(&app, &admin, "Dota 2").await;
+        let kills = create_stat(&app, &admin, "Éliminations, \"kills\"", "kills").await;
+        let (_, accuracy) = send(
+            &app,
+            TestRequest::post(),
+            "/stats",
+            &admin,
+            Some(json!({ "name": "Précision", "key": "accuracy", "type": "percent" })),
+        )
+        .await;
+        create_stat(&app, &admin, "Orpheline", "orphan").await;
+        link(&app, &admin, &valorant, &kills).await;
+        link(&app, &admin, &dota, &kills).await;
+        link(&app, &admin, &valorant, &accuracy).await;
+
+        let path = format!("/stats/export?format={format}");
+        let (status, file) = export(&app, &path, &admin).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Une base vierge dotée des mêmes jeux retrouve les mêmes statistiques et liaisons.
+        let (_, fresh, fresh_admin, _) = setup().await;
+        create_game(&fresh, &fresh_admin, "Valorant, \"FPS\"").await;
+        create_game(&fresh, &fresh_admin, "Dota 2").await;
+        let import = format!("/stats/import?format={format}");
+        let (status, report) = send_raw(&fresh, &import, &fresh_admin, &file).await;
+        assert_eq!(status, StatusCode::OK, "{report}");
+        assert_eq!(report, json!({ "created": 3, "updated": 0 }));
+        let (_, again) = export(&fresh, &path, &fresh_admin).await;
+        assert_eq!(again, file, "{format}");
+
+        // Réimporter met à jour sans rien créer ni perdre.
+        let (_, report) = send_raw(&fresh, &import, &fresh_admin, &file).await;
+        assert_eq!(report, json!({ "created": 0, "updated": 3 }));
+        let (_, again) = export(&fresh, &path, &fresh_admin).await;
+        assert_eq!(again, file, "{format}");
+    }
+}
+
+#[actix_web::test]
+async fn import_updates_existing_stats_and_replaces_their_games() {
+    let (_, app, admin, _) = setup().await;
+    let valorant = create_game(&app, &admin, "Valorant").await;
+    create_game(&app, &admin, "Dota 2").await;
+    let kills = create_stat(&app, &admin, "Kills", "kills").await;
+    link(&app, &admin, &valorant, &kills).await;
+
+    let file = r#"{ "version": 1, "stats": [
+        { "name": "Éliminations", "key": "kills", "type": "percent", "games": ["dota 2"] } ] }"#;
+    let (status, report) = send_raw(&app, "/stats/import", &admin, file).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report, json!({ "created": 0, "updated": 1 }));
+
+    let id = kills["id"].as_str().unwrap();
+    let (_, stat) = send(
+        &app,
+        TestRequest::get(),
+        &format!("/stats/{id}"),
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(stat["name"], "Éliminations");
+    assert_eq!(stat["type"], "percent");
+    let (_, list) = send(
+        &app,
+        TestRequest::get(),
+        &format!("/games/{valorant}/stats"),
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(list, json!([]));
+}
+
+#[actix_web::test]
+async fn invalid_files_change_nothing() {
+    let (_, app, admin, _) = setup().await;
+    create_game(&app, &admin, "Valorant").await;
+    let bad = [
+        ("json", "pas du json"),
+        ("json", r#"{ "version": 9, "stats": [] }"#),
+        (
+            "json",
+            r#"{ "version": 1, "stats": [
+                { "name": "Ok", "key": "ok", "type": "flat" },
+                { "name": " ", "key": "Mauvaise Clé", "type": "flat" } ] }"#,
+        ),
+        (
+            "json",
+            r#"{ "version": 1, "stats": [
+                { "name": "A", "key": "a", "type": "flat" },
+                { "name": "B", "key": "a", "type": "flat" } ] }"#,
+        ),
+        (
+            "json",
+            r#"{ "version": 1, "stats": [
+                { "name": "A", "key": "a", "type": "flat", "games": ["Inconnu"] } ] }"#,
+        ),
+        ("csv", "name,key\nA,a\n"),
+        ("csv", "name,key,type,games\nA,a,ratio,\n"),
+        ("xml", "<stats/>"),
+    ];
+    for (format, file) in bad {
+        let (status, body) = send_raw(
+            &app,
+            &format!("/stats/import?format={format}"),
+            &admin,
+            file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{format}: {file}");
+        assert_eq!(body["error"], "invalid_request");
+    }
+    let (_, list) = send(&app, TestRequest::get(), "/stats", &admin, None).await;
+    assert_eq!(list, json!([]));
+}
+
+#[actix_web::test]
+async fn import_and_export_are_reserved_to_administrators() {
+    let (_, app, admin, user) = setup().await;
+    create_stat(&app, &admin, "Kills", "kills").await;
+    let (status, _) = export(&app, "/stats/export", &user).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = send_raw(
+        &app,
+        "/stats/import",
+        &user,
+        r#"{ "version": 1, "stats": [{ "name": "P", "key": "p", "type": "flat" }] }"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(&app, request(TestRequest::get(), "/stats/export", None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (_, list) = send(&app, TestRequest::get(), "/stats", &admin, None).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
+#[actix_web::test]
+async fn games_files_carry_their_stats() {
+    let (_, app, admin, _) = setup().await;
+    let valorant = create_game(&app, &admin, "Valorant").await;
+    let kills = create_stat(&app, &admin, "Kills", "kills").await;
+    link(&app, &admin, &valorant, &kills).await;
+
+    let (_, file) = export(&app, "/games/export", &admin).await;
+    let exported: Value = serde_json::from_str(&file).unwrap();
+    assert_eq!(
+        exported["games"][0]["stats"],
+        json!([{ "name": "Kills", "key": "kills", "type": "flat" }])
+    );
+
+    // Importer dans le jeu remplace ses statistiques ; celles du fichier sont créées au besoin.
+    let file = r#"{ "version": 1, "games": [{ "name": "VALORANT", "stats": [
+        { "name": "Placement", "key": "placement", "type": "flat" },
+        { "name": "Précision", "key": "accuracy", "type": "percent" } ] }] }"#;
+    let (status, report) = send_raw(&app, "/games/import", &admin, file).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    let (_, list) = send(
+        &app,
+        TestRequest::get(),
+        &format!("/games/{valorant}/stats"),
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(names(&list), ["Placement", "Précision"]);
+    let (_, all) = send(&app, TestRequest::get(), "/stats", &admin, None).await;
+    assert_eq!(all.as_array().unwrap().len(), 3, "kills n'est que délié");
+
+    for bad in [
+        r#"[1]"#,
+        r#"[{ "name": "A", "key": "Bad Key", "type": "flat" }]"#,
+        r#"[{ "name": "A", "key": "a", "type": "flat" }, { "name": "B", "key": "a", "type": "flat" }]"#,
+        r#"[{ "name": "A", "key": "a" }]"#,
+    ] {
+        let file =
+            format!(r#"{{ "version": 1, "games": [{{ "name": "Valorant", "stats": {bad} }}] }}"#);
+        let (status, body) = send_raw(&app, "/games/import", &admin, &file).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        assert!(body["errors"]["file"].as_str().unwrap().contains("stats"));
+    }
+    let (_, list) = send(
+        &app,
+        TestRequest::get(),
+        &format!("/games/{valorant}/stats"),
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(names(&list), ["Placement", "Précision"]);
 }

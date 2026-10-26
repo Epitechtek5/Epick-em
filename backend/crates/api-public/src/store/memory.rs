@@ -407,8 +407,66 @@ impl AuthStore for MemoryStore {
         Ok(true)
     }
 
+    async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError> {
+        let mut state = self.state();
+        Ok(stats
+            .into_iter()
+            .map(|input| state.upsert_stat(input))
+            .collect())
+    }
+
+    async fn set_game_stats(&self, game_id: Uuid, stat_ids: Vec<Uuid>) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if !state.games.iter().any(|g| g.id == game_id)
+            || !stat_ids
+                .iter()
+                .all(|id| state.stats.iter().any(|s| s.id == *id))
+        {
+            return Ok(false);
+        }
+        state.stat_games.retain(|(_, game)| *game != game_id);
+        state
+            .stat_games
+            .extend(stat_ids.into_iter().map(|stat_id| (stat_id, game_id)));
+        Ok(true)
+    }
+
+    async fn set_stat_games(&self, stat_id: Uuid, game_ids: Vec<Uuid>) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if !state.stats.iter().any(|s| s.id == stat_id)
+            || !game_ids
+                .iter()
+                .all(|id| state.games.iter().any(|g| g.id == *id))
+        {
+            return Ok(false);
+        }
+        state.stat_games.retain(|(stat, _)| *stat != stat_id);
+        state
+            .stat_games
+            .extend(game_ids.into_iter().map(|game_id| (stat_id, game_id)));
+        Ok(true)
+    }
+
     async fn unlink_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError> {
         Ok(self.state().stat_games.remove(&(stat_id, game_id)))
+    }
+}
+
+impl State {
+    fn upsert_stat(&mut self, input: StatInput) -> (Stat, bool) {
+        if let Some(stat) = self.stats.iter_mut().find(|s| s.key == input.key) {
+            stat.name = input.name;
+            stat.kind = input.kind;
+            return (stat.clone(), false);
+        }
+        let stat = Stat {
+            id: Uuid::new_v4(),
+            name: input.name,
+            key: input.key,
+            kind: input.kind,
+        };
+        self.stats.push(stat.clone());
+        (stat, true)
     }
 }
 
