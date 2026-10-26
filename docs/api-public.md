@@ -29,6 +29,14 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `DELETE /games/{id}` | JWT valide, **administrateur** | — | `204` |
 | `GET /games/export` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` | `200` fichier `games.json` / `games.csv` |
 | `POST /games/import` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` ; contenu du fichier en corps (256 Kio max) | `200` `{ created, updated }` |
+| `GET /stats` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, name, key, type }]`, par ordre alphabétique |
+| `GET /stats/{id}` | JWT valide | — | `200` `{ id, name, key, type }` |
+| `POST /stats` | JWT valide, **administrateur** | `{ name, key, type }` (`key` : slug unique, `type` : `flat` ou `percent`) | `201` `{ id, name, key, type }` |
+| `PATCH /stats/{id}` | JWT valide, **administrateur** | `{ name?, key?, type? }` | `200` `{ id, name, key, type }` |
+| `DELETE /stats/{id}` | JWT valide, **administrateur** | — | `204` ; `409` si le barème d'un tournoi `ongoing` s'en sert |
+| `GET /games/{id}/stats` | JWT valide | — | `200` `[{ id, name, key, type }]`, statistiques du jeu |
+| `PUT /games/{id}/stats/{stat_id}` | JWT valide, **administrateur** | — | `204` (sans effet si déjà liée) |
+| `DELETE /games/{id}/stats/{stat_id}` | JWT valide, **administrateur** | — | `204`, `404` si la liaison n'existe pas |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -75,6 +83,8 @@ Format `{ "error", "message", "errors"? }` :
 | `404` | `not_found` | compte ou jeu introuvable (ou identifiant qui n'est pas un UUID) |
 | `409` | `username_taken` | nom d'utilisateur déjà pris |
 | `409` | `game_name_taken` | nom de jeu déjà pris |
+| `409` | `stat_key_taken` | clé de statistique déjà prise |
+| `409` | `stat_in_use` | statistique utilisée par un tournoi en cours |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
 ## Configuration
