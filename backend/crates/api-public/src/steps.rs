@@ -609,7 +609,7 @@ fn step_error(err: StoreError) -> ApiError {
     }
 }
 
-fn tiebreak_value(criteria: Vec<String>) -> serde_json::Value {
+pub(crate) fn tiebreak_value(criteria: Vec<String>) -> serde_json::Value {
     serde_json::Value::Array(
         criteria
             .into_iter()
@@ -619,7 +619,7 @@ fn tiebreak_value(criteria: Vec<String>) -> serde_json::Value {
 }
 
 /// Valide les réglages d'une étape, un message par champ fautif.
-fn check(definition: &StepDefinition) -> Vec<(&'static str, String)> {
+pub(crate) fn check(definition: &StepDefinition) -> Vec<(&'static str, String)> {
     let mut errors = Vec::new();
     let ranges = [
         ("position", definition.position, 1, POSITION_MAX),
