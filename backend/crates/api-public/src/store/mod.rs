@@ -183,4 +183,9 @@ pub trait AuthStore: Send + Sync {
 
     /// Supprime le jeu ; `false` s'il n'existait pas.
     async fn delete_game(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par nom, sans tenir compte de la casse) les jeux donnés, en une
+    /// seule opération : en cas d'erreur, aucun n'est modifié. Chaque jeu est renvoyé avec
+    /// `true` s'il vient d'être créé. Les noms de `games` sont distincts.
+    async fn upsert_games(&self, games: Vec<GameInput>) -> Result<Vec<(Game, bool)>, StoreError>;
 }

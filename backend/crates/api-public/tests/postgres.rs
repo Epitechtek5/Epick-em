@@ -320,3 +320,33 @@ async fn games_are_unique_whatever_the_case_and_seeded() {
     assert!(!store.delete_game(created.id).await.unwrap());
     assert!(store.find_game(created.id).await.unwrap().is_none());
 }
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn games_are_upserted_by_name_in_one_transaction() {
+    let store = store().await;
+    let existing = unique("Existing");
+    let fresh = unique("Fresh");
+    let input = |name: &str, description: &str| GameInput {
+        name: name.to_string(),
+        description: description.to_string(),
+        images: Vec::new(),
+    };
+    let original = store.create_game(input(&existing, "avant")).await.unwrap();
+
+    let saved = store
+        .upsert_games(vec![
+            input(&existing.to_uppercase(), "après"),
+            input(&fresh, "neuf"),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(saved.len(), 2);
+    assert_eq!((saved[0].0.id, saved[0].1), (original.id, false));
+    assert_eq!(saved[0].0.description, "après");
+    assert!(saved[1].1);
+    assert_eq!(saved[1].0.name, fresh);
+
+    assert!(store.delete_game(original.id).await.unwrap());
+    assert!(store.delete_game(saved[1].0.id).await.unwrap());
+}

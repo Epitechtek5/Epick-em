@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod game_io;
 pub mod games;
 pub mod guard;
 pub mod openapi;

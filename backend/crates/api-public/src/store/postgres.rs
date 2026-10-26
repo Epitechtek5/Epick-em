@@ -336,4 +336,28 @@ impl AuthStore for PgStore {
             .await?;
         Ok(result.rows_affected() > 0)
     }
+
+    async fn upsert_games(&self, games: Vec<GameInput>) -> Result<Vec<(Game, bool)>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let mut result = Vec::with_capacity(games.len());
+        for input in games {
+            // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour.
+            let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, bool)>(
+                "INSERT INTO games (name, description, images) VALUES ($1, $2, $3) \
+                 ON CONFLICT (lower(name)) DO UPDATE SET \
+                     name = EXCLUDED.name, \
+                     description = EXCLUDED.description, \
+                     images = EXCLUDED.images \
+                 RETURNING id, name, description, images, (xmax = 0)",
+            )
+            .bind(input.name)
+            .bind(input.description)
+            .bind(input.images)
+            .fetch_one(&mut *tx)
+            .await?;
+            result.push((game((row.0, row.1, row.2, row.3)), row.4));
+        }
+        tx.commit().await?;
+        Ok(result)
+    }
 }
