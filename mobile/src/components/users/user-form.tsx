@@ -3,6 +3,11 @@ import { useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import { Button } from '@/components/ui/button';
+import { PasswordInput } from '@/components/ui/password-input';
+import { FormMessage } from '@/components/ui/feedback';
+import { Icon } from '@/components/ui/icon';
+import Tick02Icon from '@hugeicons/core-free-icons/Tick02Icon';
+import ShieldUserIcon from '@hugeicons/core-free-icons/ShieldUserIcon';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 
@@ -111,10 +116,13 @@ export function UserForm({
   return (
     <View className="gap-5">
       <View className="gap-2">
-        <Text nativeID="user-form-username">{t('common.username')}</Text>
+        <Text className="text-sm font-medium" nativeID="user-form-username">
+          {t('common.username')}
+        </Text>
         <Input
           accessibilityLabel={t('common.username')}
           accessibilityLabelledBy="user-form-username"
+          invalid={Boolean(errors.username)}
           accessibilityHint={t('common.usernameHint')}
           autoCapitalize="none"
           autoCorrect={false}
@@ -123,77 +131,87 @@ export function UserForm({
           onChangeText={(value) => updateField('username', value)}
         />
         {errors.username ? (
-          <Text accessibilityRole="alert" className="text-destructive">
-            {t(errors.username)}
-          </Text>
+          <FormMessage>{t(errors.username)}</FormMessage>
         ) : null}
       </View>
 
-      <View className="gap-2">
-        <Text nativeID="user-form-password">{t('common.newPassword')}</Text>
-        <Input
+      <View className="gap-2 border-t border-border pt-4">
+        <Text className="text-sm font-medium" nativeID="user-form-password">
+          {t('common.newPassword')}
+        </Text>
+        <Text variant="muted">{t('form.passwordHint')}</Text>
+        <PasswordInput
           accessibilityLabel={t('common.newPassword')}
           accessibilityLabelledBy="user-form-password"
-          secureTextEntry
+          invalid={Boolean(errors.password)}
           autoComplete="new-password"
           value={form.password}
           editable={!saving}
           onChangeText={(value) => updateField('password', value)}
         />
         {errors.password ? (
-          <Text accessibilityRole="alert" className="text-destructive">
-            {t(errors.password)}
-          </Text>
+          <FormMessage>{t(errors.password)}</FormMessage>
         ) : null}
       </View>
 
       <View className="gap-2">
-        <Text nativeID="user-form-confirm">
+        <Text className="text-sm font-medium" nativeID="user-form-confirm">
           {t('common.confirmNewPassword')}
         </Text>
-        <Input
+        <PasswordInput
           accessibilityLabel={t('common.confirmNewPassword')}
           accessibilityLabelledBy="user-form-confirm"
-          secureTextEntry
+          invalid={Boolean(errors.confirmPassword)}
           autoComplete="new-password"
           value={form.confirmPassword}
           editable={!saving}
           onChangeText={(value) => updateField('confirmPassword', value)}
         />
         {errors.confirmPassword ? (
-          <Text accessibilityRole="alert" className="text-destructive">
-            {t(errors.confirmPassword)}
-          </Text>
+          <FormMessage>{t(errors.confirmPassword)}</FormMessage>
         ) : null}
       </View>
 
       {allowRoleEdit ? (
         <View className="gap-2">
           <Text>{t('common.role')}</Text>
-          <View className="flex-row flex-wrap gap-2">
+          <View
+            className="gap-2"
+            accessibilityRole="radiogroup"
+            accessibilityLabel={t('common.role')}
+          >
             {(['admin', 'user', 'watcher'] as const).map((role) => (
               <Button
                 key={role}
-                variant={form.role === role ? 'default' : 'outline'}
+                variant="outline"
+                className={`justify-start gap-3 ${form.role === role ? 'border-primary bg-muted' : ''}`}
+                role="radio"
+                accessibilityRole="radio"
                 disabled={saving}
                 accessibilityLabel={t('account.role', { role })}
-                accessibilityState={{ selected: form.role === role }}
+                accessibilityState={{
+                  selected: form.role === role,
+                  checked: form.role === role,
+                }}
                 onPress={() => updateField('role', role)}
               >
-                <Text>{role}</Text>
+                <Icon
+                  icon={ShieldUserIcon}
+                  tone={form.role === role ? 'primary' : 'muted-foreground'}
+                />
+                <Text className="flex-1 text-left">{role}</Text>
+                {form.role === role ? (
+                  <Icon icon={Tick02Icon} tone="foreground" />
+                ) : null}
               </Button>
             ))}
           </View>
         </View>
       ) : null}
 
-      {error ? (
-        <Text accessibilityRole="alert" className="text-destructive">
-          {t(error)}
-        </Text>
-      ) : null}
+      {error ? <FormMessage>{t(error)}</FormMessage> : null}
 
-      {success ? <Text accessibilityRole="alert">{t(success)}</Text> : null}
+      {success ? <FormMessage success>{t(success)}</FormMessage> : null}
 
       <Button
         disabled={saving}

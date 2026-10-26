@@ -1,3 +1,4 @@
+import { colors } from '../src/theme/colors';
 import { useSyncExternalStore } from 'react';
 import ProfileScreen from '../src/screens/ProfileScreen';
 import { PreferencesProvider } from '../src/features/preferences/provider';
@@ -97,10 +98,10 @@ it.each([DefaultTheme, DarkTheme])(
       screen
         .getAllByTestId('settings-tab-icon')
         .map((icon) => icon.props.color),
-    ).toContain(theme.colors.primary);
+    ).toContain(colors[theme.dark ? 'dark' : 'light']['primary-foreground']);
     expect(
       screen.getAllByTestId('users-tab-icon').map((icon) => icon.props.color),
-    ).toContain(theme.colors.text);
+    ).toContain(colors[theme.dark ? 'dark' : 'light']['muted-foreground']);
   },
 );
 it.each(['user', 'watcher'] as const)(

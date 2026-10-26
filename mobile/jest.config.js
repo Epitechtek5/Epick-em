@@ -1,5 +1,7 @@
 module.exports = {
   preset: 'jest-expo',
+  resolver: require.resolve('react-native-reanimated/jest/resolver'),
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   transformIgnorePatterns:
     require('jest-expo/jest-preset').transformIgnorePatterns.map((pattern) =>
       pattern.replace(

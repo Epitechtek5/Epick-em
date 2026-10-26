@@ -1,14 +1,20 @@
 import { cn } from '@/lib/utils';
+import { useState } from 'react';
 import { Platform, TextInput } from 'react-native';
 
 function Input({
   className,
+  invalid = false,
+  onFocus,
+  onBlur,
   ...props
-}: React.ComponentProps<typeof TextInput> & React.RefAttributes<TextInput>) {
+}: React.ComponentProps<typeof TextInput> &
+  React.RefAttributes<TextInput> & { invalid?: boolean }) {
+  const [focused, setFocused] = useState(false);
   return (
     <TextInput
       className={cn(
-        'dark:bg-input/30 border-input bg-background text-foreground flex h-10 w-full min-w-0 flex-row items-center rounded-md border px-3 py-1 text-base leading-5 shadow-sm shadow-black/5 sm:h-9',
+        'dark:bg-input/30 border-input bg-background text-foreground flex min-h-12 w-full min-w-0 flex-row items-center rounded-md border px-3 py-3 text-base leading-5 shadow-sm shadow-black/5',
         props.editable === false &&
           cn(
             'opacity-50',
@@ -24,9 +30,19 @@ function Input({
           ),
           native: 'placeholder:text-muted-foreground/50',
         }),
+        focused && 'border-ring',
+        invalid && 'border-destructive',
         className,
       )}
       {...props}
+      onFocus={(event) => {
+        setFocused(true);
+        onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        setFocused(false);
+        onBlur?.(event);
+      }}
     />
   );
 }

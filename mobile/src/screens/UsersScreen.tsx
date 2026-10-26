@@ -1,9 +1,10 @@
+import { ScreenState, FormMessage } from '@/components/ui/feedback';
+import { UserListItem } from '@/components/users/user-list-item';
 import { useTranslation } from '@/i18n';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Pressable,
   RefreshControl,
   View,
 } from 'react-native';
@@ -72,71 +73,94 @@ export default function UsersScreen() {
 
   return (
     <View className="flex-1 bg-background px-5 py-5">
-      <Text variant="h2" className="mb-2">
-        {t('users.title')}
-      </Text>
-
-      <Text className="mb-5 text-muted-foreground">
-        {t('users.description')}
-      </Text>
-
-      {error ? (
-        <View className="mb-4 gap-3">
-          <Text accessibilityRole="alert" className="text-destructive">
-            {t(error)}
+      <View className="mb-4 gap-1">
+        <Text className="leading-6 text-muted-foreground">
+          {t('users.description')}
+        </Text>
+        {!loading ? (
+          <Text variant="small">
+            {t('users.pageSummary', { count: users.length })}
           </Text>
+        ) : null}
+      </View>
+
+      {error && users.length > 0 ? (
+        <View className="mb-4 gap-3">
+          <FormMessage>{t(error)}</FormMessage>
           <Button variant="outline" onPress={() => void loadPage(page)}>
             <Text>{t('common.retry')}</Text>
           </Button>
         </View>
       ) : null}
 
-      {loading ? (
-        <ActivityIndicator accessibilityLabel={t('users.loading')} />
+      {loading && !refreshing && users.length === 0 ? (
+        <ScreenState loading message={t('users.loading')} />
       ) : (
         <FlatList
           data={users}
+          contentContainerClassName="overflow-hidden rounded-xl bg-card"
+          ItemSeparatorComponent={() => (
+            <View className="mx-4 border-t border-border" />
+          )}
+          ListFooterComponent={
+            loading && !refreshing ? (
+              <ActivityIndicator
+                className="py-4"
+                accessibilityLabel={t('users.loading')}
+              />
+            ) : undefined
+          }
           keyExtractor={(item) => String(item.id)}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={refresh} />
+            <RefreshControl
+              accessibilityLabel={t('users.refresh')}
+              refreshing={refreshing}
+              onRefresh={refresh}
+            />
           }
           ListEmptyComponent={
-            <Text className="py-6 text-center text-muted-foreground">
-              {t('users.empty')}
-            </Text>
+            error ? (
+              <ScreenState
+                error
+                message={t(error)}
+                onRetry={() => void loadPage(page)}
+              />
+            ) : (
+              <ScreenState message={t('users.empty')} />
+            )
           }
           renderItem={({ item }) => (
-            <Pressable
-              className="mb-3 min-h-14 justify-center rounded-md border border-border bg-card px-4 py-3"
-              accessibilityRole="button"
-              accessibilityLabel={t('users.view', { username: item.username })}
+            <UserListItem
+              user={item}
+              disabled={loading}
               onPress={() =>
                 router.push({
                   pathname: '/(authenticated)/user/[id]',
                   params: { id: item.id },
                 })
               }
-            >
-              <Text className="font-semibold">{item.username}</Text>
-              <Text className="text-sm text-muted-foreground">{item.role}</Text>
-            </Pressable>
+            />
           )}
         />
       )}
 
-      <View className="flex-row items-center justify-between gap-3 pt-4">
+      <View className="flex-row flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
         <Button
           variant="outline"
+          size="sm"
           disabled={loading || page === 0}
           onPress={() => void loadPage(page - 1)}
         >
           <Text>{t('users.previous')}</Text>
         </Button>
 
-        <Text>{t('users.page', { page: page + 1 })}</Text>
+        <Text className="text-sm text-muted-foreground">
+          {t('users.page', { page: page + 1 })}
+        </Text>
 
         <Button
           variant="outline"
+          size="sm"
           disabled={loading || !hasNext}
           onPress={() => void loadPage(page + 1)}
         >

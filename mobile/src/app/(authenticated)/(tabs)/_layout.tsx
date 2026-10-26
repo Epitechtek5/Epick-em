@@ -1,18 +1,31 @@
 import { Tabs } from 'expo-router';
-import { HugeiconsIcon } from '@hugeicons/react-native';
+import { TabIcon } from '@/components/ui/tab-icon';
+import { colors as themeColors } from '@/theme/colors';
 import Settings01Icon from '@hugeicons/core-free-icons/Settings01Icon';
 import UserGroupIcon from '@hugeicons/core-free-icons/UserGroupIcon';
+import { useReducedMotionPreference } from '@/lib/motion';
 import { useTheme } from '@react-navigation/native';
 import { useTranslation } from '@/i18n';
 
 export default function TabsLayout() {
   const { t } = useTranslation();
-  const { colors } = useTheme();
+  const reducedMotion = useReducedMotionPreference();
+  const { colors, dark } = useTheme();
+  const palette = dark ? themeColors.dark : themeColors.light;
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.text,
+        animation: reducedMotion ? 'none' : 'fade',
+        transitionSpec: {
+          animation: 'timing',
+          config: { duration: reducedMotion ? 0 : 180 },
+        },
+        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
+        tabBarItemStyle: { minHeight: 48, paddingVertical: 2 },
+        headerShadowVisible: false,
+        tabBarHideOnKeyboard: true,
+        tabBarActiveTintColor: colors.text,
+        tabBarInactiveTintColor: palette['muted-foreground'],
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
@@ -27,12 +40,11 @@ export default function TabsLayout() {
         options={{
           title: t('settings.title'),
           tabBarAccessibilityLabel: t('settings.title'),
-          tabBarIcon: ({ color, size }) => (
-            <HugeiconsIcon
+          tabBarIcon: ({ focused, size }) => (
+            <TabIcon
               icon={Settings01Icon}
               size={size}
-              color={color}
-              accessible={false}
+              focused={focused}
               testID="settings-tab-icon"
             />
           ),
@@ -43,12 +55,11 @@ export default function TabsLayout() {
         options={{
           title: t('users.title'),
           tabBarAccessibilityLabel: t('users.title'),
-          tabBarIcon: ({ color, size }) => (
-            <HugeiconsIcon
+          tabBarIcon: ({ focused, size }) => (
+            <TabIcon
               icon={UserGroupIcon}
               size={size}
-              color={color}
-              accessible={false}
+              focused={focused}
               testID="users-tab-icon"
             />
           ),

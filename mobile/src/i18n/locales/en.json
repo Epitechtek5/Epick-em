@@ -13,7 +13,9 @@
     "restoring": "Restoring session",
     "usernameHint": "3 to 32 letters, numbers, underscores, dots or hyphens",
     "logo": "Epick'em logo",
-    "back": "Back"
+    "back": "Back",
+    "showPassword": "Show {{label}}",
+    "hidePassword": "Hide {{label}}"
   },
   "login": {
     "title": "Welcome back",
@@ -34,7 +36,9 @@
     "explanation": "You can now sign in with your credentials.",
     "login": "Go to login",
     "hasAccount": "Already have an account?",
-    "failed": "Unable to create account. Please try again."
+    "failed": "Unable to create account. Please try again.",
+    "completeTitle": "Account created",
+    "completeDescription": "Your next prediction starts here."
   },
   "settings": {
     "title": "Settings",
@@ -52,7 +56,8 @@
     "loggingOut": "Logging out",
     "localLogout": "Signed out locally",
     "logoutFailed": "Server logout could not be confirmed. Please check your connection.",
-    "storageFailed": "Unable to save preferences. Please try again."
+    "storageFailed": "Unable to save preferences. Please try again.",
+    "editDescription": "Username and password"
   },
   "account": {
     "id": "Account ID: {{id}}",
@@ -63,7 +68,8 @@
     "delete": "Delete account",
     "deleteMine": "Delete my account",
     "deleteWarning": "This action is permanent. Your account will be deleted.",
-    "irreversible": "Deleting your account cannot be undone."
+    "irreversible": "Deleting your account cannot be undone.",
+    "identifier": "Account UUID"
   },
   "users": {
     "title": "Users",
@@ -73,7 +79,11 @@
     "view": "View profile for {{username}}",
     "previous": "Previous",
     "next": "Next",
-    "page": "Page {{page}}"
+    "page": "Page {{page}}",
+    "pageSummary_one": "{{count}} account on this page",
+    "pageSummary_other": "{{count}} accounts on this page",
+    "rowHint": "Role: {{role}}. Account UUID: {{id}}. Opens profile.",
+    "refresh": "Refresh users"
   },
   "user": {
     "title": "User profile",
@@ -86,7 +96,8 @@
     "delete": "Delete user",
     "deleteNamed": "Delete user {{username}}",
     "confirmDelete": "Permanently delete {{username}}?",
-    "thisUser": "this user"
+    "thisUser": "this user",
+    "deleteWarning": "This permanently removes the account. You will be asked to confirm."
   },
   "validation": {
     "username": "Username must contain 3–32 letters, numbers, _, . or -.",
@@ -96,7 +107,8 @@
   "form": {
     "noChanges": "No changes to save.",
     "saved": "Changes saved successfully.",
-    "failed": "Unable to save changes."
+    "failed": "Unable to save changes.",
+    "passwordHint": "Leave blank to keep the current password."
   },
   "errors": {
     "invalid": "Invalid information. Check the submitted fields.",

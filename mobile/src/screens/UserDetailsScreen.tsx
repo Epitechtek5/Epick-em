@@ -1,6 +1,10 @@
+import { AccountSummary } from '@/components/account-summary';
+import { ScreenState } from '@/components/ui/feedback';
+import { Icon } from '@/components/ui/icon';
+import PencilEdit02Icon from '@hugeicons/core-free-icons/PencilEdit02Icon';
 import { useTranslation } from '@/i18n';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, router } from 'expo-router';
 
 import { Button } from '@/components/ui/button';
@@ -51,26 +55,15 @@ export default function UserDetailsScreen() {
   return (
     <ScrollView
       className="flex-1 bg-background"
-      contentContainerClassName="gap-5 px-5 py-8"
+      contentContainerClassName="gap-5 px-5 py-5"
     >
-      <Text variant="h2">{t('user.title')}</Text>
-
       {loading ? (
-        <ActivityIndicator accessibilityLabel={t('user.loading')} />
+        <ScreenState loading message={t('user.loading')} />
       ) : error ? (
-        <View className="gap-3">
-          <Text accessibilityRole="alert" className="text-destructive">
-            {t(error)}
-          </Text>
-          <Button variant="outline" onPress={() => void loadUser()}>
-            <Text>{t('common.retry')}</Text>
-          </Button>
-        </View>
+        <ScreenState error message={t(error)} onRetry={() => void loadUser()} />
       ) : user ? (
         <View className="gap-4">
-          <Text variant="h3">{user.username}</Text>
-          <Text>{t('account.id', { id: user.id })}</Text>
-          <Text>{t('account.role', { role: user.role })}</Text>
+          <AccountSummary user={user} />
 
           {currentUser?.role === 'admin' && (
             <Button
@@ -84,6 +77,7 @@ export default function UserDetailsScreen() {
                 })
               }
             >
+              <Icon icon={PencilEdit02Icon} tone="primary-foreground" />
               <Text>{t('admin.title')}</Text>
             </Button>
           )}

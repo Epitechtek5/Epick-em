@@ -29,6 +29,10 @@ it('centers confirmation and explanation in both languages while preserving regi
   });
   await i18n.changeLanguage('en');
   await render(<RegisterScreen />);
+  expect(screen.getByLabelText('Password').props.secureTextEntry).toBe(true);
+  expect(screen.getByLabelText('Confirm password').props.secureTextEntry).toBe(
+    true,
+  );
   await fireEvent.changeText(screen.getByLabelText('Username'), 'alice');
   await fireEvent.changeText(screen.getByLabelText('Password'), 'password');
   await fireEvent.changeText(

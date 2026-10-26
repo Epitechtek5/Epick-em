@@ -13,7 +13,9 @@
     "restoring": "Restauration de la session",
     "usernameHint": "3 à 32 lettres, chiffres, tirets bas, points ou tirets",
     "logo": "Logo Epick'em",
-    "back": "Retour"
+    "back": "Retour",
+    "showPassword": "Afficher {{label}}",
+    "hidePassword": "Masquer {{label}}"
   },
   "login": {
     "title": "Heureux de vous revoir",
@@ -34,7 +36,9 @@
     "explanation": "Vous pouvez maintenant vous connecter avec vos identifiants.",
     "login": "Aller à la connexion",
     "hasAccount": "Vous avez déjà un compte ?",
-    "failed": "Création du compte impossible. Veuillez réessayer."
+    "failed": "Création du compte impossible. Veuillez réessayer.",
+    "completeTitle": "Compte créé",
+    "completeDescription": "Votre prochain pronostic commence ici."
   },
   "settings": {
     "title": "Paramètres",
@@ -52,7 +56,8 @@
     "loggingOut": "Déconnexion",
     "localLogout": "Déconnexion locale effectuée",
     "logoutFailed": "La déconnexion du serveur n’a pas pu être confirmée. Vérifiez votre connexion.",
-    "storageFailed": "Enregistrement des préférences impossible. Veuillez réessayer."
+    "storageFailed": "Enregistrement des préférences impossible. Veuillez réessayer.",
+    "editDescription": "Nom d’utilisateur et mot de passe"
   },
   "account": {
     "id": "Identifiant du compte : {{id}}",
@@ -63,7 +68,8 @@
     "delete": "Supprimer le compte",
     "deleteMine": "Supprimer mon compte",
     "deleteWarning": "Cette action est définitive. Votre compte sera supprimé.",
-    "irreversible": "La suppression de votre compte est irréversible."
+    "irreversible": "La suppression de votre compte est irréversible.",
+    "identifier": "UUID du compte"
   },
   "users": {
     "title": "Utilisateurs",
@@ -73,7 +79,11 @@
     "view": "Voir le profil de {{username}}",
     "previous": "Précédent",
     "next": "Suivant",
-    "page": "Page {{page}}"
+    "page": "Page {{page}}",
+    "pageSummary_one": "{{count}} compte sur cette page",
+    "pageSummary_other": "{{count}} comptes sur cette page",
+    "rowHint": "Rôle : {{role}}. UUID du compte : {{id}}. Ouvre le profil.",
+    "refresh": "Actualiser les utilisateurs"
   },
   "user": {
     "title": "Profil utilisateur",
@@ -86,7 +96,8 @@
     "delete": "Supprimer l’utilisateur",
     "deleteNamed": "Supprimer l’utilisateur {{username}}",
     "confirmDelete": "Supprimer définitivement {{username}} ?",
-    "thisUser": "cet utilisateur"
+    "thisUser": "cet utilisateur",
+    "deleteWarning": "Cette action supprime définitivement le compte. Une confirmation vous sera demandée."
   },
   "validation": {
     "username": "Le nom d’utilisateur doit contenir 3 à 32 lettres, chiffres, _, . ou -.",
@@ -96,7 +107,8 @@
   "form": {
     "noChanges": "Aucune modification à enregistrer.",
     "saved": "Modifications enregistrées avec succès.",
-    "failed": "Enregistrement des modifications impossible."
+    "failed": "Enregistrement des modifications impossible.",
+    "passwordHint": "Laissez ce champ vide pour conserver le mot de passe actuel."
   },
   "errors": {
     "invalid": "Informations invalides. Vérifiez les champs saisis.",

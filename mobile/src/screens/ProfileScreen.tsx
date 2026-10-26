@@ -4,7 +4,12 @@ import { ActivityIndicator, Alert, ScrollView, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { AccountSummary } from '@/components/account-summary';
+import { AccountEditor } from '@/components/account-editor';
+import { Icon } from '@/components/ui/icon';
+import { FormMessage } from '@/components/ui/feedback';
+import Logout01Icon from '@hugeicons/core-free-icons/Logout01Icon';
+import Delete02Icon from '@hugeicons/core-free-icons/Delete02Icon';
 import { Text } from '@/components/ui/text';
 import { PreferenceSections } from '@/components/preference-sections';
 import { UserForm } from '@/components/users/user-form';
@@ -95,56 +100,45 @@ export default function ProfileScreen() {
   return (
     <ScrollView
       className="flex-1 bg-background"
-      contentContainerClassName="gap-6 px-5 py-6"
+      contentContainerClassName="gap-6 px-5 py-5"
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="interactive"
+      automaticallyAdjustKeyboardInsets
     >
-      <Text variant="h2">{t('settings.title')}</Text>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('settings.account')}</CardTitle>
-        </CardHeader>
-        <CardContent className="gap-2">
-          <Text>{t('account.username', { username: user.username })}</Text>
-          <Text>{t('account.id', { id: user.id })}</Text>
-          <Text>{t('account.role', { role: user.role })}</Text>
-        </CardContent>
-      </Card>
-
-      <View className="gap-4">
-        <Text variant="h3">{t('settings.edit')}</Text>
-        <UserForm user={user} onSave={saveProfile} />
-      </View>
-
-      <View className="gap-3 border-t border-border pt-6">
-        <Text variant="h3">{t('account.danger')}</Text>
-        <Text className="text-muted-foreground">
-          {t('account.irreversible')}
+      <View className="gap-3">
+        <Text variant="small" role="heading" aria-level={2}>
+          {t('settings.account')}
         </Text>
-
-        {error ? (
-          <Text accessibilityRole="alert" className="text-destructive">
-            {t(error)}
-          </Text>
-        ) : null}
-
-        <Button
-          variant="destructive"
-          disabled={deleting}
-          accessibilityLabel={t('account.deleteMine')}
-          onPress={requestDeletion}
-        >
-          {deleting ? (
-            <ActivityIndicator accessibilityLabel={t('common.loading')} />
-          ) : (
-            <Text>{t('account.deleteMine')}</Text>
-          )}
-        </Button>
+        <AccountSummary user={user} />
+        <AccountEditor>
+          <UserForm user={user} onSave={saveProfile} />
+        </AccountEditor>
+        <View className="gap-3 pt-1">
+          <Text variant="muted">{t('account.irreversible')}</Text>
+          {error ? <FormMessage>{t(error)}</FormMessage> : null}
+          <Button
+            variant="ghost"
+            className="justify-start px-0"
+            disabled={deleting}
+            accessibilityLabel={t('account.deleteMine')}
+            onPress={requestDeletion}
+          >
+            {deleting ? (
+              <ActivityIndicator accessibilityLabel={t('common.loading')} />
+            ) : (
+              <Icon icon={Delete02Icon} tone="destructive" />
+            )}
+            <Text className="text-destructive">{t('account.deleteMine')}</Text>
+          </Button>
+        </View>
       </View>
       <PreferenceSections />
-      <View className="gap-3 border-t border-border pt-6">
-        <Text variant="h3">{t('settings.session')}</Text>
+      <View className="gap-3">
+        <Text variant="small" role="heading" aria-level={2}>
+          {t('settings.session')}
+        </Text>
         <Button
+          variant="outline"
           disabled={loggingOut || deleting}
           onPress={() => void handleLogout()}
           accessibilityLabel={t('settings.logout')}
@@ -152,8 +146,9 @@ export default function ProfileScreen() {
           {loggingOut ? (
             <ActivityIndicator accessibilityLabel={t('settings.loggingOut')} />
           ) : (
-            <Text>{t('settings.logout')}</Text>
+            <Icon icon={Logout01Icon} tone="foreground" />
           )}
+          <Text>{t('settings.logout')}</Text>
         </Button>
       </View>
     </ScrollView>

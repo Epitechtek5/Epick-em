@@ -1,7 +1,10 @@
+import { AuthScreen } from '@/components/auth-screen';
+import { PasswordInput } from '@/components/ui/password-input';
+import { FormMessage } from '@/components/ui/feedback';
 import { useTranslation } from '@/i18n';
 import { Link, Redirect } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,73 +44,85 @@ export default function LoginScreen() {
   }
   if (user) return <Redirect href="/" />;
   return (
-    <KeyboardAvoidingView
-      className="flex-1 bg-background"
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        contentContainerClassName="flex-grow justify-center px-6 py-12"
-        keyboardShouldPersistTaps="handled"
-      >
-        <View className="mx-auto w-full max-w-md gap-6">
-          <AuthHeader
-            title={t('login.title')}
-            description={t('login.description')}
+    <AuthScreen>
+      <AuthHeader
+        title={t('login.title')}
+        description={t('login.description')}
+      />
+
+      <View className="gap-5">
+        <View className="gap-2">
+          <Text className="text-sm font-medium" nativeID="login-username-label">
+            {t('common.username')}
+          </Text>
+          <Input
+            accessibilityLabel={t('common.username')}
+            accessibilityLabelledBy="login-username-label"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="username"
+            value={username}
+            onChangeText={(value) => {
+              setUsername(value);
+              setError('');
+            }}
+            editable={!submitting}
+            invalid={
+              error === 'login.invalid' ||
+              (error === 'login.missing' && !username)
+            }
           />
-
-          <View className="gap-4">
-            <View className="gap-2">
-              <Text nativeID="login-username-label">
-                {t('common.username')}
-              </Text>
-              <Input
-                accessibilityLabel={t('common.username')}
-                accessibilityLabelledBy="login-username-label"
-                autoCapitalize="none"
-                autoCorrect={false}
-                autoComplete="username"
-                value={username}
-                onChangeText={setUsername}
-              />
-            </View>
-
-            <View className="gap-2">
-              <Text nativeID="login-password-label">
-                {t('common.password')}
-              </Text>
-              <Input
-                accessibilityLabel={t('common.password')}
-                accessibilityLabelledBy="login-password-label"
-                secureTextEntry
-                autoComplete="current-password"
-                value={password}
-                onChangeText={setPassword}
-              />
-            </View>
-
-            <Button
-              disabled={submitting || initializing}
-              onPress={() => void submit()}
-              accessibilityLabel={t('login.submit')}
-            >
-              <Text>{t(submitting ? 'login.submitting' : 'login.submit')}</Text>
-            </Button>
-
-            {error ? <Text accessibilityRole="alert">{t(error)}</Text> : null}
-          </View>
-
-          <View className="flex-row flex-wrap justify-center gap-1">
-            <Text className="text-muted-foreground">
-              {t('login.noAccount')}
-            </Text>
-            <Link href="/register">
-              <Text className="font-semibold text-primary">
-                {t('login.create')}
-              </Text>
-            </Link>
-          </View>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+
+        <View className="gap-2">
+          <Text className="text-sm font-medium" nativeID="login-password-label">
+            {t('common.password')}
+          </Text>
+          <PasswordInput
+            accessibilityLabel={t('common.password')}
+            accessibilityLabelledBy="login-password-label"
+            autoComplete="current-password"
+            value={password}
+            onChangeText={(value) => {
+              setPassword(value);
+              setError('');
+            }}
+            editable={!submitting}
+            invalid={
+              error === 'login.invalid' ||
+              (error === 'login.missing' && !password)
+            }
+            returnKeyType="go"
+            onSubmitEditing={() => {
+              if (!initializing) void submit();
+            }}
+          />
+        </View>
+
+        <Button
+          disabled={submitting || initializing}
+          onPress={() => void submit()}
+          accessibilityLabel={t('login.submit')}
+        >
+          {submitting ? (
+            <ActivityIndicator accessibilityLabel={t('login.submitting')} />
+          ) : null}
+          <Text>{t(submitting ? 'login.submitting' : 'login.submit')}</Text>
+        </Button>
+
+        {error ? <FormMessage>{t(error)}</FormMessage> : null}
+      </View>
+
+      <View className="flex-row flex-wrap justify-center gap-1">
+        <Text className="text-sm text-muted-foreground">
+          {t('login.noAccount')}
+        </Text>
+        <Link href="/register">
+          <Text className="font-semibold text-primary">
+            {t('login.create')}
+          </Text>
+        </Link>
+      </View>
+    </AuthScreen>
   );
 }

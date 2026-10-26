@@ -1,14 +1,14 @@
+import { AuthScreen } from '@/components/auth-screen';
+import { PasswordInput } from '@/components/ui/password-input';
+import { FormMessage } from '@/components/ui/feedback';
 import { useTranslation } from '@/i18n';
 import { Link, Redirect } from 'expo-router';
 import { useState } from 'react';
-import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  View,
-} from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
 
+import { Card, CardContent } from '@/components/ui/card';
+import { Icon } from '@/components/ui/icon';
+import CheckmarkCircle02Icon from '@hugeicons/core-free-icons/CheckmarkCircle02Icon';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
@@ -81,137 +81,130 @@ export default function RegisterScreen() {
   if (user) return <Redirect href="/" />;
 
   return (
-    <KeyboardAvoidingView
-      className="flex-1 bg-background"
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        contentContainerClassName="flex-grow justify-center px-6 py-12"
-        keyboardShouldPersistTaps="handled"
-      >
-        <View className="mx-auto w-full max-w-md gap-6">
-          <AuthHeader
-            title={t('register.title')}
-            description={t('register.description')}
-          />
+    <AuthScreen>
+      <AuthHeader
+        title={t(created ? 'register.completeTitle' : 'register.title')}
+        description={t(
+          created ? 'register.completeDescription' : 'register.description',
+        )}
+      />
 
-          {created ? (
-            <View className="gap-4">
-              <Text
-                accessibilityRole="alert"
-                className="text-center text-foreground"
-              >
-                {t('register.success')}
-              </Text>
-              <Text className="text-center text-muted-foreground">
-                {t('register.explanation')}
-              </Text>
-              <Link href="/login" asChild>
-                <Button>
-                  <Text>{t('register.login')}</Text>
-                </Button>
-              </Link>
+      {created ? (
+        <Card>
+          <CardContent className="gap-5">
+            <View className="items-center">
+              <View className="h-14 w-14 items-center justify-center rounded-lg bg-muted">
+                <Icon icon={CheckmarkCircle02Icon} tone="primary" size={30} />
+              </View>
             </View>
-          ) : (
-            <View className="gap-4">
-              <View className="gap-2">
-                <Text nativeID="register-username-label">
-                  {t('common.username')}
-                </Text>
-                <Input
-                  accessibilityLabel={t('common.username')}
-                  accessibilityLabelledBy="register-username-label"
-                  accessibilityHint={t('common.usernameHint')}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="username-new"
-                  value={form.username}
-                  onChangeText={(value) => updateField('username', value)}
-                  editable={!isSubmitting}
-                />
-                {errors.username && (
-                  <Text accessibilityRole="alert" className="text-destructive">
-                    {t(errors.username)}
-                  </Text>
-                )}
-              </View>
-
-              <View className="gap-2">
-                <Text nativeID="register-password-label">
-                  {t('common.password')}
-                </Text>
-                <Input
-                  accessibilityLabel={t('common.password')}
-                  accessibilityLabelledBy="register-password-label"
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoComplete="new-password"
-                  value={form.password}
-                  onChangeText={(value) => updateField('password', value)}
-                  editable={!isSubmitting}
-                />
-                {errors.password && (
-                  <Text accessibilityRole="alert" className="text-destructive">
-                    {t(errors.password)}
-                  </Text>
-                )}
-              </View>
-
-              <View className="gap-2">
-                <Text nativeID="register-confirm-label">
-                  {t('common.confirmPassword')}
-                </Text>
-                <Input
-                  accessibilityLabel={t('common.confirmPassword')}
-                  accessibilityLabelledBy="register-confirm-label"
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoComplete="new-password"
-                  value={form.confirmPassword}
-                  onChangeText={(value) =>
-                    updateField('confirmPassword', value)
-                  }
-                  editable={!isSubmitting}
-                />
-                {errors.confirmPassword && (
-                  <Text accessibilityRole="alert" className="text-destructive">
-                    {t(errors.confirmPassword)}
-                  </Text>
-                )}
-              </View>
-
-              {serverError ? (
-                <Text accessibilityRole="alert" className="text-destructive">
-                  {t(serverError)}
-                </Text>
-              ) : null}
-
-              <Button
-                onPress={handleSubmit}
-                disabled={isSubmitting}
-                accessibilityLabel={t('register.submit')}
-              >
-                {isSubmitting ? (
-                  <ActivityIndicator accessibilityLabel={t('common.loading')} />
-                ) : (
-                  <Text>{t('register.submit')}</Text>
-                )}
-              </Button>
-            </View>
-          )}
-
-          <View className="flex-row flex-wrap justify-center gap-1">
-            <Text className="text-muted-foreground">
-              {t('register.hasAccount')}
+            <Text
+              accessibilityRole="alert"
+              className="text-center text-foreground"
+            >
+              {t('register.success')}
             </Text>
-            <Link href="/login">
-              <Text className="font-semibold text-primary">
-                {t('login.submit')}
-              </Text>
+            <Text className="text-center text-muted-foreground">
+              {t('register.explanation')}
+            </Text>
+            <Link href="/login" asChild>
+              <Button>
+                <Text>{t('register.login')}</Text>
+              </Button>
             </Link>
+          </CardContent>
+        </Card>
+      ) : (
+        <View className="gap-5">
+          <View className="gap-2">
+            <Text
+              className="text-sm font-medium"
+              nativeID="register-username-label"
+            >
+              {t('common.username')}
+            </Text>
+            <Input
+              accessibilityLabel={t('common.username')}
+              accessibilityLabelledBy="register-username-label"
+              invalid={Boolean(errors.username)}
+              accessibilityHint={t('common.usernameHint')}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="username-new"
+              value={form.username}
+              onChangeText={(value) => updateField('username', value)}
+              editable={!isSubmitting}
+            />
+            {errors.username && <FormMessage>{t(errors.username)}</FormMessage>}
           </View>
+
+          <View className="gap-2">
+            <Text
+              className="text-sm font-medium"
+              nativeID="register-password-label"
+            >
+              {t('common.password')}
+            </Text>
+            <PasswordInput
+              accessibilityLabel={t('common.password')}
+              accessibilityLabelledBy="register-password-label"
+              invalid={Boolean(errors.password)}
+              autoCapitalize="none"
+              autoComplete="new-password"
+              value={form.password}
+              onChangeText={(value) => updateField('password', value)}
+              editable={!isSubmitting}
+            />
+            {errors.password && <FormMessage>{t(errors.password)}</FormMessage>}
+          </View>
+
+          <View className="gap-2">
+            <Text
+              className="text-sm font-medium"
+              nativeID="register-confirm-label"
+            >
+              {t('common.confirmPassword')}
+            </Text>
+            <PasswordInput
+              accessibilityLabel={t('common.confirmPassword')}
+              accessibilityLabelledBy="register-confirm-label"
+              invalid={Boolean(errors.confirmPassword)}
+              autoCapitalize="none"
+              autoComplete="new-password"
+              value={form.confirmPassword}
+              onChangeText={(value) => updateField('confirmPassword', value)}
+              editable={!isSubmitting}
+            />
+            {errors.confirmPassword && (
+              <FormMessage>{t(errors.confirmPassword)}</FormMessage>
+            )}
+          </View>
+
+          {serverError ? <FormMessage>{t(serverError)}</FormMessage> : null}
+
+          <Button
+            onPress={handleSubmit}
+            disabled={isSubmitting}
+            accessibilityLabel={t('register.submit')}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator accessibilityLabel={t('common.loading')} />
+            ) : (
+              <Text>{t('register.submit')}</Text>
+            )}
+          </Button>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      )}
+
+      <View className="flex-row flex-wrap justify-center gap-1">
+        <Text className="text-sm text-muted-foreground">
+          {t('register.hasAccount')}
+        </Text>
+        <Link href="/login">
+          <Text className="font-semibold text-primary">
+            {t('login.submit')}
+          </Text>
+        </Link>
+      </View>
+    </AuthScreen>
   );
 }

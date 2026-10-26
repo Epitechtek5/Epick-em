@@ -4,6 +4,7 @@ import {
   screen,
   fireEvent,
   waitFor,
+  act,
 } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import ProfileScreen from '../src/screens/ProfileScreen';
@@ -13,6 +14,21 @@ import UserDetailsScreen from '../src/screens/UserDetailsScreen';
 import { useAuth } from '../src/features/auth/session';
 import * as accounts from '../src/features/users/api';
 import { router } from 'expo-router';
+
+// React Native's default refresh mock drops props, including its refresh callback.
+jest.mock(
+  'react-native/Libraries/Components/RefreshControl/RefreshControl',
+  () => {
+    const React = jest.requireActual<typeof import('react')>('react');
+    const { View } =
+      jest.requireActual<typeof import('react-native')>('react-native');
+    return {
+      __esModule: true,
+      default: (props: import('react-native').RefreshControlProps) =>
+        React.createElement(View, props),
+    };
+  },
+);
 
 jest.mock('../src/features/auth/session', () => ({ useAuth: jest.fn() }));
 jest.mock('../src/features/users/api');
@@ -54,7 +70,8 @@ it('updates own profile without a role field and refreshes displayed identity', 
       <ProfileScreen />
     </PreferencesProvider>,
   );
-  await screen.findByText('Settings');
+  await screen.findByText('Account');
+  await fireEvent.press(screen.getByLabelText('Edit account'));
   expect(screen.queryByLabelText('Role: admin')).toBeNull();
   await fireEvent.changeText(screen.getByLabelText('Username'), 'renamed');
   await fireEvent.press(screen.getByLabelText('Save changes'));
@@ -74,11 +91,13 @@ it('requires explicit confirmation before deleting the current account', async (
       <ProfileScreen />
     </PreferencesProvider>,
   );
-  await screen.findByText('Settings');
+  await screen.findByText('Account');
   await fireEvent.press(screen.getByLabelText('Delete my account'));
   expect(accounts.deleteMe).not.toHaveBeenCalled();
   const buttons = alert.mock.calls[0][2]!;
-  await buttons.find((button) => button.style === 'destructive')!.onPress!();
+  await act(async () => {
+    buttons.find((button) => button.style === 'destructive')!.onPress!();
+  });
   await waitFor(() => expect(auth.clearSession).toHaveBeenCalled());
   expect(accounts.deleteMe).toHaveBeenCalledWith('test-token');
   alert.mockRestore();
@@ -89,7 +108,8 @@ it('does not submit an invalid password', async () => {
       <ProfileScreen />
     </PreferencesProvider>,
   );
-  await screen.findByText('Settings');
+  await screen.findByText('Account');
+  await fireEvent.press(screen.getByLabelText('Edit account'));
   await fireEvent.changeText(screen.getByLabelText('New password'), 'short');
   await fireEvent.press(screen.getByLabelText('Save changes'));
   expect(
@@ -154,7 +174,7 @@ it('has one Settings logout control and delegates to the existing session logout
       <ProfileScreen />
     </PreferencesProvider>,
   );
-  await screen.findByText('Settings');
+  await screen.findByText('Account');
   expect(screen.getAllByLabelText('Log out')).toHaveLength(1);
   expect(screen.getByText('Account')).toBeOnTheScreen();
   expect(screen.getByText('Appearance')).toBeOnTheScreen();
@@ -162,4 +182,28 @@ it('has one Settings logout control and delegates to the existing session logout
   expect(screen.getByText('Session')).toBeOnTheScreen();
   await fireEvent.press(screen.getByLabelText('Log out'));
   expect(auth.logout).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the populated user list visible during pull-to-refresh', async () => {
+  let completeRefresh!: (users: (typeof user)[]) => void;
+  jest
+    .mocked(accounts.listUsers)
+    .mockResolvedValueOnce([user])
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          completeRefresh = resolve;
+        }),
+    );
+  await render(<UsersScreen />);
+  await screen.findByLabelText('View profile for alice');
+  await act(async () => {
+    void screen.getByLabelText('Refresh users').props.onRefresh();
+  });
+  expect(screen.getByLabelText('View profile for alice')).toBeOnTheScreen();
+  expect(screen.getByLabelText('Refresh users').props.refreshing).toBe(true);
+  await act(async () => {
+    completeRefresh([user]);
+  });
+  expect(screen.getByLabelText('Refresh users').props.refreshing).toBe(false);
 });
