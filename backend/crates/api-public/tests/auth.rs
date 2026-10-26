@@ -2,7 +2,7 @@
 
 use api_public::auth::decode_access_token;
 use api_public::config::AuthConfig;
-use api_public::store::{AuthStore, MemoryStore};
+use api_public::store::{AuthStore, MemoryStore, Role};
 use api_public::{AppState, router};
 use axum::Router;
 use axum::body::Body;
@@ -410,6 +410,7 @@ fn expired_token(user_id: uuid::Uuid) -> String {
     let claims = api_public::auth::Claims {
         sub: user_id,
         username: "alice".into(),
+        role: api_public::store::Role::User,
         iat: 1_000,
         exp: 2_000,
     };
@@ -525,4 +526,37 @@ async fn a_refresh_token_only_works_with_the_access_token_of_its_owner() {
     assert_eq!(status, StatusCode::OK);
     let claims = decode_access_token(access(&renewed), SECRET).unwrap();
     assert_eq!(claims.username, "alice");
+}
+
+#[tokio::test]
+async fn the_role_is_in_the_access_token_and_survives_a_refresh() {
+    let store = Arc::new(MemoryStore::new());
+    let app = app_with(store.clone(), Duration::from_secs(3600));
+    let user = logged_in(&app).await;
+    assert_eq!(
+        decode_access_token(access(&user), SECRET).unwrap().role,
+        Role::User
+    );
+    // Dans le JWT, le rôle est une chaîne en minuscules.
+    let raw = jsonwebtoken::dangerous::insecure_decode::<Value>(access(&user)).unwrap();
+    assert_eq!(raw.claims["role"], "user");
+
+    store.set_role("alice", Role::Admin);
+    let (_, admin) = login(&app, "alice", "secret123").await;
+    assert_eq!(
+        decode_access_token(access(&admin), SECRET).unwrap().role,
+        Role::Admin
+    );
+    // Le rafraîchissement relit le rôle en base : une promotion est prise en compte.
+    let (_, renewed) = post_as(
+        &app,
+        access(&user),
+        "/refresh",
+        json!({ "refresh_token": user["refresh_token"] }),
+    )
+    .await;
+    assert_eq!(
+        decode_access_token(access(&renewed), SECRET).unwrap().role,
+        Role::Admin
+    );
 }

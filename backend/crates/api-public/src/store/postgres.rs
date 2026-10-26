@@ -1,7 +1,7 @@
 //! Implémentation PostgreSQL de [`AuthStore`] (tables `users` et `refresh_tokens`,
 //! voir `db/changelog`).
 
-use super::{AuthStore, StoreError, UserRecord};
+use super::{AuthStore, Role, StoreError, UserRecord};
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -20,14 +20,15 @@ impl PgStore {
     }
 }
 
-type UserRow = (Uuid, String, String);
+type UserRow = (Uuid, String, String, String);
 
-fn user(row: UserRow) -> UserRecord {
-    UserRecord {
+fn user(row: UserRow) -> Result<UserRecord, StoreError> {
+    Ok(UserRecord {
         id: row.0,
         username: row.1,
         password_hash: row.2,
-    }
+        role: row.3.parse::<Role>()?,
+    })
 }
 
 #[async_trait]
@@ -39,19 +40,19 @@ impl AuthStore for PgStore {
     ) -> Result<UserRecord, StoreError> {
         sqlx::query_as::<_, UserRow>(
             "INSERT INTO users (username, password_hash) VALUES ($1, $2) \
-             RETURNING id, username, password_hash",
+             RETURNING id, username, password_hash, role",
         )
         .bind(username)
         .bind(password_hash)
         .fetch_one(&self.pool)
         .await
-        .map(user)
         .map_err(|err| match &err {
             sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
                 StoreError::UsernameTaken
             }
             _ => err.into(),
         })
+        .and_then(user)
     }
 
     async fn find_user_by_username(
@@ -59,22 +60,24 @@ impl AuthStore for PgStore {
         username: &str,
     ) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash FROM users WHERE lower(username) = lower($1)",
+            "SELECT id, username, password_hash, role FROM users WHERE lower(username) = lower($1)",
         )
         .bind(username)
         .fetch_optional(&self.pool)
         .await?
-        .map(user))
+        .map(user)
+        .transpose()?)
     }
 
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash FROM users WHERE id = $1",
+            "SELECT id, username, password_hash, role FROM users WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?
-        .map(user))
+        .map(user)
+        .transpose()?)
     }
 
     async fn insert_refresh_token(

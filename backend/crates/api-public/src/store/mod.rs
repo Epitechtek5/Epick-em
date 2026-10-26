@@ -10,15 +10,47 @@ pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 use std::time::Duration;
 use uuid::Uuid;
+
+/// Rôle d'un compte. Toute inscription crée un `User` ; `Admin` se donne en base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    User,
+    Admin,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::User => "user",
+            Role::Admin => "admin",
+        }
+    }
+}
+
+impl FromStr for Role {
+    type Err = StoreError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "user" => Ok(Role::User),
+            "admin" => Ok(Role::Admin),
+            other => Err(StoreError::Other(format!("rôle inconnu : {other}"))),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct UserRecord {
     pub id: Uuid,
     pub username: String,
     pub password_hash: String,
+    pub role: Role,
 }
 
 #[derive(Debug)]

@@ -4,3 +4,5 @@ databaseChangeLog:
       file: changelog/0001-create-users.yaml
   - include:
       file: changelog/0002-create-refresh-tokens.yaml
+  - include:
+      file: changelog/0003-add-user-role.yaml

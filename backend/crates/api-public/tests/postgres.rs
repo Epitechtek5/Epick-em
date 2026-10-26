@@ -1,7 +1,7 @@
 //! `PgStore` contre un vrai PostgreSQL migré (image `db/`), ignoré par défaut :
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
-use api_public::store::{AuthStore, PgStore, StoreError};
+use api_public::store::{AuthStore, PgStore, Role, StoreError};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -23,6 +23,7 @@ async fn users_are_unique_whatever_the_case() {
 
     let user = store.create_user(&name, "hash").await.unwrap();
     assert_eq!(user.username, name);
+    assert_eq!(user.role, Role::User);
     assert!(matches!(
         store.create_user(&name.to_lowercase(), "autre").await,
         Err(StoreError::UsernameTaken)

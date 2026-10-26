@@ -1,0 +1,22 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0003-add-user-role
+      author: epickem
+      changes:
+        - addColumn:
+            tableName: users
+            columns:
+              - column:
+                  name: role
+                  type: varchar(16)
+                  defaultValue: user
+                  remarks: Rôle du compte (user ou admin), repris dans le jeton d'accès
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('user', 'admin'))
+            rollback: ALTER TABLE users DROP CONSTRAINT users_role_check
+      rollback:
+        - dropColumn:
+            tableName: users
+            columnName: role

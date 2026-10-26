@@ -10,7 +10,7 @@
 
 use crate::config::AuthConfig;
 use crate::error::ApiError;
-use crate::store::{AuthStore, StoreError};
+use crate::store::{AuthStore, Role, StoreError, UserRecord};
 use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -102,6 +102,7 @@ pub struct Claims {
     /// Identifiant du compte.
     pub sub: Uuid,
     pub username: String,
+    pub role: Role,
     pub iat: u64,
     pub exp: u64,
 }
@@ -202,7 +203,7 @@ async fn login(
                 )
                 .await
                 .map_err(ApiError::internal)?;
-            token_response(&state.config, user.id, &user.username, refresh_token).map(Json)
+            token_response(&state.config, &user, refresh_token).map(Json)
         }
         _ => Err(ApiError::Unauthorized),
     }
@@ -236,7 +237,7 @@ async fn refresh(
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::Unauthorized)?;
-    token_response(&state.config, user.id, &user.username, new_token).map(Json)
+    token_response(&state.config, &user, new_token).map(Json)
 }
 
 /// Idempotent : répond 204 même si le jeton est inconnu, déjà révoqué ou appartient à un
@@ -291,8 +292,7 @@ fn validate_registration(credentials: &Credentials) -> Result<(), ApiError> {
 
 fn token_response(
     config: &AuthConfig,
-    user_id: Uuid,
-    username: &str,
+    user: &UserRecord,
     refresh_token: String,
 ) -> Result<TokenResponse, ApiError> {
     let now = SystemTime::now()
@@ -300,8 +300,9 @@ fn token_response(
         .map_err(ApiError::internal)?
         .as_secs();
     let claims = Claims {
-        sub: user_id,
-        username: username.to_string(),
+        sub: user.id,
+        username: user.username.clone(),
+        role: user.role,
         iat: now,
         exp: now + config.access_token_ttl.as_secs(),
     };
@@ -385,10 +386,17 @@ mod tests {
             refresh_token_ttl: std::time::Duration::from_secs(120),
         };
         let id = Uuid::new_v4();
-        let response = token_response(&config, id, "alice", "r".into()).unwrap();
+        let user = UserRecord {
+            id,
+            username: "alice".into(),
+            password_hash: String::new(),
+            role: Role::Admin,
+        };
+        let response = token_response(&config, &user, "r".into()).unwrap();
         let claims = decode_access_token(&response.access_token, secret).unwrap();
         assert_eq!(claims.sub, id);
         assert_eq!(claims.username, "alice");
+        assert_eq!(claims.role, Role::Admin);
         assert_eq!(claims.exp - claims.iat, 60);
         assert!(
             decode_access_token(&response.access_token, "autre-secret-autre-secret-autre")
