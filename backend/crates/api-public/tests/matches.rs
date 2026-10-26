@@ -838,7 +838,12 @@ async fn exported_matches_reimport_without_loss_in_json_and_csv() {
     assert_eq!(matches[1]["status"], "ongoing");
     assert_eq!(matches[2]["round"], 2);
     assert_eq!(matches[2]["next"], Value::Null);
-    let winner = &matches[0]["participants"][0];
+    let winner = matches[0]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["rank"] == 1)
+        .unwrap();
     assert!(winner["user"].as_str().unwrap().starts_with("player"));
     assert_eq!(winner["stats"], json!({ "kills": 3, "accuracy": 62.5 }));
     assert_eq!(winner["points"], 4.5);
@@ -900,7 +905,13 @@ async fn exported_matches_reimport_without_loss_in_json_and_csv() {
     assert_eq!(imported.len(), 3);
     assert_eq!(imported[0]["next_match_id"], imported[2]["id"]);
     assert_eq!(imported[0]["status"], "finished");
-    assert_eq!(imported[0]["participants"][0]["points"], 4.5);
+    let points: Vec<f64> = imported[0]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["points"].as_f64().unwrap())
+        .collect();
+    assert!(points.contains(&4.5) && points.contains(&1.5), "{points:?}");
     let (_, ranking) = get(
         &app,
         &format!("/tournaments/{copy_id}/steps/{step}/ranking"),
