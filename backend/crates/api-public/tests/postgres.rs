@@ -1,6 +1,7 @@
 //! `PgStore` contre un vrai PostgreSQL migré (image `db/`), ignoré par défaut :
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
+use api_public::step_io::StoreSteps;
 use api_public::store::{
     AuthStore, GameInput, GameUpdate, MatchType, MemberImport, ParticipantImport, ParticipantInput,
     ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
@@ -10,6 +11,7 @@ use api_public::store::{
     TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
     UserUpdate,
 };
+use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1870,4 +1872,125 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     );
     assert!(store.delete_tournament(tournament.id).await.unwrap());
     assert!(store.find_step(first.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn steps_export_and_reimport_into_another_tournament() {
+    let store = Arc::new(store().await);
+    let game_id = game(&store).await;
+    let new_tournament = || {
+        store.create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+    };
+    let (source, copy) = (
+        new_tournament().await.unwrap(),
+        new_tournament().await.unwrap(),
+    );
+    let mut users = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        users.push(user(&store, name).await);
+    }
+    let enroll = |tournament: Uuid, user_id: Uuid| {
+        let store = store.clone();
+        async move {
+            store
+                .add_participant(ParticipantInput {
+                    tournament_id: tournament,
+                    user_id: Some(user_id),
+                    tournament_team_id: None,
+                })
+                .await
+                .unwrap()
+                .unwrap()
+                .id
+        }
+    };
+    let mut players = Vec::new();
+    for user_id in &users {
+        players.push(enroll(source.id, *user_id).await);
+        enroll(copy.id, *user_id).await;
+    }
+    let create = |position: i32, size: i32, advance: i32| {
+        store.create_step(StepInput {
+            tournament_id: source.id,
+            definition: step_definition(position, 1, size, advance),
+        })
+    };
+    let first = create(1, 4, 2).await.unwrap().unwrap();
+    let last = create(2, 2, 1).await.unwrap().unwrap();
+    store
+        .start_step(StepStart {
+            step_id: first.id,
+            groups: vec![players.clone()],
+        })
+        .await
+        .unwrap();
+    for (player, points) in players.iter().zip([9.0, 7.5, 4.0, 1.0]) {
+        store
+            .set_step_points(first.id, *player, points)
+            .await
+            .unwrap();
+    }
+    let outcomes = players
+        .iter()
+        .zip(1..)
+        .map(|(id, rank)| StepOutcome {
+            participant_id: *id,
+            final_rank: rank,
+            status: if rank <= 2 {
+                StepParticipantStatus::Qualified
+            } else {
+                StepParticipantStatus::Eliminated
+            },
+        })
+        .collect();
+    store
+        .close_step(StepClosing {
+            step_id: first.id,
+            outcomes,
+            next: Some(StepStart {
+                step_id: last.id,
+                groups: vec![vec![players[0], players[1]]],
+            }),
+        })
+        .await
+        .unwrap();
+
+    let steps = StoreSteps::new(store.clone());
+    let exported = steps.export_in(source.id, &[]).await.unwrap();
+    assert_eq!(exported.len(), 2);
+    let items: Vec<serde_json::Value> = exported.iter().map(|(_, item)| item.clone()).collect();
+    assert_eq!(items[0]["status"], "finished");
+    assert_eq!(items[1]["status"], "ongoing");
+
+    let mut scope = FileScope::default();
+    for user_id in &users {
+        let profile = store.find_profile(*user_id).await.unwrap().unwrap();
+        scope.users.insert(profile.username.to_lowercase());
+    }
+    assert_eq!(
+        steps.validate_in(game_id, &items, &scope).await.unwrap(),
+        None
+    );
+    steps.import_in(copy.id, items.clone(), &[]).await.unwrap();
+    let again: Vec<serde_json::Value> = steps
+        .export_in(copy.id, &[])
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, item)| item)
+        .collect();
+    assert_eq!(again, items);
+
+    // Réimporter remplace : les étapes de la copie repartent du fichier.
+    steps
+        .import_in(copy.id, vec![items[0].clone()], &[])
+        .await
+        .unwrap();
+    assert_eq!(store.list_steps(copy.id).await.unwrap().len(), 1);
+    let totals = store.participant_points(copy.id).await.unwrap();
+    assert_eq!(totals.values().copied().fold(0.0, f64::max), 9.0);
 }

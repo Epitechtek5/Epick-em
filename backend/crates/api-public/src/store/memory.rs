@@ -1505,6 +1505,15 @@ impl AuthStore for MemoryStore {
         participants: Vec<ParticipantImport>,
     ) -> Result<(), StoreError> {
         let mut state = self.state();
+        let replaced: Vec<Uuid> = state
+            .participants
+            .iter()
+            .filter(|p| p.tournament_id == tournament_id)
+            .map(|p| p.id)
+            .collect();
+        state
+            .step_participants
+            .retain(|p| !replaced.contains(&p.participant_id));
         state
             .participants
             .retain(|p| p.tournament_id != tournament_id);

@@ -1694,9 +1694,9 @@ async fn invalid_files_are_refused_without_any_write() {
             "propriétaire",
         ),
         (
-            "étapes non prises en charge",
+            "étape invalide",
             valid(json!({ "steps": [{ "format": "pool" }] })),
-            "étapes",
+            "étape 1 invalide",
         ),
         (
             "matchs non pris en charge",
