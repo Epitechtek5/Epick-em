@@ -7,11 +7,16 @@ mod games;
 mod memory;
 mod postgres;
 mod stats;
+mod teams;
 
 pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
+pub use self::teams::{
+    Team, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

@@ -14,3 +14,5 @@ databaseChangeLog:
       file: changelog/0006-seed-games.yaml
   - include:
       file: changelog/0007-create-stats.yaml
+  - include:
+      file: changelog/0008-create-teams.yaml
