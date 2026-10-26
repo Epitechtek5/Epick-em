@@ -1,8 +1,10 @@
 //! Implémentation en mémoire de [`AuthStore`], pour les tests.
 
+use super::teams::now_rfc3339;
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Role, Stat, StatInput, StatUpdate, StoreError,
-    UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, Role, Stat, StatInput, StatUpdate, StoreError, Team,
+    TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -25,6 +27,10 @@ struct State {
     /// Statistiques que le barème d'un tournoi en cours rend indélébiles.
     locked_stats: HashSet<Uuid>,
     tokens: HashMap<String, RefreshToken>,
+    teams: Vec<Team>,
+    team_members: Vec<(Uuid, TeamMember)>,
+    tournament_teams: Vec<TournamentTeam>,
+    tournament_team_members: Vec<(Uuid, TournamentTeamMember)>,
 }
 
 #[derive(Default)]
@@ -284,6 +290,15 @@ impl AuthStore for MemoryStore {
         let before = state.games.len();
         state.games.retain(|g| g.id != id);
         state.stat_games.retain(|(_, game_id)| *game_id != id);
+        let doomed: Vec<Uuid> = state
+            .teams
+            .iter()
+            .filter(|t| t.game_id == id)
+            .map(|t| t.id)
+            .collect();
+        for team_id in doomed {
+            state.remove_team(team_id);
+        }
         Ok(state.games.len() != before)
     }
 
@@ -450,9 +465,375 @@ impl AuthStore for MemoryStore {
     async fn unlink_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError> {
         Ok(self.state().stat_games.remove(&(stat_id, game_id)))
     }
+
+    async fn list_teams(
+        &self,
+        game_id: Option<Uuid>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Team>, StoreError> {
+        let mut teams: Vec<Team> = self
+            .state()
+            .teams
+            .iter()
+            .filter(|t| game_id.is_none_or(|game| t.game_id == game))
+            .cloned()
+            .collect();
+        teams.sort_by_key(|t| (t.name.to_lowercase(), t.id));
+        Ok(teams
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(0))
+            .take(usize::try_from(limit).unwrap_or(0))
+            .collect())
+    }
+
+    async fn find_team(&self, id: Uuid) -> Result<Option<Team>, StoreError> {
+        Ok(self.state().teams.iter().find(|t| t.id == id).cloned())
+    }
+
+    async fn create_team(&self, input: TeamInput) -> Result<Team, StoreError> {
+        let mut state = self.state();
+        if state.team_name_taken(input.game_id, &input.name, None) {
+            return Err(StoreError::TeamNameTaken);
+        }
+        let now = now_rfc3339();
+        let team = Team {
+            id: Uuid::new_v4(),
+            game_id: input.game_id,
+            name: input.name,
+            tag: input.tag,
+            picture_url: input.picture_url,
+            owner_id: input.owner_id,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+        state.team_members.push((
+            team.id,
+            TeamMember {
+                user_id: team.owner_id,
+                role: TeamRole::Owner,
+                joined_at: now,
+                left_at: None,
+            },
+        ));
+        state.teams.push(team.clone());
+        Ok(team)
+    }
+
+    async fn update_team(&self, id: Uuid, update: TeamUpdate) -> Result<Option<Team>, StoreError> {
+        let mut state = self.state();
+        let Some(game_id) = state.teams.iter().find(|t| t.id == id).map(|t| t.game_id) else {
+            return Ok(None);
+        };
+        if let Some(name) = &update.name
+            && state.team_name_taken(game_id, name, Some(id))
+        {
+            return Err(StoreError::TeamNameTaken);
+        }
+        let Some(team) = state.teams.iter_mut().find(|t| t.id == id) else {
+            return Ok(None);
+        };
+        if let Some(name) = update.name {
+            team.name = name;
+        }
+        if let Some(tag) = update.tag {
+            team.tag = tag;
+        }
+        if let Some(picture_url) = update.picture_url {
+            team.picture_url = picture_url;
+        }
+        team.updated_at = now_rfc3339();
+        Ok(Some(team.clone()))
+    }
+
+    async fn delete_team(&self, id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if !state.teams.iter().any(|t| t.id == id) {
+            return Ok(false);
+        }
+        state.remove_team(id);
+        Ok(true)
+    }
+
+    async fn list_team_members(
+        &self,
+        team_id: Uuid,
+    ) -> Result<Option<Vec<TeamMember>>, StoreError> {
+        let state = self.state();
+        if !state.teams.iter().any(|t| t.id == team_id) {
+            return Ok(None);
+        }
+        let mut members: Vec<TeamMember> = state
+            .team_members
+            .iter()
+            .filter(|(team, _)| *team == team_id)
+            .map(|(_, member)| member.clone())
+            .collect();
+        members.sort_by_key(|m| (m.joined_at.clone(), m.user_id));
+        Ok(Some(members))
+    }
+
+    async fn add_team_member(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError> {
+        let mut state = self.state();
+        if !state.teams.iter().any(|t| t.id == team_id)
+            || !state.users.iter().any(|u| u.id == user_id)
+        {
+            return Ok(None);
+        }
+        if state.active_team_member(team_id, user_id).is_some() {
+            return Err(StoreError::AlreadyTeamMember);
+        }
+        let member = TeamMember {
+            user_id,
+            role,
+            joined_at: now_rfc3339(),
+            left_at: None,
+        };
+        state.team_members.push((team_id, member.clone()));
+        Ok(Some(member))
+    }
+
+    async fn set_team_member_role(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError> {
+        let mut state = self.state();
+        Ok(state.active_team_member(team_id, user_id).map(|member| {
+            member.role = role;
+            member.clone()
+        }))
+    }
+
+    async fn remove_team_member(&self, team_id: Uuid, user_id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        Ok(state
+            .active_team_member(team_id, user_id)
+            .map(|member| member.left_at = Some(now_rfc3339()))
+            .is_some())
+    }
+
+    async fn list_tournament_teams(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentTeam>, StoreError> {
+        let mut teams: Vec<TournamentTeam> = self
+            .state()
+            .tournament_teams
+            .iter()
+            .filter(|t| t.tournament_id == tournament_id)
+            .cloned()
+            .collect();
+        teams.sort_by_key(|t| (t.name.to_lowercase(), t.id));
+        Ok(teams
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(0))
+            .take(usize::try_from(limit).unwrap_or(0))
+            .collect())
+    }
+
+    async fn find_tournament_team(&self, id: Uuid) -> Result<Option<TournamentTeam>, StoreError> {
+        Ok(self
+            .state()
+            .tournament_teams
+            .iter()
+            .find(|t| t.id == id)
+            .cloned())
+    }
+
+    async fn create_tournament_team(
+        &self,
+        input: TournamentTeamInput,
+    ) -> Result<TournamentTeam, StoreError> {
+        let mut state = self.state();
+        if let Some(team_id) = input.team_id
+            && state
+                .tournament_teams
+                .iter()
+                .any(|t| t.tournament_id == input.tournament_id && t.team_id == Some(team_id))
+        {
+            return Err(StoreError::TeamAlreadyRegistered);
+        }
+        if input
+            .members
+            .iter()
+            .any(|(user_id, _)| state.player_registered(input.tournament_id, *user_id))
+        {
+            return Err(StoreError::PlayerAlreadyRegistered);
+        }
+        let team = TournamentTeam {
+            id: Uuid::new_v4(),
+            tournament_id: input.tournament_id,
+            team_id: input.team_id,
+            name: input.name,
+            tag: input.tag,
+            picture_url: input.picture_url,
+            owner_id: input.owner_id,
+            created_at: now_rfc3339(),
+        };
+        state.tournament_team_members.extend(
+            input
+                .members
+                .into_iter()
+                .map(|(user_id, role)| (team.id, TournamentTeamMember { user_id, role })),
+        );
+        state.tournament_teams.push(team.clone());
+        Ok(team)
+    }
+
+    async fn update_tournament_team(
+        &self,
+        id: Uuid,
+        update: TeamUpdate,
+    ) -> Result<Option<TournamentTeam>, StoreError> {
+        let mut state = self.state();
+        let Some(team) = state.tournament_teams.iter_mut().find(|t| t.id == id) else {
+            return Ok(None);
+        };
+        if let Some(name) = update.name {
+            team.name = name;
+        }
+        if let Some(tag) = update.tag {
+            team.tag = tag;
+        }
+        if let Some(picture_url) = update.picture_url {
+            team.picture_url = picture_url;
+        }
+        Ok(Some(team.clone()))
+    }
+
+    async fn delete_tournament_team(&self, id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let before = state.tournament_teams.len();
+        state.tournament_teams.retain(|t| t.id != id);
+        state
+            .tournament_team_members
+            .retain(|(team, _)| *team != id);
+        Ok(state.tournament_teams.len() != before)
+    }
+
+    async fn list_tournament_team_members(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<Vec<TournamentTeamMember>>, StoreError> {
+        let state = self.state();
+        if !state.tournament_teams.iter().any(|t| t.id == id) {
+            return Ok(None);
+        }
+        let mut members: Vec<TournamentTeamMember> = state
+            .tournament_team_members
+            .iter()
+            .filter(|(team, _)| *team == id)
+            .map(|(_, member)| member.clone())
+            .collect();
+        members.sort_by_key(|m| m.user_id);
+        Ok(Some(members))
+    }
+
+    async fn add_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError> {
+        let mut state = self.state();
+        let Some(tournament_id) = state
+            .tournament_teams
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.tournament_id)
+        else {
+            return Ok(None);
+        };
+        if !state.users.iter().any(|u| u.id == user_id) {
+            return Ok(None);
+        }
+        if state.player_registered(tournament_id, user_id) {
+            return Err(StoreError::PlayerAlreadyRegistered);
+        }
+        let member = TournamentTeamMember { user_id, role };
+        state.tournament_team_members.push((id, member.clone()));
+        Ok(Some(member))
+    }
+
+    async fn set_tournament_team_member_role(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError> {
+        let mut state = self.state();
+        Ok(state
+            .tournament_team_members
+            .iter_mut()
+            .find(|(team, member)| *team == id && member.user_id == user_id)
+            .map(|(_, member)| {
+                member.role = role;
+                member.clone()
+            }))
+    }
+
+    async fn remove_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let before = state.tournament_team_members.len();
+        state
+            .tournament_team_members
+            .retain(|(team, member)| !(*team == id && member.user_id == user_id));
+        Ok(state.tournament_team_members.len() != before)
+    }
 }
 
 impl State {
+    fn team_name_taken(&self, game_id: Uuid, name: &str, except: Option<Uuid>) -> bool {
+        self.teams.iter().any(|t| {
+            t.game_id == game_id
+                && Some(t.id) != except
+                && t.name.to_lowercase() == name.to_lowercase()
+        })
+    }
+
+    fn active_team_member(&mut self, team_id: Uuid, user_id: Uuid) -> Option<&mut TeamMember> {
+        self.team_members
+            .iter_mut()
+            .find(|(team, member)| {
+                *team == team_id && member.user_id == user_id && member.left_at.is_none()
+            })
+            .map(|(_, member)| member)
+    }
+
+    /// Supprime l'équipe et ses membres ; ses copies de tournoi perdent leur origine.
+    fn remove_team(&mut self, id: Uuid) {
+        self.teams.retain(|t| t.id != id);
+        self.team_members.retain(|(team, _)| *team != id);
+        for copy in &mut self.tournament_teams {
+            if copy.team_id == Some(id) {
+                copy.team_id = None;
+            }
+        }
+    }
+
+    fn player_registered(&self, tournament_id: Uuid, user_id: Uuid) -> bool {
+        self.tournament_team_members.iter().any(|(team, member)| {
+            member.user_id == user_id
+                && self
+                    .tournament_teams
+                    .iter()
+                    .any(|t| t.id == *team && t.tournament_id == tournament_id)
+        })
+    }
+
     fn upsert_stat(&mut self, input: StatInput) -> (Stat, bool) {
         if let Some(stat) = self.stats.iter_mut().find(|s| s.key == input.key) {
             stat.name = input.name;
