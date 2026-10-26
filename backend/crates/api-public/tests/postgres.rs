@@ -558,6 +558,21 @@ async fn game(store: &PgStore) -> Uuid {
         .id
 }
 
+/// Tournoi créé en SQL (le store n'expose pas encore de création de tournoi).
+async fn insert_tournament(game_id: Uuid) -> Uuid {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    sqlx::query_scalar(
+        "INSERT INTO tournaments (game_id, name, start_date, end_date, participant_type, team_size, max_participants) \
+         VALUES ($1, $2, now(), now() + interval '1 day', 'team', 5, 8) RETURNING id",
+    )
+    .bind(game_id)
+    .bind(unique("Tournoi"))
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+}
+
 fn team_input(game_id: Uuid, name: &str, owner_id: Uuid) -> TeamInput {
     TeamInput {
         game_id,
@@ -710,7 +725,7 @@ async fn tournament_teams_are_independent_copies() {
         .create_team(team_input(game_id, &unique("Karmine"), alice))
         .await
         .unwrap();
-    let tournament = Uuid::new_v4();
+    let tournament = insert_tournament(game_id).await;
     let copy_input = |team_id: Option<Uuid>, members: Vec<(Uuid, TeamRole)>| TournamentTeamInput {
         tournament_id: tournament,
         team_id,
@@ -784,7 +799,7 @@ async fn tournament_teams_are_independent_copies() {
     );
     // Même joueur, autre tournoi : permis.
     let elsewhere = TournamentTeamInput {
-        tournament_id: Uuid::new_v4(),
+        tournament_id: insert_tournament(game_id).await,
         ..copy_input(None, vec![(bob, TeamRole::Owner)])
     };
     store.create_tournament_team(elsewhere).await.unwrap();
