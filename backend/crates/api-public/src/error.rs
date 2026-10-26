@@ -46,6 +46,8 @@ pub enum ApiError {
     TeamAlreadyRegistered,
     /// Joueur déjà dans une équipe de ce tournoi.
     PlayerAlreadyRegistered,
+    /// Nom de tournoi déjà pris pour ce jeu.
+    TournamentNameTaken,
     /// Le barème contient déjà une règle pour cette statistique.
     ScoringRuleTaken,
     /// Joueur ou équipe déjà inscrit à ce tournoi.
@@ -120,6 +122,11 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "player_already_registered",
                 "Ce joueur est déjà dans une équipe de ce tournoi",
+            ),
+            ApiError::TournamentNameTaken => (
+                StatusCode::CONFLICT,
+                "tournament_name_taken",
+                "Ce nom de tournoi est déjà pris pour ce jeu",
             ),
             ApiError::ScoringRuleTaken => (
                 StatusCode::CONFLICT,

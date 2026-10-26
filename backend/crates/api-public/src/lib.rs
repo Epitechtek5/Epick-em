@@ -19,6 +19,8 @@ pub mod stats;
 pub mod store;
 pub mod team_io;
 pub mod teams;
+pub mod tournament_io;
+pub mod tournament_team_io;
 pub mod tournament_teams;
 pub mod tournaments;
 pub mod users;
