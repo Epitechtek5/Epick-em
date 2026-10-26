@@ -642,3 +642,411 @@ async fn a_step_needs_enough_participants_and_a_running_tournament() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
     assert!(error["errors"]["participants"].is_string());
 }
+
+async fn export_file(app: &app_type!(), token: &str, format: &str) -> String {
+    let response = actix_web::test::call_service(
+        app,
+        request(
+            TestRequest::get(),
+            &format!("/tournaments/export?format={format}"),
+            Some(token),
+        )
+        .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = actix_web::test::read_body(response).await;
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+async fn import_file(
+    app: &app_type!(),
+    token: &str,
+    format: &str,
+    body: String,
+) -> (StatusCode, Value) {
+    call(
+        app,
+        request(
+            TestRequest::post(),
+            &format!("/tournaments/import?format={format}"),
+            Some(token),
+        )
+        .set_payload(body),
+    )
+    .await
+}
+
+fn tournament_named<'a>(document: &'a Value, name: &str) -> &'a Value {
+    document["tournaments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == name)
+        .unwrap_or_else(|| panic!("tournoi {name} absent de {document}"))
+}
+
+/// Le tournoi `running` avancé jusqu'à la finale : étape 1 terminée, étape 2 en cours.
+async fn advanced(app: &app_type!(), s: &Setup) -> String {
+    let (tid, first, _) = running(app, s).await;
+    let steps = format!("/tournaments/{tid}/steps");
+    post(app, &format!("{steps}/{first}/start"), &s.admin, json!({})).await;
+    let (_, ranking) = get(app, &format!("{steps}/{first}/ranking"), &s.admin).await;
+    let step_id: Uuid = first.parse().unwrap();
+    for group in ids(&ranking) {
+        for (rank, participant) in group.iter().enumerate() {
+            let points = 10.0 - 2.5 * rank as f64;
+            assert!(
+                s.store
+                    .set_step_points(step_id, *participant, points)
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+    let (status, closed) = post(app, &format!("{steps}/{first}/close"), &s.admin, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    tid
+}
+
+#[actix_web::test]
+async fn exported_steps_reimport_without_loss_in_json_and_csv() {
+    let (app, s) = setup().await;
+    let tid = advanced(&app, &s).await;
+    let (_, tournament) = get(&app, &format!("/tournaments/{tid}"), &s.admin).await;
+    let name = tournament["name"].as_str().unwrap().to_string();
+
+    let original =
+        serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    let steps = tournament_named(&original, &name)["steps"].clone();
+    assert_eq!(steps.as_array().unwrap().len(), 2);
+    assert_eq!(steps[0]["status"], "finished");
+    assert_eq!(steps[1]["status"], "ongoing");
+    assert_eq!(steps[0]["groups"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        steps[0]["groups"][0]["participants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        steps[1]["groups"][0]["participants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    let first = &steps[0]["groups"][0]["participants"][0];
+    assert!(first["user"].as_str().unwrap().starts_with("player"));
+    assert!(first["final_rank"].is_u64());
+
+    // Réimport sous un autre nom (un tournoi en cours ne s'écrase pas), en JSON puis en CSV.
+    for format in ["json", "csv"] {
+        let copy = format!("Copie {format}");
+        let file = if format == "json" {
+            let mut document = original.clone();
+            let mut one = tournament_named(&original, &name).clone();
+            one["name"] = json!(copy);
+            document["tournaments"] = json!([one]);
+            document.to_string()
+        } else {
+            // Une seule ligne, celle du tournoi d'origine, sous son nouveau nom.
+            let csv = export_file(&app, &s.admin, "csv").await;
+            let mut reader = csv::Reader::from_reader(csv.as_bytes());
+            let mut writer = csv::Writer::from_writer(Vec::new());
+            writer.write_record(reader.headers().unwrap()).unwrap();
+            for record in reader.records().map(Result::unwrap) {
+                if &record[1] == name.as_str() {
+                    let renamed: Vec<&str> = record
+                        .iter()
+                        .enumerate()
+                        .map(|(i, field)| if i == 1 { copy.as_str() } else { field })
+                        .collect();
+                    writer.write_record(renamed).unwrap();
+                }
+            }
+            String::from_utf8(writer.into_inner().unwrap()).unwrap()
+        };
+        let (status, report) = import_file(&app, &s.admin, format, file).await;
+        assert_eq!(status, StatusCode::OK, "{format}: {report}");
+        assert_eq!(report["created"], 1, "{report}");
+
+        let after =
+            serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+        assert_eq!(tournament_named(&after, &copy)["steps"], steps, "{format}");
+    }
+
+    // L'importé est une vraie copie : ses étapes se lisent par l'API, points compris.
+    let (_, list) = get(&app, "/tournaments", &s.admin).await;
+    let copy = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Copie json")
+        .unwrap();
+    let copy_id = copy["id"].as_str().unwrap();
+    let (_, copied_steps) = get(&app, &format!("/tournaments/{copy_id}/steps"), &s.admin).await;
+    assert_eq!(copied_steps[0]["status"], "finished");
+    let first_id = copied_steps[0]["id"].as_str().unwrap();
+    let (_, ranking) = get(
+        &app,
+        &format!("/tournaments/{copy_id}/steps/{first_id}/ranking"),
+        &s.admin,
+    )
+    .await;
+    assert_eq!(ranking[0]["participants"][0]["points"], 10.0);
+    assert_eq!(ranking[0]["participants"][0]["status"], "qualified");
+    let (_, standings) = get(&app, &format!("/tournaments/{copy_id}/ranking"), &s.admin).await;
+    assert_eq!(standings[0]["points"], 10.0);
+}
+
+#[actix_web::test]
+async fn importing_a_tournament_replaces_its_steps() {
+    let (app, s) = setup().await;
+    let tid = tournament(&app, &s, 8).await;
+    let old = create_step(&app, &s, &tid, step_body(1, 2, 4, 2)).await;
+    let (_, tournament) = get(&app, &format!("/tournaments/{tid}"), &s.admin).await;
+    let name = tournament["name"].as_str().unwrap().to_string();
+
+    let file = json!({ "version": 1, "tournaments": [{
+        "game": "TFT",
+        "name": name,
+        "start_date": "2026-11-14T18:00:00Z",
+        "end_date": "2026-11-15T18:00:00Z",
+        "participant_type": "solo",
+        "max_participants": 8,
+        "steps": [
+            { "position": 1, "format": "swiss", "match_type": "duel", "group_count": 1,
+              "group_size": 8, "advance_per_group": 4, "tiebreak": ["wins"] },
+            { "position": 2, "format": "single_elim", "match_type": "duel", "group_count": 1,
+              "group_size": 4, "advance_per_group": 1 },
+        ],
+    }]});
+    let (status, report) = import_file(&app, &s.admin, "json", file.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["updated"], 1);
+    let (_, steps) = get(&app, &format!("/tournaments/{tid}/steps"), &s.admin).await;
+    let formats: Vec<&str> = steps
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|step| step["format"].as_str().unwrap())
+        .collect();
+    assert_eq!(formats, ["swiss", "single_elim"]);
+    assert_eq!(steps[0]["matches_per_group"], 1);
+    assert_eq!(steps[0]["tiebreak"], json!(["wins"]));
+    let (status, _) = get(&app, &format!("/tournaments/{tid}/steps/{old}"), &s.admin).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "l'ancienne étape est remplacée"
+    );
+
+    // Sans `steps`, l'import vide les étapes.
+    let mut bare = file.clone();
+    bare["tournaments"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("steps");
+    let (status, _) = import_file(&app, &s.admin, "json", bare.to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, steps) = get(&app, &format!("/tournaments/{tid}/steps"), &s.admin).await;
+    assert_eq!(steps, json!([]));
+}
+
+#[actix_web::test]
+async fn teams_registered_alone_are_designated_by_their_rank() {
+    let (app, s) = setup().await;
+    let team = |name: &str, owner: &str| json!({ "name": name, "owner": owner, "members": [{ "username": owner, "role": "owner" }] });
+    let group = |ranks: [usize; 2], statuses: [&str; 2]| {
+        json!({ "index": 1, "participants": ranks.iter().zip(statuses).enumerate().map(|(i, (rank, status))| json!({
+            "team": rank, "points": 5.0 - i as f64, "final_rank": i + 1, "status": status,
+        })).collect::<Vec<_>>() })
+    };
+    let file = json!({ "version": 1, "tournaments": [{
+        "game": "TFT",
+        "name": "Par équipes",
+        "start_date": "2026-11-14T18:00:00Z",
+        "end_date": "2026-11-15T18:00:00Z",
+        "participant_type": "team",
+        "team_size": 1,
+        "max_participants": 2,
+        "status": "ongoing",
+        "teams": [team("Alpha", "player0"), team("Beta", "player1")],
+        "participants": [{ "team": 0 }, { "team": 1 }],
+        "steps": [{
+            "position": 1, "format": "pool", "match_type": "duel", "group_count": 1,
+            "group_size": 2, "advance_per_group": 1, "status": "finished",
+            "groups": [group([1, 0], ["qualified", "eliminated"])],
+        }],
+    }]});
+    let (status, report) = import_file(&app, &s.admin, "json", file.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+
+    let exported =
+        serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    let tournament = tournament_named(&exported, "Par équipes");
+    // Les rangs des équipes suivent l'ordre du fichier exporté, pas celui de l'import.
+    let teams: Vec<&str> = tournament["teams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    let winner = tournament["steps"][0]["groups"][0]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["status"] == "qualified")
+        .unwrap();
+    assert_eq!(teams[winner["team"].as_u64().unwrap() as usize], "Beta");
+    assert_eq!(winner["points"], 5.0);
+    assert!(winner.get("user").is_none() || winner["user"].is_null());
+}
+
+#[actix_web::test]
+async fn step_files_are_validated_before_any_write() {
+    let (app, s) = setup().await;
+    let step = |extra: Value| {
+        let mut step = json!({
+            "position": 1, "format": "pool", "match_type": "ffa", "group_count": 1,
+            "group_size": 4, "advance_per_group": 2,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            step[key] = value.clone();
+        }
+        step
+    };
+    let member = |user: &str, rank: u64, status: &str| json!({ "user": user, "final_rank": rank, "status": status });
+    let running_group = |users: &[&str]| json!([{ "index": 1, "participants": users.iter().map(|u| json!({ "user": u })).collect::<Vec<_>>() }]);
+    let cases = [
+        (
+            "réglages",
+            vec![step(json!({ "advance_per_group": 9 }))],
+            "advance_per_group",
+        ),
+        (
+            "position en double",
+            vec![step(json!({})), step(json!({}))],
+            "plusieurs fois",
+        ),
+        (
+            "groupes sur une étape en attente",
+            vec![step(json!({ "groups": running_group(&["player0"]) }))],
+            "pas de groupes",
+        ),
+        (
+            "groupe manquant",
+            vec![step(json!({ "status": "ongoing", "groups": [] }))],
+            "groupes",
+        ),
+        (
+            "inscrit inconnu",
+            vec![step(
+                json!({ "status": "ongoing", "groups": running_group(&["nobody"]) }),
+            )],
+            "n'est pas un inscrit",
+        ),
+        (
+            "inscrit en double",
+            vec![step(
+                json!({ "status": "ongoing", "groups": running_group(&["player0", "player0"]) }),
+            )],
+            "plusieurs fois",
+        ),
+        (
+            "groupe trop grand",
+            vec![step(json!({
+                "group_size": 2, "advance_per_group": 1, "status": "ongoing",
+                "groups": running_group(&["player0", "player1", "player2"]),
+            }))],
+            "au plus",
+        ),
+        (
+            "terminée sans rang",
+            vec![step(
+                json!({ "status": "finished", "groups": running_group(&["player0", "player1"]) }),
+            )],
+            "final_rank",
+        ),
+        (
+            "rangs incohérents",
+            vec![step(json!({
+                "status": "finished",
+                "groups": [{ "index": 1, "participants": [
+                    member("player0", 1, "qualified"), member("player1", 1, "qualified"),
+                ] }],
+            }))],
+            "rangs",
+        ),
+        (
+            "qualifié hors du quota",
+            vec![step(json!({
+                "advance_per_group": 1, "status": "finished",
+                "groups": [{ "index": 1, "participants": [
+                    member("player0", 1, "qualified"), member("player1", 2, "qualified"),
+                ] }],
+            }))],
+            "passent",
+        ),
+        (
+            "étape lancée après une étape en attente",
+            vec![
+                step(json!({})),
+                step(json!({
+                    "position": 2, "status": "ongoing",
+                    "groups": running_group(&["player0", "player1"]),
+                })),
+            ],
+            "précédentes",
+        ),
+        (
+            "participant non qualifié",
+            vec![
+                step(json!({
+                    "advance_per_group": 1, "status": "finished",
+                    "groups": [{ "index": 1, "participants": [
+                        member("player0", 1, "qualified"), member("player1", 2, "eliminated"),
+                    ] }],
+                })),
+                step(json!({
+                    "position": 2, "status": "ongoing",
+                    "groups": running_group(&["player1"]),
+                })),
+            ],
+            "n'est pas qualifié",
+        ),
+        (
+            "matchs non pris en charge",
+            vec![step(json!({ "matches": [{}] }))],
+            "matchs",
+        ),
+        (
+            "champ inconnu",
+            vec![step(json!({ "bonus": 1 }))],
+            "invalide",
+        ),
+    ];
+    for (label, steps, needle) in cases {
+        let file = json!({ "version": 1, "tournaments": [{
+            "game": "TFT",
+            "name": "Validé",
+            "start_date": "2026-11-14T18:00:00Z",
+            "end_date": "2026-11-15T18:00:00Z",
+            "participant_type": "solo",
+            "max_participants": 4,
+            "participants": [{ "user": "player0" }, { "user": "player1" }, { "user": "player2" }],
+            "steps": steps,
+        }]});
+        let (status, body) = import_file(&app, &s.admin, "json", file.to_string()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {body}");
+        assert!(
+            body["errors"]["file"].as_str().unwrap().contains(needle),
+            "{label}: {body}"
+        );
+    }
+    // Rien n'a été écrit.
+    let (_, list) = get(&app, "/tournaments", &s.admin).await;
+    assert_eq!(list, json!([]));
+}
