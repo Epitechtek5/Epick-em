@@ -2506,8 +2506,14 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         None
     );
 
-    // Supprimer l'étape emporte ses matchs et leurs participants.
-    assert!(store.delete_step(step.id).await.unwrap());
+    // Retirer un inscrit retire sa participation aux matchs, pas les matchs.
+    assert!(store.delete_participant(players[0]).await.unwrap());
+    assert!(store.find_match(semi.id).await.unwrap().is_some());
+    let remaining = store.list_step_match_participants(step.id).await.unwrap();
+    assert!(remaining.iter().all(|p| p.participant_id != players[0]));
+
+    // Supprimer le tournoi emporte ses étapes, leurs matchs et leurs participants.
+    assert!(store.delete_tournament(tournament.id).await.unwrap());
     assert_eq!(store.find_match(semi.id).await.unwrap(), None);
     assert!(
         store

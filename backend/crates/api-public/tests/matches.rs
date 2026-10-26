@@ -1035,3 +1035,104 @@ async fn invalid_files_with_nested_data_are_refused_in_both_formats() {
     assert_eq!(export_file(&app, &s.admin, "json").await, as_json);
     assert_eq!(export_file(&app, &s.admin, "csv").await, as_csv);
 }
+
+/// Un tournoi copié par import garde ses propres matchs : le supprimer ou le modifier ne touche
+/// pas l'original, et supprimer l'original emporte ses matchs.
+#[actix_web::test]
+async fn matches_follow_their_tournament_at_every_level() {
+    let (app, s) = setup().await;
+    let (tid, _) = halfway(&app, &s).await;
+    let (_, tournament) = get(&app, &format!("/tournaments/{tid}"), &s.admin).await;
+    let name = tournament["name"].as_str().unwrap().to_string();
+    let original =
+        serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    let steps = tournament_named(&original, &name)["steps"].clone();
+
+    let mut copy = tournament_named(&original, &name).clone();
+    copy["name"] = json!("Copie");
+    let mut document = original.clone();
+    document["tournaments"] = json!([copy]);
+    let (status, report) = import_file(&app, &s.admin, "json", document.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+
+    let (_, list) = get(&app, "/tournaments", &s.admin).await;
+    let copy_id = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Copie")
+        .map(id)
+        .unwrap();
+    let (_, copied) = get(&app, &format!("/tournaments/{copy_id}/steps"), &s.admin).await;
+    let copy_step = id(&copied[0]);
+    let copy_matches = format!("/tournaments/{copy_id}/steps/{copy_step}/matches");
+    let (_, listed) = get(&app, &copy_matches, &s.admin).await;
+    assert_eq!(listed.as_array().unwrap().len(), 3);
+
+    // Les matchs de la copie sont d'autres lignes : annuler l'un d'eux ne change pas l'original.
+    let ongoing = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["status"] == "ongoing")
+        .map(id)
+        .unwrap();
+    let (status, _) = post(
+        &app,
+        &format!("{copy_matches}/{ongoing}/status"),
+        &s.admin,
+        json!({ "status": "cancelled" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let after = serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    assert_eq!(tournament_named(&after, &name)["steps"], steps);
+    assert_ne!(tournament_named(&after, "Copie")["steps"], steps);
+
+    // Un tournoi en cours ne se supprime pas ; une fois terminé, l'original emporte ses matchs
+    // et laisse ceux de la copie.
+    let (status, _) = send(
+        &app,
+        TestRequest::delete(),
+        &format!("/tournaments/{tid}"),
+        &s.admin,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, error) = post(
+        &app,
+        &format!("/tournaments/{tid}/status"),
+        &s.admin,
+        json!({ "status": "cancelled" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{error}");
+    let (_, original_steps) = get(&app, &format!("/tournaments/{tid}/steps"), &s.admin).await;
+    let original_matches = format!(
+        "/tournaments/{tid}/steps/{}/matches",
+        id(&original_steps[0])
+    );
+    let (status, _) = send(
+        &app,
+        TestRequest::delete(),
+        &format!("/tournaments/{tid}"),
+        &s.admin,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = get(&app, &original_matches, &s.admin).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, listed) = get(&app, &copy_matches, &s.admin).await;
+    assert_eq!(listed.as_array().unwrap().len(), 3);
+    let remaining =
+        serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    assert!(
+        remaining["tournaments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["name"] == "Copie")
+    );
+}
