@@ -4,7 +4,22 @@ use axum::Json;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
+use utoipa::ToSchema;
+
+/// Corps de toute réponse d'erreur. Documentation uniquement : `ApiError` construit le JSON.
+#[derive(Serialize, ToSchema)]
+pub struct ErrorResponse {
+    /// Code stable, lisible par une machine.
+    #[schema(example = "invalid_request")]
+    pub error: String,
+    pub message: String,
+    /// Message par champ invalide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<BTreeMap<String, String>>,
+}
 
 #[derive(Debug)]
 pub enum ApiError {

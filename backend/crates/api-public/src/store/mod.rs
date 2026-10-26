@@ -17,7 +17,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 /// Rôle d'un compte. Toute inscription crée un `User` ; `Admin` se donne en base.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     User,
