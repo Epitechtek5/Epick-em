@@ -581,3 +581,146 @@ async fn stats_are_delegated_to_the_stats_level() {
     let (_, list) = send(&app, TestRequest::get(), "/games", &admin, None).await;
     assert_eq!(list.as_array().unwrap().len(), 1);
 }
+
+#[actix_web::test]
+async fn json_export_follows_the_documented_shape() {
+    let (app, admin, _) = setup().await;
+    let (status, _) = send(
+        &app,
+        TestRequest::post(),
+        "/games",
+        &admin,
+        Some(
+            json!({ "name": "Valorant", "description": "FPS", "images": ["https://e.com/a.png"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Sans paramètre, le format est le JSON.
+    let (status, default) = export(&app, &admin, "json").await;
+    assert_eq!(status, StatusCode::OK);
+    let file: Value = serde_json::from_str(&default).unwrap();
+    assert_eq!(file["version"], 1);
+    let game = &file["games"][0];
+    assert_eq!(game["name"], "Valorant");
+    assert_eq!(game["description"], "FPS");
+    assert_eq!(game["images"], json!(["https://e.com/a.png"]));
+    assert!(game["stats"].is_array(), "{game}");
+
+    let response = actix_web::test::call_service(
+        &app,
+        request(TestRequest::get(), "/games/export", Some(&admin)).to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        content_type.starts_with("application/json"),
+        "{content_type}"
+    );
+    let bytes = actix_web::test::read_body(response).await;
+    assert_eq!(String::from_utf8(bytes.to_vec()).unwrap(), default);
+}
+
+#[actix_web::test]
+async fn csv_export_has_a_header_and_one_line_per_game() {
+    let (app, admin, _) = setup().await;
+    for name in ["Valorant", "Dota 2"] {
+        create(&app, &admin, name).await;
+    }
+    let response = actix_web::test::call_service(
+        &app,
+        request(TestRequest::get(), "/games/export?format=csv", Some(&admin)).to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(content_type.starts_with("text/csv"), "{content_type}");
+    let bytes = actix_web::test::read_body(response).await;
+    let file = String::from_utf8(bytes.to_vec()).unwrap();
+
+    let lines: Vec<&str> = file.lines().collect();
+    assert_eq!(lines[0], "name,description,images,stats", "{file}");
+    assert_eq!(lines.len(), 3, "{file}");
+    assert!(
+        file.contains("Valorant") && file.contains("Dota 2"),
+        "{file}"
+    );
+}
+
+#[actix_web::test]
+async fn json_and_csv_files_are_interchangeable() {
+    let (app, admin, _) = setup().await;
+    let (status, _) = send(
+        &app,
+        TestRequest::post(),
+        "/games",
+        &admin,
+        Some(json!({
+            "name": "Valorant, \"FPS\"",
+            "description": "ligne 1\nligne 2",
+            "images": ["https://e.com/a.png", "https://e.com/b.png"],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    create(&app, &admin, "Dota 2").await;
+    let (_, as_json) = export(&app, &admin, "json").await;
+    let (_, as_csv) = export(&app, &admin, "csv").await;
+
+    // Un fichier JSON importé donne le même état qu'un fichier CSV : leurs deux exports se valent.
+    let (from_json, token_json, _) = setup().await;
+    let (status, report) = send_raw(
+        &from_json,
+        "/games/import?format=json",
+        &token_json,
+        &as_json,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    let (from_csv, token_csv, _) = setup().await;
+    let (status, report) =
+        send_raw(&from_csv, "/games/import?format=csv", &token_csv, &as_csv).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+
+    for format in ["json", "csv"] {
+        let (_, a) = export(&from_json, &token_json, format).await;
+        let (_, b) = export(&from_csv, &token_csv, format).await;
+        assert_eq!(a, b, "{format}");
+    }
+    let (_, a) = export(&from_json, &token_json, "json").await;
+    assert_eq!(a, as_json);
+    let (_, b) = export(&from_csv, &token_csv, "csv").await;
+    assert_eq!(b, as_csv);
+}
+
+#[actix_web::test]
+async fn a_file_in_the_wrong_format_is_refused() {
+    let (app, admin, _) = setup().await;
+    create(&app, &admin, "Valorant").await;
+    let (_, as_json) = export(&app, &admin, "json").await;
+    let (_, as_csv) = export(&app, &admin, "csv").await;
+    for (format, file) in [("csv", &as_json), ("json", &as_csv)] {
+        let (status, body) = send_raw(
+            &app,
+            &format!("/games/import?format={format}"),
+            &admin,
+            file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{format}: {body}");
+    }
+    let (_, list) = send(&app, TestRequest::get(), "/games", &admin, None).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}
