@@ -1938,3 +1938,62 @@ async fn steps_and_matches_are_delegated_to_their_levels() {
     let (_, list) = get(&app, "/tournaments", &admin).await;
     assert_eq!(list.as_array().unwrap().len(), 1);
 }
+
+#[actix_web::test]
+async fn tournament_files_in_json_and_csv_give_the_same_tournaments() {
+    let (app, s) = setup().await;
+    populate(&app, &s).await;
+    let as_json = export(&app, &s.admin, "json").await.1;
+    let as_csv = export(&app, &s.admin, "csv").await.1;
+    let header = as_csv.lines().next().unwrap().to_string();
+    assert_eq!(header.split(',').count(), 18, "{header}");
+    assert!(as_csv.lines().count() > 3, "{as_csv}");
+
+    // Chaque fichier, importé après avoir tout supprimé, redonne les deux exports d'origine.
+    for (format, file) in [("json", &as_json), ("csv", &as_csv)] {
+        delete_all(&app, &s).await;
+        let (status, report) = send_raw(
+            &app,
+            &format!("/tournaments/import?format={format}"),
+            &s.admin,
+            file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{format}: {report}");
+        assert_eq!(report, json!({ "created": 3, "updated": 0 }), "{format}");
+        assert_eq!(export(&app, &s.admin, "json").await.1, as_json, "{format}");
+        assert_eq!(export(&app, &s.admin, "csv").await.1, as_csv, "{format}");
+    }
+}
+
+#[actix_web::test]
+async fn invalid_tournament_files_are_refused_in_both_formats() {
+    let (app, s) = setup().await;
+    populate(&app, &s).await;
+    let as_json = export(&app, &s.admin, "json").await.1;
+    let as_csv = export(&app, &s.admin, "csv").await.1;
+    let header = as_csv.lines().next().unwrap().to_string();
+
+    let bad = [
+        ("json", "pas du json".to_string()),
+        ("json", r#"{ "version": 9, "tournaments": [] }"#.to_string()),
+        ("json", as_csv.clone()),
+        ("csv", as_json.clone()),
+        ("csv", String::new()),
+        ("csv", "game,name\nValorant,x\n".to_string()),
+        ("csv", format!("{header}\nValorant\n")),
+        ("xml", "<tournaments/>".to_string()),
+    ];
+    for (format, file) in bad {
+        let (status, error) = send_raw(
+            &app,
+            &format!("/tournaments/import?format={format}"),
+            &s.admin,
+            &file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{format}: {file}");
+        assert!(error.is_object(), "{error}");
+    }
+    assert_eq!(export(&app, &s.admin, "json").await.1, as_json);
+}
