@@ -1,2 +1,6 @@
 # Changelog maître : un fichier par changement (NNNN-description.yaml), voir ADR-006.
-databaseChangeLog: []
+databaseChangeLog:
+  - include:
+      file: changelog/0001-create-users.yaml
+  - include:
+      file: changelog/0002-create-refresh-tokens.yaml

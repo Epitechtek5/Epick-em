@@ -1,0 +1,40 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0001-create-users
+      author: epickem
+      changes:
+        - createTable:
+            tableName: users
+            remarks: Comptes utilisateurs (authentification)
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: username
+                  type: varchar(32)
+                  remarks: Nom d'utilisateur, unique sans tenir compte de la casse
+                  constraints:
+                    nullable: false
+              - column:
+                  name: password_hash
+                  type: text
+                  remarks: Empreinte Argon2id du mot de passe (format PHC)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: CREATE UNIQUE INDEX users_username_lower_key ON users (lower(username))
+            rollback: DROP INDEX users_username_lower_key
+      rollback:
+        - dropTable:
+            tableName: users
