@@ -14,8 +14,8 @@ pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::teams::{
-    Team, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember,
+    MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
+    TournamentTeamInput, TournamentTeamMember,
 };
 
 use async_trait::async_trait;
@@ -303,6 +303,14 @@ pub trait AuthStore: Send + Sync {
     /// Fait quitter l'équipe à un membre actif (la ligne est conservée avec `left_at`) ;
     /// `false` s'il n'en était pas un.
     async fn remove_team_member(&self, team_id: Uuid, user_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par jeu et nom, sans tenir compte de la casse) les équipes données,
+    /// en une seule opération : en cas d'erreur, aucune n'est modifiée. Les membres d'une équipe
+    /// existante sont **remplacés** par ceux du fichier. Chaque équipe est renvoyée avec `true`
+    /// si elle vient d'être créée. Les couples (jeu, nom) sont distincts, les jeux et les
+    /// comptes existent, et les membres respectent les contraintes d'appartenance (un seul
+    /// `owner` actif, un seul passage actif par compte).
+    async fn import_teams(&self, teams: Vec<TeamImport>) -> Result<Vec<(Team, bool)>, StoreError>;
 
     /// Équipes d'un tournoi par ordre de nom, `limit` à partir de `offset`.
     async fn list_tournament_teams(

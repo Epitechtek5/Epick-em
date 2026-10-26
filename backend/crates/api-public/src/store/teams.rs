@@ -125,6 +125,28 @@ pub struct TournamentTeamMember {
     pub role: TeamRole,
 }
 
+/// Équipe globale à créer ou à mettre à jour (par jeu et nom) depuis un fichier d'import, avec
+/// tous ses membres, anciens compris.
+#[derive(Debug, Clone)]
+pub struct TeamImport {
+    pub game_id: Uuid,
+    pub name: String,
+    pub tag: Option<String>,
+    pub picture_url: Option<String>,
+    pub owner_id: Uuid,
+    pub members: Vec<MemberImport>,
+}
+
+/// Appartenance importée : horodatages RFC 3339 en UTC à six décimales, `joined_at` valant
+/// l'instant présent s'il est absent.
+#[derive(Debug, Clone)]
+pub struct MemberImport {
+    pub user_id: Uuid,
+    pub role: TeamRole,
+    pub joined_at: Option<String>,
+    pub left_at: Option<String>,
+}
+
 /// Instant présent au format des horodatages de l'API (`2026-10-26T14:03:09.123456Z`), pour le
 /// store en mémoire ; PostgreSQL produit le même format.
 pub(super) fn now_rfc3339() -> String {

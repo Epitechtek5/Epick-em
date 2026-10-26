@@ -129,6 +129,8 @@ async fn every_route_requires_a_token() {
     let requests = [
         (TestRequest::get(), "/teams".to_string()),
         (TestRequest::post(), "/teams".to_string()),
+        (TestRequest::get(), "/teams/export".to_string()),
+        (TestRequest::post(), "/teams/import".to_string()),
         (TestRequest::get(), format!("/teams/{a}")),
         (TestRequest::patch(), format!("/teams/{a}")),
         (TestRequest::delete(), format!("/teams/{a}")),
@@ -800,4 +802,252 @@ async fn tournament_team_crud_is_owner_only() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = send(&app, TestRequest::get(), &members, &s.alice.token, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+async fn send_raw(app: &app_type!(), path: &str, token: &str, body: &str) -> (StatusCode, Value) {
+    call(
+        app,
+        request(TestRequest::post(), path, Some(token)).set_payload(body.to_string()),
+    )
+    .await
+}
+
+async fn export(app: &app_type!(), path: &str, token: &str) -> (StatusCode, String) {
+    let response = actix_web::test::call_service(
+        app,
+        request(TestRequest::get(), path, Some(token)).to_request(),
+    )
+    .await;
+    let status = response.status();
+    let bytes = actix_web::test::read_body(response).await;
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+/// Deux équipes, dont une avec un ancien membre.
+async fn seed(app: &app_type!(), s: &Setup) {
+    let team = create_team(app, s, &s.alice.token, "Karmine, \"KC\"").await;
+    add_member(app, &s.alice.token, id(&team), &s.bob.id, "member").await;
+    add_member(app, &s.alice.token, id(&team), &s.carol.id, "substitute").await;
+    let (status, _) = send(
+        app,
+        TestRequest::delete(),
+        &format!("/teams/{}/members/{}", id(&team), s.carol.id),
+        &s.alice.token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(
+        app,
+        TestRequest::post(),
+        "/teams",
+        &s.bob.token,
+        Some(json!({ "game_id": s.game, "name": "Sans tag" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+async fn delete_all_teams(app: &app_type!(), token: &str) {
+    let (_, teams) = send(app, TestRequest::get(), "/teams", token, None).await;
+    for team in teams.as_array().unwrap() {
+        let owner = if team["name"] == "Sans tag" {
+            "bob"
+        } else {
+            "alice"
+        };
+        // Le propriétaire seul supprime : on se reconnecte à son nom.
+        let (_, session) = login(app, owner, "secret123").await;
+        let (status, _) = send(
+            app,
+            TestRequest::delete(),
+            &format!("/teams/{}", id(team)),
+            access(&session),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+}
+
+#[actix_web::test]
+async fn team_import_and_export_are_reserved_to_administrators() {
+    let (app, s) = setup().await;
+    for token in [&s.alice.token] {
+        let (status, error) = send(&app, TestRequest::get(), "/teams/export", token, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+        let (status, _) = send_raw(&app, "/teams/import", token, "{}").await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    let (status, _) = export(&app, "/teams/export?format=xml", &s.admin).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+async fn exported_teams_are_imported_without_loss() {
+    let (app, s) = setup().await;
+    seed(&app, &s).await;
+    for format in ["json", "csv"] {
+        let path = format!("/teams/export?format={format}");
+        let (status, file) = export(&app, &path, &s.admin).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(file.contains("Karmine"), "{file}");
+        assert!(file.contains("carol"), "{file}");
+
+        delete_all_teams(&app, &s.admin).await;
+        let (_, empty) = send(&app, TestRequest::get(), "/teams", &s.admin, None).await;
+        assert!(empty.as_array().unwrap().is_empty());
+
+        let import = format!("/teams/import?format={format}");
+        let (status, report) = send_raw(&app, &import, &s.admin, &file).await;
+        assert_eq!(status, StatusCode::OK, "{report}");
+        assert_eq!(report, json!({ "created": 2, "updated": 0 }));
+        let (_, again) = export(&app, &path, &s.admin).await;
+        assert_eq!(again, file, "{format}");
+
+        // Réimporter met à jour sans rien créer ni perdre.
+        let (_, report) = send_raw(&app, &import, &s.admin, &file).await;
+        assert_eq!(report, json!({ "created": 0, "updated": 2 }));
+        let (_, still) = export(&app, &path, &s.admin).await;
+        assert_eq!(still, file, "{format}");
+    }
+
+    // L'équipe importée est pleinement utilisable : le propriétaire importé la gère.
+    let (_, teams) = send(&app, TestRequest::get(), "/teams", &s.admin, None).await;
+    let karmine = teams
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Karmine, \"KC\"")
+        .unwrap();
+    assert_eq!(karmine["owner_id"], s.alice.id);
+    let (status, members) = send(
+        &app,
+        TestRequest::get(),
+        &format!("/teams/{}/members", id(karmine)),
+        &s.alice.token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(members.as_array().unwrap().len(), 3);
+}
+
+#[actix_web::test]
+async fn import_updates_a_team_and_replaces_its_members() {
+    let (app, s) = setup().await;
+    let team = create_team(&app, &s, &s.alice.token, "Karmine").await;
+    add_member(&app, &s.alice.token, id(&team), &s.bob.id, "member").await;
+
+    let file = json!({
+        "version": 1,
+        "teams": [
+            {
+                "game": "VALORANT",
+                "name": "KARMINE",
+                "tag": "KCB",
+                "owner": "Carol",
+                "members": [
+                    { "username": "carol", "role": "owner", "joined_at": "2026-01-01T00:00:00Z" },
+                    { "username": "alice", "role": "member", "joined_at": "2026-01-01T00:00:00Z", "left_at": "2026-02-01T00:00:00Z" }
+                ]
+            },
+            {
+                "game": "Valorant",
+                "name": "Nouvelle",
+                "owner": "bob",
+                "members": [{ "username": "bob", "role": "owner" }]
+            }
+        ]
+    });
+    let (status, report) = send_raw(&app, "/teams/import", &s.admin, &file.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report, json!({ "created": 1, "updated": 1 }));
+
+    let (_, updated) = send(
+        &app,
+        TestRequest::get(),
+        &format!("/teams/{}", id(&team)),
+        &s.bob.token,
+        None,
+    )
+    .await;
+    assert_eq!(updated["name"], "KARMINE");
+    assert_eq!(updated["tag"], "KCB");
+    assert_eq!(updated["owner_id"], s.carol.id);
+    assert_eq!(updated["picture_url"], Value::Null);
+    let (_, members) = send(
+        &app,
+        TestRequest::get(),
+        &format!("/teams/{}/members", id(&team)),
+        &s.bob.token,
+        None,
+    )
+    .await;
+    let users: Vec<&str> = members
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["user_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(users.len(), 2);
+    assert!(!users.contains(&s.bob.id.as_str()));
+
+    // Alice n'est plus propriétaire, Carol l'est.
+    let (status, _) = send(
+        &app,
+        TestRequest::patch(),
+        &format!("/teams/{}", id(&team)),
+        &s.alice.token,
+        Some(json!({ "name": "Vol" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = send(
+        &app,
+        TestRequest::patch(),
+        &format!("/teams/{}", id(&team)),
+        &s.carol.token,
+        Some(json!({ "name": "Karmine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[actix_web::test]
+async fn an_invalid_import_changes_nothing() {
+    let (app, s) = setup().await;
+    create_team(&app, &s, &s.alice.token, "Karmine").await;
+    let (_, before) = export(&app, "/teams/export", &s.admin).await;
+
+    let bad = [
+        // Une équipe valide suivie d'une équipe au jeu et au propriétaire inconnus.
+        json!({ "version": 1, "teams": [
+            { "game": "Valorant", "name": "Valide", "owner": "bob", "members": [{ "username": "bob", "role": "owner" }] },
+            { "game": "Inconnu", "name": "Invalide", "owner": "fantome", "members": [] }
+        ] }),
+        json!({ "version": 1, "teams": [
+            { "game": "Valorant", "name": "Sans owner", "owner": "bob", "members": [{ "username": "bob", "role": "member" }] }
+        ] }),
+        json!({ "version": 1, "teams": [
+            { "game": "Valorant", "name": "Date", "owner": "bob", "members": [{ "username": "bob", "role": "owner", "joined_at": "hier" }] }
+        ] }),
+        json!({ "version": 2, "teams": [] }),
+    ];
+    for file in bad {
+        let (status, error) = send_raw(&app, "/teams/import", &s.admin, &file.to_string()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{file}");
+        assert!(error["errors"]["file"].is_string(), "{error}");
+    }
+    let (status, _) = send_raw(
+        &app,
+        "/teams/import?format=csv",
+        &s.admin,
+        "game,name\nValorant,x\n",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (_, after) = export(&app, "/teams/export", &s.admin).await;
+    assert_eq!(after, before);
 }
