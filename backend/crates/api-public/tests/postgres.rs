@@ -1512,3 +1512,119 @@ fn tournament_input_named(game_id: Uuid, name: &str) -> TournamentInput {
         ..tournament_input(game_id)
     }
 }
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn step_tables_enforce_their_constraints() {
+    let store = store().await;
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    let game_id = game(&store).await;
+    let alice = user(&store, "alice").await;
+    let first = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let second = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let participant = store
+        .add_participant(ParticipantInput {
+            tournament_id: first.id,
+            user_id: Some(alice),
+            tournament_team_id: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    let insert_step = |tournament: Uuid, position: i32, format: &str, groups: i32, advance: i32| {
+        let pool = pool.clone();
+        let format = format.to_string();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO step (tournament_id, position, format, match_type, group_count, \
+                 group_size, matches_per_group, advance_per_group) \
+                 VALUES ($1, $2, $3, 'ffa', $4, 4, 3, $5) RETURNING id",
+            )
+            .bind(tournament)
+            .bind(position)
+            .bind(format)
+            .bind(groups)
+            .bind(advance)
+            .fetch_one(&pool)
+            .await
+        }
+    };
+
+    let step = insert_step(first.id, 1, "pool", 2, 2).await.unwrap();
+    // Position unique par tournoi, qualifiés au plus égaux à la taille du groupe, un seul groupe
+    // hors `pool`, format connu.
+    assert!(insert_step(first.id, 1, "pool", 2, 2).await.is_err());
+    assert!(insert_step(first.id, 2, "pool", 2, 5).await.is_err());
+    assert!(insert_step(first.id, 2, "swiss", 2, 2).await.is_err());
+    assert!(insert_step(first.id, 2, "ladder", 1, 2).await.is_err());
+    assert!(insert_step(first.id, 2, "swiss", 1, 2).await.is_ok());
+
+    let group = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO step_group (step_id, index) VALUES ($1, 1) RETURNING id",
+    )
+    .bind(step)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query("INSERT INTO step_group (step_id, index) VALUES ($1, 1)")
+            .bind(step)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+
+    let enroll = |tournament: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO step_participant (step_id, tournament_id, participant_id, group_id) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(step)
+            .bind(tournament)
+            .bind(participant.id)
+            .bind(group)
+            .execute(&pool)
+            .await
+        }
+    };
+    // L'inscrit doit appartenir au tournoi de l'étape.
+    assert!(enroll(second.id).await.is_err());
+    enroll(first.id).await.unwrap();
+    assert!(enroll(first.id).await.is_err());
+    let (points, status): (f64, String) =
+        sqlx::query_as("SELECT points::float8, status FROM step_participant WHERE step_id = $1")
+            .bind(step)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((points, status.as_str()), (0.0, "in"));
+    assert!(
+        sqlx::query("UPDATE step_participant SET final_rank = 0")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+
+    // Supprimer le tournoi emporte ses étapes.
+    sqlx::query("DELETE FROM tournaments WHERE id = $1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM step WHERE id = $1")
+        .bind(step)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
