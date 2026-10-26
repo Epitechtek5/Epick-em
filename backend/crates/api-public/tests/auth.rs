@@ -33,10 +33,20 @@ async fn post(app: &Router, path: &str, body: Value) -> (StatusCode, Value) {
 }
 
 async fn post_raw(app: &Router, path: &str, body: String) -> (StatusCode, Value) {
-    let request = Request::post(path)
-        .header("content-type", "application/json")
-        .body(Body::from(body))
-        .unwrap();
+    send(app, path, body, None).await
+}
+
+/// POST avec le jeton d'accès dans `Authorization`.
+async fn post_as(app: &Router, token: &str, path: &str, body: Value) -> (StatusCode, Value) {
+    send(app, path, body.to_string(), Some(token)).await
+}
+
+async fn send(app: &Router, path: &str, body: String, token: Option<&str>) -> (StatusCode, Value) {
+    let mut request = Request::post(path).header("content-type", "application/json");
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let request = request.body(Body::from(body)).unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -67,6 +77,10 @@ async fn login(app: &Router, username: &str, password: &str) -> (StatusCode, Val
     .await
 }
 
+fn access(login: &Value) -> &str {
+    login["access_token"].as_str().unwrap()
+}
+
 /// Inscrit puis connecte `alice` ; renvoie la réponse de connexion.
 async fn logged_in(app: &Router) -> Value {
     assert_eq!(
@@ -79,12 +93,21 @@ async fn logged_in(app: &Router) -> Value {
 }
 
 #[tokio::test]
-async fn healthz_answers_ok() {
-    let response = app()
+async fn health_and_hello_answer_ok() {
+    let app = app();
+    for path in ["/health", "/hello"] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    let response = app
         .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -179,12 +202,16 @@ async fn register_accepts_the_boundary_lengths() {
 #[tokio::test]
 async fn malformed_bodies_are_bad_requests() {
     let app = app();
+    let token = logged_in(&app).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
     for path in ["/register", "/login", "/refresh", "/logout"] {
-        let (status, body) = post_raw(&app, path, "pas du json".into()).await;
+        let (status, body) = send(&app, path, "pas du json".into(), Some(&token)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
         assert_eq!(body["error"], "invalid_request");
 
-        let (status, _) = post(&app, path, json!({})).await;
+        let (status, _) = post_as(&app, &token, path, json!({})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path} sans champs");
     }
 }
@@ -246,26 +273,50 @@ async fn refresh_issues_new_tokens_and_invalidates_the_old_refresh_token() {
     let first = logged_in(&app).await;
     let old = first["refresh_token"].as_str().unwrap();
 
-    let (status, second) = post(&app, "/refresh", json!({ "refresh_token": old })).await;
+    let (status, second) = post_as(
+        &app,
+        access(&first),
+        "/refresh",
+        json!({ "refresh_token": old }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_ne!(second["refresh_token"], first["refresh_token"]);
     let claims = decode_access_token(second["access_token"].as_str().unwrap(), SECRET).unwrap();
     assert_eq!(claims.username, "alice");
 
     // Usage unique : rejouer l'ancien jeton échoue, le nouveau fonctionne.
-    let (status, _) = post(&app, "/refresh", json!({ "refresh_token": old })).await;
+    let (status, _) = post_as(
+        &app,
+        access(&first),
+        "/refresh",
+        json!({ "refresh_token": old }),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let new = second["refresh_token"].as_str().unwrap();
-    let (status, _) = post(&app, "/refresh", json!({ "refresh_token": new })).await;
+    let (status, _) = post_as(
+        &app,
+        access(&second),
+        "/refresh",
+        json!({ "refresh_token": new }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
 async fn refresh_rejects_unknown_tokens() {
     let app = app();
-    logged_in(&app).await;
+    let login = logged_in(&app).await;
     for token in ["", "inconnu", &"0".repeat(64)] {
-        let (status, body) = post(&app, "/refresh", json!({ "refresh_token": token })).await;
+        let (status, body) = post_as(
+            &app,
+            access(&login),
+            "/refresh",
+            json!({ "refresh_token": token }),
+        )
+        .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{token:?}");
         assert_eq!(body["error"], "unauthorized");
     }
@@ -277,8 +328,9 @@ async fn refresh_rejects_an_expired_token() {
     let login = logged_in(&app).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let (status, _) = post(
+    let (status, _) = post_as(
         &app,
+        access(&login),
         "/refresh",
         json!({ "refresh_token": login["refresh_token"] }),
     )
@@ -292,11 +344,11 @@ async fn logout_revokes_the_refresh_token() {
     let login = logged_in(&app).await;
     let body = json!({ "refresh_token": login["refresh_token"] });
 
-    let (status, response) = post(&app, "/logout", body.clone()).await;
+    let (status, response) = post_as(&app, access(&login), "/logout", body.clone()).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(response, Value::Null);
 
-    let (status, _) = post(&app, "/refresh", body).await;
+    let (status, _) = post_as(&app, access(&login), "/refresh", body).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -306,15 +358,17 @@ async fn logout_only_ends_the_given_session() {
     let first = logged_in(&app).await;
     let (_, second) = login(&app, "alice", "secret123").await;
 
-    post(
+    post_as(
         &app,
+        access(&first),
         "/logout",
         json!({ "refresh_token": first["refresh_token"] }),
     )
     .await;
 
-    let (status, _) = post(
+    let (status, _) = post_as(
         &app,
+        access(&second),
         "/refresh",
         json!({ "refresh_token": second["refresh_token"] }),
     )
@@ -329,14 +383,146 @@ async fn logout_is_idempotent() {
     let body = json!({ "refresh_token": login["refresh_token"] });
 
     assert_eq!(
-        post(&app, "/logout", body.clone()).await.0,
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(post(&app, "/logout", body).await.0, StatusCode::NO_CONTENT);
-    assert_eq!(
-        post(&app, "/logout", json!({ "refresh_token": "inconnu" }))
+        post_as(&app, access(&login), "/logout", body.clone())
             .await
             .0,
         StatusCode::NO_CONTENT
     );
+    assert_eq!(
+        post_as(&app, access(&login), "/logout", body).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        post_as(
+            &app,
+            access(&login),
+            "/logout",
+            json!({ "refresh_token": "inconnu" })
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+}
+
+/// Jeton signé avec le bon secret, mais émis et expiré il y a longtemps.
+fn expired_token(user_id: uuid::Uuid) -> String {
+    let claims = api_public::auth::Claims {
+        sub: user_id,
+        username: "alice".into(),
+        iat: 1_000,
+        exp: 2_000,
+    };
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
+    )
+    .unwrap()
+}
+
+async fn status_of(app: &Router, request: Request<Body>) -> StatusCode {
+    app.clone().oneshot(request).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn public_routes_need_no_token() {
+    let app = app();
+    assert_eq!(
+        register(&app, "alice", "secret123").await,
+        StatusCode::CREATED
+    );
+    assert_eq!(login(&app, "alice", "secret123").await.0, StatusCode::OK);
+    for path in ["/health", "/hello"] {
+        let request = Request::get(path).body(Body::empty()).unwrap();
+        assert_eq!(status_of(&app, request).await, StatusCode::OK, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn logout_requires_a_valid_access_token() {
+    let app = app();
+    let login = logged_in(&app).await;
+    let body = json!({ "refresh_token": login["refresh_token"] });
+
+    let (status, _) = post(&app, "/logout", body.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    for token in ["n'importe quoi", &expired_token(uuid::Uuid::new_v4())] {
+        let (status, response) = post_as(&app, token, "/logout", body.clone()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{token}");
+        assert_eq!(response["error"], "unauthorized");
+    }
+
+    // Sans jeton valide, la session n'est pas révoquée.
+    let (status, _) = post_as(&app, access(&login), "/refresh", body).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn refresh_requires_a_token_but_tolerates_an_expired_one() {
+    let app = app();
+    let login = logged_in(&app).await;
+    let body = |login: &Value| json!({ "refresh_token": login["refresh_token"] });
+
+    assert_eq!(
+        post(&app, "/refresh", body(&login)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let forged = {
+        let mut token = access(&login).to_string();
+        token.push('x');
+        token
+    };
+    assert_eq!(
+        post_as(&app, &forged, "/refresh", body(&login)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let claims = decode_access_token(access(&login), SECRET).unwrap();
+    let (status, renewed) =
+        post_as(&app, &expired_token(claims.sub), "/refresh", body(&login)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(decode_access_token(access(&renewed), SECRET).is_some());
+}
+
+#[tokio::test]
+async fn unsigned_or_wrongly_signed_tokens_are_rejected() {
+    let app = app();
+    let login = logged_in(&app).await;
+    let claims = decode_access_token(access(&login), SECRET).unwrap();
+    let foreign = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(b"un-autre-secret-un-autre-secret!"),
+    )
+    .unwrap();
+    let body = json!({ "refresh_token": login["refresh_token"] });
+    for path in ["/logout", "/refresh"] {
+        let (status, _) = post_as(&app, &foreign, path, body.clone()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn a_refresh_token_only_works_with_the_access_token_of_its_owner() {
+    let app = app();
+    let alice = logged_in(&app).await;
+    assert_eq!(
+        register(&app, "bob", "secret456").await,
+        StatusCode::CREATED
+    );
+    let (_, bob) = login(&app, "bob", "secret456").await;
+    let alice_refresh = json!({ "refresh_token": alice["refresh_token"] });
+
+    // Bob ne peut ni utiliser ni révoquer le jeton d'Alice...
+    let (status, _) = post_as(&app, access(&bob), "/refresh", alice_refresh.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = post_as(&app, access(&bob), "/logout", alice_refresh.clone()).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // ... qui reste utilisable par Alice : rien n'a été consommé.
+    let (status, renewed) = post_as(&app, access(&alice), "/refresh", alice_refresh).await;
+    assert_eq!(status, StatusCode::OK);
+    let claims = decode_access_token(access(&renewed), SECRET).unwrap();
+    assert_eq!(claims.username, "alice");
 }

@@ -3,6 +3,8 @@
 //! - Le jeton d'accès est un JWT HS256 de courte durée, sans état côté serveur ;
 //! - le jeton de rafraîchissement est une chaîne aléatoire opaque, dont seule l'empreinte
 //!   SHA-256 est stockée. Il est à usage unique : chaque rafraîchissement le remplace ;
+//! - toutes les routes exigent un jeton d'accès `Authorization: Bearer` valide, sauf celles de
+//!   `guard::route_policy` ; `/refresh` accepte un jeton expiré ;
 //! - la déconnexion révoque le jeton de rafraîchissement. Le jeton d'accès reste valable
 //!   jusqu'à son expiration (`ACCESS_TOKEN_TTL_SECS`).
 
@@ -16,7 +18,7 @@ use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -33,7 +35,7 @@ pub const PASSWORD_MAX: usize = 128;
 #[derive(Clone)]
 pub struct AppState {
     store: Arc<dyn AuthStore>,
-    config: Arc<AuthConfig>,
+    pub(crate) config: Arc<AuthConfig>,
     /// Empreinte factice, vérifiée quand le compte n'existe pas pour que « compte inconnu »
     /// et « mauvais mot de passe » prennent le même temps.
     dummy_hash: Arc<str>,
@@ -55,11 +57,16 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/healthz", get(|| async { "ok" }))
+        .route("/health", get(|| async { "ok" }))
+        .route("/hello", get(|| async { "Hello, world!" }))
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/refresh", post(refresh))
         .route("/logout", post(logout))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::guard::require_auth,
+        ))
         .with_state(state)
 }
 
@@ -90,7 +97,7 @@ struct TokenResponse {
 }
 
 /// Contenu du jeton d'accès.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Identifiant du compte.
     pub sub: Uuid,
@@ -101,8 +108,18 @@ pub struct Claims {
 
 /// Vérifie la signature et l'expiration d'un jeton d'accès.
 pub fn decode_access_token(token: &str, secret: &str) -> Option<Claims> {
+    decode_claims(token, secret, true)
+}
+
+/// Vérifie seulement la signature : un jeton expiré est accepté (route `/refresh`).
+pub fn decode_access_token_ignoring_expiry(token: &str, secret: &str) -> Option<Claims> {
+    decode_claims(token, secret, false)
+}
+
+fn decode_claims(token: &str, secret: &str, check_expiry: bool) -> Option<Claims> {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.leeway = 0;
+    validation.validate_exp = check_expiry;
     jsonwebtoken::decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -191,40 +208,48 @@ async fn login(
     }
 }
 
+/// Le jeton de rafraîchissement doit appartenir au compte du jeton d'accès (éventuellement
+/// expiré), vérifié par le middleware.
 async fn refresh(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     body: Result<Json<RefreshRequest>, JsonRejection>,
 ) -> Result<Json<TokenResponse>, ApiError> {
     let Json(request) = body?;
     let new_token = new_refresh_token();
-    let user_id = state
+    let rotated = state
         .store
         .rotate_refresh_token(
+            claims.sub,
             &hash_token(&request.refresh_token),
             &hash_token(&new_token),
             state.config.refresh_token_ttl,
         )
         .await
-        .map_err(ApiError::internal)?
-        .ok_or(ApiError::Unauthorized)?;
+        .map_err(ApiError::internal)?;
+    if !rotated {
+        return Err(ApiError::Unauthorized);
+    }
     let user = state
         .store
-        .find_user_by_id(user_id)
+        .find_user_by_id(claims.sub)
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::Unauthorized)?;
     token_response(&state.config, user.id, &user.username, new_token).map(Json)
 }
 
-/// Idempotent : répond 204 même si le jeton est inconnu ou déjà révoqué.
+/// Idempotent : répond 204 même si le jeton est inconnu, déjà révoqué ou appartient à un
+/// autre compte (dans ce cas il n'est pas révoqué).
 async fn logout(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     body: Result<Json<RefreshRequest>, JsonRejection>,
 ) -> Result<StatusCode, ApiError> {
     let Json(request) = body?;
     state
         .store
-        .revoke_refresh_token(&hash_token(&request.refresh_token))
+        .revoke_refresh_token(claims.sub, &hash_token(&request.refresh_token))
         .await
         .map_err(ApiError::internal)?;
     Ok(StatusCode::NO_CONTENT)
