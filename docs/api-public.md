@@ -37,6 +37,8 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `GET /games/{id}/stats` | JWT valide | — | `200` `[{ id, name, key, type }]`, statistiques du jeu |
 | `PUT /games/{id}/stats/{stat_id}` | JWT valide, **administrateur** | — | `204` (sans effet si déjà liée) |
 | `DELETE /games/{id}/stats/{stat_id}` | JWT valide, **administrateur** | — | `204`, `404` si la liaison n'existe pas |
+| `GET /stats/export` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` | `200` fichier `stats.json` / `stats.csv` |
+| `POST /stats/import` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` ; contenu du fichier en corps (256 Kio max) | `200` `{ created, updated }` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -69,7 +71,15 @@ Un seul format pour les deux sens : un fichier exporté se réimporte sans perte
 - **JSON :** `{ "version": 1, "games": [{ "name", "description", "images": [], "stats": [] }] }` ; `description`, `images` et `stats` sont facultatifs à l'import, les autres clés sont refusées.
 - **CSV :** en-tête `name,description,images,stats` ; `images` sépare les URLs par une espace ; `stats` contient le tableau JSON des statistiques (vide accepté).
 - **Import :** un jeu dont le nom (sans tenir compte de la casse) existe déjà met à jour ce jeu, sinon il est créé. Le fichier est validé en entier (mêmes règles que `POST /games`, noms distincts dans le fichier) avant toute écriture, puis les jeux sont écrits en une transaction ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus).
-- **Statistiques :** ce niveau les traite comme des valeurs opaques. Leur validation, leur export et leur import sont délégués au trait `game_io::GameStats` (branché avec `AppState::with_stats`) ; il n'en lit ni n'en interprète le contenu. Tant que les statistiques ne sont pas branchées (`NoStats`), l'export les renvoie vides et l'import refuse un fichier qui en contient.
+- **Statistiques :** ce niveau les traite comme des valeurs opaques. Leur validation, leur export et leur import sont délégués au trait `game_io::GameStats`, branché par défaut sur `stat_io::StoreStats` (`AppState::with_stats` permet d'en changer). Chaque jeu embarque `[{ "name", "key", "type" }]` ; importer un jeu crée ou met à jour (par clé) ces statistiques et **remplace** celles qui lui sont liées.
+
+### Import et export des statistiques
+
+Même principe, portée `stat` et `stat - game` uniquement.
+
+- **JSON :** `{ "version": 1, "stats": [{ "name", "key", "type", "games": [] }] }` ; `games` liste les noms des jeux liés et est facultatif à l'import, les autres clés sont refusées.
+- **CSV :** en-tête `name,key,type,games` ; `games` contient le tableau JSON des noms de jeux (vide accepté).
+- **Import :** une statistique dont la clé existe déjà met à jour cette statistique (nom, type) et **remplace** ses jeux liés, sinon elle est créée. Le fichier est validé en entier avant toute écriture (mêmes règles que `POST /stats`, clés distinctes, jeux existants et distincts) ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus).
 
 ### Erreurs
 

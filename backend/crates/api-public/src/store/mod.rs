@@ -222,4 +222,17 @@ pub trait AuthStore: Send + Sync {
 
     /// Délie la statistique du jeu ; `false` si elle n'y était pas liée.
     async fn unlink_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par clé) les statistiques données, en une seule opération : en cas
+    /// d'erreur, aucune n'est modifiée. Chacune est renvoyée avec `true` si elle vient d'être
+    /// créée. Les clés de `stats` sont distinctes.
+    async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError>;
+
+    /// Remplace les statistiques liées au jeu par `stat_ids`, en une seule opération. `false`
+    /// si le jeu ou l'une des statistiques n'existe pas (rien n'est alors modifié).
+    async fn set_game_stats(&self, game_id: Uuid, stat_ids: Vec<Uuid>) -> Result<bool, StoreError>;
+
+    /// Remplace les jeux liés à la statistique par `game_ids`, en une seule opération. `false`
+    /// si la statistique ou l'un des jeux n'existe pas (rien n'est alors modifié).
+    async fn set_stat_games(&self, stat_id: Uuid, game_ids: Vec<Uuid>) -> Result<bool, StoreError>;
 }
