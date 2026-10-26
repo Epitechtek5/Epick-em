@@ -3,11 +3,11 @@
 
 use super::{
     AuthStore, Game, GameInput, GameUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
-    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate,
-    StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament,
-    TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus, TournamentTeam,
-    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
-    UserUpdate,
+    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step,
+    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepStart, StoreError,
+    Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
+    TournamentInput, TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
@@ -300,6 +300,124 @@ fn scoring_rule(row: ScoringRuleRow) -> Result<ScoringRule, StoreError> {
             .transpose()
             .map_err(|err| StoreError::Other(err.to_string()))?,
     })
+}
+
+/// Colonnes de `step`, dans l'ordre de [`StepRow`].
+fn step_columns() -> String {
+    format!(
+        "id, tournament_id, position, format, match_type, group_count, group_size, \
+         matches_per_group, advance_per_group, tiebreak::text, status, {} AS created_at, \
+         {} AS updated_at",
+        ts("created_at"),
+        ts("updated_at")
+    )
+}
+
+type StepRow = (
+    Uuid,
+    Uuid,
+    i32,
+    String,
+    String,
+    i32,
+    i32,
+    i32,
+    i32,
+    String,
+    String,
+    String,
+    String,
+);
+
+fn step(row: StepRow) -> Result<Step, StoreError> {
+    Ok(Step {
+        id: row.0,
+        tournament_id: row.1,
+        position: row.2,
+        format: row.3.parse()?,
+        match_type: row.4.parse()?,
+        group_count: row.5,
+        group_size: row.6,
+        matches_per_group: row.7,
+        advance_per_group: row.8,
+        tiebreak: serde_json::from_str(&row.9).map_err(|err| StoreError::Other(err.to_string()))?,
+        status: row.10.parse()?,
+        created_at: row.11,
+        updated_at: row.12,
+    })
+}
+
+type StepParticipantRow = (Uuid, Uuid, Uuid, f64, Option<i32>, String);
+
+fn step_participant(row: StepParticipantRow) -> Result<StepParticipant, StoreError> {
+    Ok(StepParticipant {
+        step_id: row.0,
+        participant_id: row.1,
+        group_id: row.2,
+        points: row.3,
+        final_rank: row.4,
+        status: row.5.parse()?,
+    })
+}
+
+fn step_conflict(err: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db) = &err
+        && db.code().as_deref() == Some(UNIQUE_VIOLATION)
+        && db.constraint() == Some("step_tournament_position_key")
+    {
+        return StoreError::StepPositionTaken;
+    }
+    err.into()
+}
+
+/// Passe l'étape `pending` en `ongoing` et crée ses groupes et ses participants.
+async fn start_step_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    start: StepStart,
+) -> Result<Option<Step>, StoreError> {
+    let updated = sqlx::query_as::<_, StepRow>(&format!(
+        "UPDATE step SET status = 'ongoing', updated_at = now() \
+         WHERE id = $1 AND status = 'pending' RETURNING {}",
+        step_columns()
+    ))
+    .bind(start.step_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(updated) = updated else {
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM step WHERE id = $1)")
+                .bind(start.step_id)
+                .fetch_one(&mut **tx)
+                .await?;
+        return if exists {
+            Err(StoreError::StepState)
+        } else {
+            Ok(None)
+        };
+    };
+    let step = step(updated)?;
+    for (index, ids) in start.groups.iter().enumerate() {
+        let group_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO step_group (step_id, index) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(step.id)
+        .bind(i32::try_from(index + 1).unwrap_or(i32::MAX))
+        .fetch_one(&mut **tx)
+        .await?;
+        for participant_id in ids {
+            sqlx::query(
+                "INSERT INTO step_participant (step_id, tournament_id, participant_id, group_id) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(step.id)
+            .bind(step.tournament_id)
+            .bind(participant_id)
+            .bind(group_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    Ok(Some(step))
 }
 
 /// Colonnes de `tournament_participant`, dans l'ordre de [`ParticipantRow`].
@@ -1598,11 +1716,202 @@ impl AuthStore for PgStore {
 
     async fn participant_points(
         &self,
-        _tournament_id: Uuid,
+        tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError> {
-        // Les points d'un inscrit viennent des résultats des étapes (`step_participant`, #52),
-        // qui n'existent pas encore : aucun point n'est enregistré.
-        Ok(HashMap::new())
+        let rows = sqlx::query_as::<_, (Uuid, f64)>(
+            "SELECT participant_id, sum(points)::float8 FROM step_participant \
+             WHERE tournament_id = $1 GROUP BY participant_id",
+        )
+        .bind(tournament_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError> {
+        sqlx::query_as::<_, StepRow>(&format!(
+            "SELECT {} FROM step WHERE tournament_id = $1 ORDER BY position",
+            step_columns()
+        ))
+        .bind(tournament_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(step)
+        .collect()
+    }
+
+    async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError> {
+        sqlx::query_as::<_, StepRow>(&format!(
+            "SELECT {} FROM step WHERE id = $1",
+            step_columns()
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(step)
+        .transpose()
+    }
+
+    async fn create_step(&self, input: StepInput) -> Result<Option<Step>, StoreError> {
+        let definition = input.definition;
+        sqlx::query_as::<_, StepRow>(&format!(
+            "INSERT INTO step (tournament_id, position, format, match_type, group_count, \
+                 group_size, matches_per_group, advance_per_group, tiebreak) \
+             SELECT t.id, $2, $3, $4, $5, $6, $7, $8, $9::jsonb FROM tournaments t WHERE t.id = $1 \
+             RETURNING {}",
+            step_columns()
+        ))
+        .bind(input.tournament_id)
+        .bind(definition.position)
+        .bind(definition.format.as_str())
+        .bind(definition.match_type.as_str())
+        .bind(definition.group_count)
+        .bind(definition.group_size)
+        .bind(definition.matches_per_group)
+        .bind(definition.advance_per_group)
+        .bind(definition.tiebreak.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(step_conflict)?
+        .map(step)
+        .transpose()
+    }
+
+    async fn replace_step(
+        &self,
+        id: Uuid,
+        definition: StepDefinition,
+    ) -> Result<Option<Step>, StoreError> {
+        sqlx::query_as::<_, StepRow>(&format!(
+            "UPDATE step SET position = $2, format = $3, match_type = $4, group_count = $5, \
+                 group_size = $6, matches_per_group = $7, advance_per_group = $8, \
+                 tiebreak = $9::jsonb, updated_at = now() \
+             WHERE id = $1 RETURNING {}",
+            step_columns()
+        ))
+        .bind(id)
+        .bind(definition.position)
+        .bind(definition.format.as_str())
+        .bind(definition.match_type.as_str())
+        .bind(definition.group_count)
+        .bind(definition.group_size)
+        .bind(definition.matches_per_group)
+        .bind(definition.advance_per_group)
+        .bind(definition.tiebreak.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(step_conflict)?
+        .map(step)
+        .transpose()
+    }
+
+    async fn delete_step(&self, id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query("DELETE FROM step WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError> {
+        Ok(sqlx::query_as::<_, (Uuid, Uuid, i32)>(
+            "SELECT id, step_id, index FROM step_group WHERE step_id = $1 ORDER BY index",
+        )
+        .bind(step_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| StepGroup {
+            id: row.0,
+            step_id: row.1,
+            index: row.2,
+        })
+        .collect())
+    }
+
+    async fn list_step_participants(
+        &self,
+        step_id: Uuid,
+    ) -> Result<Vec<StepParticipant>, StoreError> {
+        sqlx::query_as::<_, StepParticipantRow>(
+            "SELECT p.step_id, p.participant_id, p.group_id, p.points::float8, p.final_rank, \
+                 p.status \
+             FROM step_participant p JOIN step_group g ON g.id = p.group_id \
+             WHERE p.step_id = $1 ORDER BY g.index, p.participant_id",
+        )
+        .bind(step_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(step_participant)
+        .collect()
+    }
+
+    async fn start_step(&self, start: StepStart) -> Result<Option<Step>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let started = start_step_in(&mut tx, start).await?;
+        tx.commit().await?;
+        Ok(started)
+    }
+
+    async fn close_step(&self, closing: StepClosing) -> Result<Option<Step>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let updated = sqlx::query_as::<_, StepRow>(&format!(
+            "UPDATE step SET status = 'finished', updated_at = now() \
+             WHERE id = $1 AND status = 'ongoing' RETURNING {}",
+            step_columns()
+        ))
+        .bind(closing.step_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(updated) = updated else {
+            let exists =
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM step WHERE id = $1)")
+                    .bind(closing.step_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            return if exists {
+                Err(StoreError::StepState)
+            } else {
+                Ok(None)
+            };
+        };
+        for outcome in &closing.outcomes {
+            sqlx::query(
+                "UPDATE step_participant SET final_rank = $3, status = $4 \
+                 WHERE step_id = $1 AND participant_id = $2",
+            )
+            .bind(closing.step_id)
+            .bind(outcome.participant_id)
+            .bind(outcome.final_rank)
+            .bind(outcome.status.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+        if let Some(next) = closing.next {
+            start_step_in(&mut tx, next).await?;
+        }
+        tx.commit().await?;
+        Ok(Some(step(updated)?))
+    }
+
+    async fn set_step_points(
+        &self,
+        step_id: Uuid,
+        participant_id: Uuid,
+        points: f64,
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "UPDATE step_participant SET points = $3::float8::numeric \
+             WHERE step_id = $1 AND participant_id = $2",
+        )
+        .bind(step_id)
+        .bind(participant_id)
+        .bind(points)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     async fn import_tournaments(
