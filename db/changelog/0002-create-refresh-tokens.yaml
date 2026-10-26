@@ -1,0 +1,56 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0002-create-refresh-tokens
+      author: epickem
+      changes:
+        - createTable:
+            tableName: refresh_tokens
+            remarks: Jetons de rafraîchissement (seule l'empreinte est stockée)
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_refresh_tokens_user
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: token_hash
+                  type: char(64)
+                  remarks: SHA-256 du jeton, en hexadécimal
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: refresh_tokens_token_hash_key
+              - column:
+                  name: expires_at
+                  type: timestamptz
+                  constraints:
+                    nullable: false
+              - column:
+                  name: revoked_at
+                  type: timestamptz
+                  remarks: Renseigné quand le jeton est utilisé (rotation) ou révoqué (déconnexion)
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: refresh_tokens
+            indexName: refresh_tokens_user_id_idx
+            columns:
+              - column:
+                  name: user_id
+      rollback:
+        - dropTable:
+            tableName: refresh_tokens
