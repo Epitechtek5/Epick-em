@@ -97,24 +97,26 @@ impl AuthStore for PgStore {
 
     async fn rotate_refresh_token(
         &self,
+        user_id: Uuid,
         old_hash: &str,
         new_hash: &str,
         ttl: Duration,
-    ) -> Result<Option<Uuid>, StoreError> {
+    ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
         // L'UPDATE conditionnel verrouille la ligne : deux rafraîchissements simultanés
         // avec le même jeton ne peuvent pas réussir tous les deux.
-        let user_id: Option<Uuid> = sqlx::query_scalar(
+        let rotated = sqlx::query(
             "UPDATE refresh_tokens SET revoked_at = now() \
-             WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now() \
-             RETURNING user_id",
+             WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()",
         )
         .bind(old_hash)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let Some(user_id) = user_id else {
-            return Ok(None);
-        };
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if rotated == 0 {
+            return Ok(false);
+        }
         sqlx::query(
             "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) \
              VALUES ($1, $2, now() + $3::float8 * interval '1 second')",
@@ -125,15 +127,20 @@ impl AuthStore for PgStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(Some(user_id))
+        Ok(true)
     }
 
-    async fn revoke_refresh_token(&self, token_hash: &str) -> Result<(), StoreError> {
+    async fn revoke_refresh_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+    ) -> Result<(), StoreError> {
         sqlx::query(
             "UPDATE refresh_tokens SET revoked_at = now() \
-             WHERE token_hash = $1 AND revoked_at IS NULL",
+             WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL",
         )
         .bind(token_hash)
+        .bind(user_id)
         .execute(&self.pool)
         .await?;
         Ok(())

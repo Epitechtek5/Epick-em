@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod guard;
 pub mod store;
 
 pub use auth::{AppState, router};

@@ -98,18 +98,22 @@ impl AuthStore for MemoryStore {
 
     async fn rotate_refresh_token(
         &self,
+        user_id: Uuid,
         old_hash: &str,
         new_hash: &str,
         ttl: Duration,
-    ) -> Result<Option<Uuid>, StoreError> {
+    ) -> Result<bool, StoreError> {
         let mut state = self.state();
-        let user_id = match state.tokens.get_mut(old_hash) {
-            Some(token) if !token.revoked && token.expires_at > Instant::now() => {
+        match state.tokens.get_mut(old_hash) {
+            Some(token)
+                if token.user_id == user_id
+                    && !token.revoked
+                    && token.expires_at > Instant::now() =>
+            {
                 token.revoked = true;
-                token.user_id
             }
-            _ => return Ok(None),
-        };
+            _ => return Ok(false),
+        }
         state.tokens.insert(
             new_hash.to_string(),
             RefreshToken {
@@ -118,11 +122,17 @@ impl AuthStore for MemoryStore {
                 revoked: false,
             },
         );
-        Ok(Some(user_id))
+        Ok(true)
     }
 
-    async fn revoke_refresh_token(&self, token_hash: &str) -> Result<(), StoreError> {
-        if let Some(token) = self.state().tokens.get_mut(token_hash) {
+    async fn revoke_refresh_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+    ) -> Result<(), StoreError> {
+        if let Some(token) = self.state().tokens.get_mut(token_hash)
+            && token.user_id == user_id
+        {
             token.revoked = true;
         }
         Ok(())

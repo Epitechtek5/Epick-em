@@ -62,17 +62,43 @@ async fn refresh_tokens_rotate_once_and_can_be_revoked() {
     let (a, b, c) = (unique("a"), unique("b"), unique("c"));
 
     store.insert_refresh_token(user.id, &a, ttl).await.unwrap();
-    assert_eq!(
-        store.rotate_refresh_token(&a, &b, ttl).await.unwrap(),
-        Some(user.id)
+    let stranger = Uuid::new_v4();
+    // Un autre compte ne peut ni utiliser ni révoquer le jeton.
+    assert!(
+        !store
+            .rotate_refresh_token(stranger, &a, &b, ttl)
+            .await
+            .unwrap()
+    );
+    store.revoke_refresh_token(stranger, &a).await.unwrap();
+    assert!(
+        store
+            .rotate_refresh_token(user.id, &a, &b, ttl)
+            .await
+            .unwrap()
     );
     // `a` est consommé, et un échec de rotation n'enregistre rien.
-    assert_eq!(store.rotate_refresh_token(&a, &c, ttl).await.unwrap(), None);
-    assert_eq!(store.rotate_refresh_token(&c, &c, ttl).await.unwrap(), None);
+    assert!(
+        !store
+            .rotate_refresh_token(user.id, &a, &c, ttl)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .rotate_refresh_token(user.id, &c, &c, ttl)
+            .await
+            .unwrap()
+    );
 
-    store.revoke_refresh_token(&b).await.unwrap();
-    store.revoke_refresh_token(&b).await.unwrap();
-    assert_eq!(store.rotate_refresh_token(&b, &c, ttl).await.unwrap(), None);
+    store.revoke_refresh_token(user.id, &b).await.unwrap();
+    store.revoke_refresh_token(user.id, &b).await.unwrap();
+    assert!(
+        !store
+            .rotate_refresh_token(user.id, &b, &c, ttl)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -87,12 +113,11 @@ async fn expired_refresh_tokens_are_refused() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        store
-            .rotate_refresh_token(&a, &b, Duration::from_secs(60))
+    assert!(
+        !store
+            .rotate_refresh_token(user.id, &a, &b, Duration::from_secs(60))
             .await
-            .unwrap(),
-        None
+            .unwrap()
     );
 }
 
@@ -110,11 +135,17 @@ async fn concurrent_rotations_of_one_token_have_a_single_winner() {
 
     let attempts = (0..8).map(|_| {
         let (store, old, new) = (store.clone(), old.clone(), unique("new"));
-        tokio::spawn(async move { store.rotate_refresh_token(&old, &new, ttl).await.unwrap() })
+        let user_id = user.id;
+        tokio::spawn(async move {
+            store
+                .rotate_refresh_token(user_id, &old, &new, ttl)
+                .await
+                .unwrap()
+        })
     });
     let mut winners = 0;
     for attempt in attempts {
-        winners += usize::from(attempt.await.unwrap().is_some());
+        winners += usize::from(attempt.await.unwrap());
     }
     assert_eq!(winners, 1);
 }

@@ -68,16 +68,19 @@ pub trait AuthStore: Send + Sync {
         ttl: Duration,
     ) -> Result<(), StoreError>;
 
-    /// Révoque `old_hash` s'il est valide (existant, non révoqué, non expiré) et enregistre
-    /// `new_hash` à sa place, en une seule opération. Renvoie le propriétaire du jeton, ou
-    /// `None` si `old_hash` est inutilisable (rien n'est alors enregistré).
+    /// Révoque `old_hash` s'il est valide (existant, non révoqué, non expiré) et appartient à
+    /// `user_id`, et enregistre `new_hash` à sa place, en une seule opération. Renvoie `false`
+    /// si `old_hash` est inutilisable (rien n'est alors enregistré ni révoqué).
     async fn rotate_refresh_token(
         &self,
+        user_id: Uuid,
         old_hash: &str,
         new_hash: &str,
         ttl: Duration,
-    ) -> Result<Option<Uuid>, StoreError>;
+    ) -> Result<bool, StoreError>;
 
-    /// Révoque le jeton ; un jeton inconnu ou déjà révoqué n'est pas une erreur.
-    async fn revoke_refresh_token(&self, token_hash: &str) -> Result<(), StoreError>;
+    /// Révoque le jeton s'il appartient à `user_id` ; un jeton inconnu, déjà révoqué ou
+    /// appartenant à un autre compte n'est pas une erreur (et n'est pas modifié).
+    async fn revoke_refresh_token(&self, user_id: Uuid, token_hash: &str)
+    -> Result<(), StoreError>;
 }
