@@ -16,6 +16,12 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /login` | aucune | `{ username, password }` | `200` jetons (voir ci-dessous) |
 | `POST /refresh` | JWT, **expiré toléré** | `{ refresh_token }` | `200` nouveaux jetons |
 | `POST /logout` | JWT valide | `{ refresh_token }` | `204` |
+| `GET /users` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, username, role }]` |
+| `GET /user/{id}` | JWT valide | — | `200` `{ id, username, role }` |
+| `PATCH /user/{id}/update` | JWT valide, **administrateur** | `{ username?, password?, role? }` | `200` `{ id, username, role }` |
+| `DELETE /user/{id}/delete` | JWT valide, **administrateur** | — | `204` |
+| `PATCH /me/update` | JWT valide | `{ username?, password? }` (`role` refusé) | `200` `{ id, username, role }` |
+| `DELETE /me/delete` | JWT valide | — | `204` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -31,7 +37,7 @@ L'authentification se fait par `Authorization: Bearer <access_token>`.
 }
 ```
 
-Le jeton d'accès est un JWT HS256 dont les claims sont `sub` (id du compte), `username`, `role` (`user` ou `admin`), `iat` et `exp`.
+Le jeton d'accès est un JWT HS256 dont les claims sont `sub` (id du compte), `username`, `role` (`user`, `admin` ou `watcher`), `iat` et `exp`.
 
 ### Règles
 
@@ -47,6 +53,8 @@ Format `{ "error", "message", "errors"? }` :
 |---|---|---|
 | `400` | `invalid_request` | corps illisible ou champs invalides (`errors` donne le détail par champ) |
 | `401` | `unauthorized` | jeton absent, invalide ou expiré ; identifiants ou jeton de rafraîchissement refusés |
+| `403` | `forbidden` | action réservée aux administrateurs, ou changement de son propre rôle |
+| `404` | `not_found` | compte introuvable (ou identifiant qui n'est pas un UUID) |
 | `409` | `username_taken` | nom d'utilisateur déjà pris |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
@@ -60,10 +68,10 @@ Format `{ "error", "message", "errors"? }` :
 
 ## Rôles
 
-Les inscriptions créent des `user`. Pour promouvoir un compte :
+Les inscriptions créent des `user`. Les rôles sont `user`, `admin` et `watcher`. Un administrateur change le rôle d'un compte avec `PATCH /user/{id}/update` ; le premier administrateur se désigne en base :
 
 ```sql
 UPDATE users SET role = 'admin' WHERE lower(username) = lower('<nom>');
 ```
 
-La promotion apparaît dans le jeton d'accès au prochain `/refresh` ou `/login`. Aucune route ne l'exige encore : le claim `role` est disponible dans les extensions de la requête (`Claims`) pour les futurs contrôles.
+Le changement apparaît dans le jeton d'accès au prochain `/refresh` ou `/login`. Les routes réservées aux administrateurs ne se fient pas au claim `role` (qui peut dater de `ACCESS_TOKEN_TTL_SECS`) : elles relisent le rôle courant en base (hors cache), si bien qu'un administrateur rétrogradé ou supprimé perd ses droits immédiatement. Le framework est actix-web ([ADR-010](adr/010-api-publique-actix-web.md)).

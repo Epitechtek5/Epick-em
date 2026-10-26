@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const exceptions = new Map([
   ['GHSA-vfj7-8cjw-p6xm', 'braces'],
   ['GHSA-86w9-cpqp-85rv', 'node-forge'],
+  ['GHSA-rj75-hqrm-r3gf', 'postcss-selector-parser'],
 ]);
 const severities = ['info', 'low', 'moderate', 'high', 'critical'];
 const isObject = (value) =>

@@ -1,119 +1,63 @@
 //! Parcours HTTP complet des routes d'authentification, sur un store en mémoire.
 
+mod common;
+
+use actix_web::http::StatusCode;
+use actix_web::test::TestRequest;
 use api_public::auth::decode_access_token;
-use api_public::config::AuthConfig;
 use api_public::store::{AuthStore, MemoryStore, Role};
-use api_public::{AppState, router};
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
+use common::{
+    SECRET, access, app_default, app_with, call, logged_in_as, login, post, post_as, register,
+    request,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
-use tower::ServiceExt;
-
-const SECRET: &str = "0123456789abcdef0123456789abcdef";
-
-fn app_with(store: Arc<MemoryStore>, refresh_ttl: Duration) -> Router {
-    let config = AuthConfig {
-        jwt_secret: SECRET.into(),
-        access_token_ttl: Duration::from_secs(900),
-        refresh_token_ttl: refresh_ttl,
-    };
-    router(AppState::new(store, config).unwrap())
-}
-
-fn app() -> Router {
-    app_with(Arc::new(MemoryStore::new()), Duration::from_secs(3600))
-}
-
-async fn post(app: &Router, path: &str, body: Value) -> (StatusCode, Value) {
-    post_raw(app, path, body.to_string()).await
-}
-
-async fn post_raw(app: &Router, path: &str, body: String) -> (StatusCode, Value) {
-    send(app, path, body, None).await
-}
-
-/// POST avec le jeton d'accès dans `Authorization`.
-async fn post_as(app: &Router, token: &str, path: &str, body: Value) -> (StatusCode, Value) {
-    send(app, path, body.to_string(), Some(token)).await
-}
-
-async fn send(app: &Router, path: &str, body: String, token: Option<&str>) -> (StatusCode, Value) {
-    let mut request = Request::post(path).header("content-type", "application/json");
-    if let Some(token) = token {
-        request = request.header("authorization", format!("Bearer {token}"));
-    }
-    let request = request.body(Body::from(body)).unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let json = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes).unwrap()
-    };
-    (status, json)
-}
-
-async fn register(app: &Router, username: &str, password: &str) -> StatusCode {
-    post(
-        app,
-        "/register",
-        json!({ "username": username, "password": password }),
-    )
-    .await
-    .0
-}
-
-async fn login(app: &Router, username: &str, password: &str) -> (StatusCode, Value) {
-    post(
-        app,
-        "/login",
-        json!({ "username": username, "password": password }),
-    )
-    .await
-}
-
-fn access(login: &Value) -> &str {
-    login["access_token"].as_str().unwrap()
-}
 
 /// Inscrit puis connecte `alice` ; renvoie la réponse de connexion.
-async fn logged_in(app: &Router) -> Value {
-    assert_eq!(
-        register(app, "alice", "secret123").await,
-        StatusCode::CREATED
-    );
-    let (status, body) = login(app, "alice", "secret123").await;
-    assert_eq!(status, StatusCode::OK);
-    body
+async fn logged_in(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<impl actix_web::body::MessageBody>,
+        Error = actix_web::Error,
+    >,
+) -> Value {
+    logged_in_as(app, "alice", "secret123").await
 }
 
-#[tokio::test]
+/// POST d'un corps brut (éventuellement illisible) avec un jeton d'accès facultatif.
+async fn post_raw(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<impl actix_web::body::MessageBody>,
+        Error = actix_web::Error,
+    >,
+    path: &str,
+    body: &str,
+    token: Option<&str>,
+) -> (StatusCode, Value) {
+    let req = request(TestRequest::post(), path, token)
+        .insert_header(("content-type", "application/json"))
+        .set_payload(body.to_string());
+    call(app, req).await
+}
+
+#[actix_web::test]
 async fn health_and_hello_answer_ok() {
-    let app = app();
+    let app = app_default().await;
     for path in ["/health", "/hello"] {
-        let response = app
-            .clone()
-            .oneshot(Request::get(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let (status, _) = call(&app, request(TestRequest::get(), path, None)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
     }
-    let response = app
-        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // Un chemin inconnu reste un 404, même sans jeton.
+    let (status, _) = call(&app, request(TestRequest::get(), "/healthz", None)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn register_creates_the_account_without_leaking_the_password() {
     let (status, body) = post(
-        &app(),
+        &app_default().await,
         "/register",
         json!({ "username": "alice", "password": "secret123" }),
     )
@@ -125,10 +69,10 @@ async fn register_creates_the_account_without_leaking_the_password() {
     assert!(body.get("password_hash").is_none());
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn register_stores_an_argon2_hash_not_the_password() {
     let store = Arc::new(MemoryStore::new());
-    let app = app_with(store.clone(), Duration::from_secs(3600));
+    let app = app_with(store.clone(), Duration::from_secs(3600)).await;
     assert_eq!(
         register(&app, "alice", "secret123").await,
         StatusCode::CREATED
@@ -139,9 +83,9 @@ async fn register_stores_an_argon2_hash_not_the_password() {
     assert!(!user.password_hash.contains("secret123"));
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn register_rejects_a_taken_username_whatever_the_case() {
-    let app = app();
+    let app = app_default().await;
     assert_eq!(
         register(&app, "alice", "secret123").await,
         StatusCode::CREATED
@@ -156,9 +100,9 @@ async fn register_rejects_a_taken_username_whatever_the_case() {
     );
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn register_reports_each_invalid_field() {
-    let app = app();
+    let app = app_default().await;
     for username in ["ab", &"a".repeat(33), "john doe", "jöhn", "john@doe"] {
         let (status, body) = post(
             &app,
@@ -189,9 +133,9 @@ async fn register_reports_each_invalid_field() {
     assert_eq!(body["errors"].as_object().unwrap().len(), 2);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn register_accepts_the_boundary_lengths() {
-    let app = app();
+    let app = app_default().await;
     assert_eq!(
         register(&app, &"a".repeat(32), &"p".repeat(128)).await,
         StatusCode::CREATED
@@ -199,15 +143,15 @@ async fn register_accepts_the_boundary_lengths() {
     assert_eq!(register(&app, "abc", "12345678").await, StatusCode::CREATED);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn malformed_bodies_are_bad_requests() {
-    let app = app();
+    let app = app_default().await;
     let token = logged_in(&app).await["access_token"]
         .as_str()
         .unwrap()
         .to_string();
     for path in ["/register", "/login", "/refresh", "/logout"] {
-        let (status, body) = send(&app, path, "pas du json".into(), Some(&token)).await;
+        let (status, body) = post_raw(&app, path, "pas du json", Some(&token)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
         assert_eq!(body["error"], "invalid_request");
 
@@ -216,9 +160,9 @@ async fn malformed_bodies_are_bad_requests() {
     }
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn login_returns_a_valid_access_token_and_a_refresh_token() {
-    let app = app();
+    let app = app_default().await;
     let body = logged_in(&app).await;
 
     assert_eq!(body["token_type"], "Bearer");
@@ -229,9 +173,9 @@ async fn login_returns_a_valid_access_token_and_a_refresh_token() {
     assert_eq!(body["refresh_token"].as_str().unwrap().len(), 64);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn login_ignores_the_case_of_the_username() {
-    let app = app();
+    let app = app_default().await;
     assert_eq!(
         register(&app, "Alice", "secret123").await,
         StatusCode::CREATED
@@ -243,9 +187,9 @@ async fn login_ignores_the_case_of_the_username() {
     assert_eq!(claims.username, "Alice");
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn login_failures_are_indistinguishable() {
-    let app = app();
+    let app = app_default().await;
     assert_eq!(
         register(&app, "alice", "secret123").await,
         StatusCode::CREATED
@@ -259,17 +203,17 @@ async fn login_failures_are_indistinguishable() {
     assert_eq!(wrong_password, too_long);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn login_requires_both_fields() {
-    let (status, body) = login(&app(), "", "").await;
+    let (status, body) = login(&app_default().await, "", "").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["errors"]["username"].is_string());
     assert!(body["errors"]["password"].is_string());
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn refresh_issues_new_tokens_and_invalidates_the_old_refresh_token() {
-    let app = app();
+    let app = app_default().await;
     let first = logged_in(&app).await;
     let old = first["refresh_token"].as_str().unwrap();
 
@@ -305,9 +249,9 @@ async fn refresh_issues_new_tokens_and_invalidates_the_old_refresh_token() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn refresh_rejects_unknown_tokens() {
-    let app = app();
+    let app = app_default().await;
     let login = logged_in(&app).await;
     for token in ["", "inconnu", &"0".repeat(64)] {
         let (status, body) = post_as(
@@ -322,11 +266,11 @@ async fn refresh_rejects_unknown_tokens() {
     }
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn refresh_rejects_an_expired_token() {
-    let app = app_with(Arc::new(MemoryStore::new()), Duration::from_millis(50));
+    let app = app_with(Arc::new(MemoryStore::new()), Duration::from_millis(50)).await;
     let login = logged_in(&app).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    actix_web::rt::time::sleep(Duration::from_millis(100)).await;
 
     let (status, _) = post_as(
         &app,
@@ -338,9 +282,9 @@ async fn refresh_rejects_an_expired_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn logout_revokes_the_refresh_token() {
-    let app = app();
+    let app = app_default().await;
     let login = logged_in(&app).await;
     let body = json!({ "refresh_token": login["refresh_token"] });
 
@@ -352,9 +296,9 @@ async fn logout_revokes_the_refresh_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn logout_only_ends_the_given_session() {
-    let app = app();
+    let app = app_default().await;
     let first = logged_in(&app).await;
     let (_, second) = login(&app, "alice", "secret123").await;
 
@@ -376,9 +320,9 @@ async fn logout_only_ends_the_given_session() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn logout_is_idempotent() {
-    let app = app();
+    let app = app_default().await;
     let login = logged_in(&app).await;
     let body = json!({ "refresh_token": login["refresh_token"] });
 
@@ -422,27 +366,23 @@ fn expired_token(user_id: uuid::Uuid) -> String {
     .unwrap()
 }
 
-async fn status_of(app: &Router, request: Request<Body>) -> StatusCode {
-    app.clone().oneshot(request).await.unwrap().status()
-}
-
-#[tokio::test]
+#[actix_web::test]
 async fn public_routes_need_no_token() {
-    let app = app();
+    let app = app_default().await;
     assert_eq!(
         register(&app, "alice", "secret123").await,
         StatusCode::CREATED
     );
     assert_eq!(login(&app, "alice", "secret123").await.0, StatusCode::OK);
     for path in ["/health", "/hello"] {
-        let request = Request::get(path).body(Body::empty()).unwrap();
-        assert_eq!(status_of(&app, request).await, StatusCode::OK, "{path}");
+        let (status, _) = call(&app, request(TestRequest::get(), path, None)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
     }
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn logout_requires_a_valid_access_token() {
-    let app = app();
+    let app = app_default().await;
     let login = logged_in(&app).await;
     let body = json!({ "refresh_token": login["refresh_token"] });
 
@@ -459,9 +399,9 @@ async fn logout_requires_a_valid_access_token() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn refresh_requires_a_token_but_tolerates_an_expired_one() {
-    let app = app();
+    let app = app_default().await;
     let login = logged_in(&app).await;
     let body = |login: &Value| json!({ "refresh_token": login["refresh_token"] });
 
@@ -486,9 +426,9 @@ async fn refresh_requires_a_token_but_tolerates_an_expired_one() {
     assert!(decode_access_token(access(&renewed), SECRET).is_some());
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn unsigned_or_wrongly_signed_tokens_are_rejected() {
-    let app = app();
+    let app = app_default().await;
     let login = logged_in(&app).await;
     let claims = decode_access_token(access(&login), SECRET).unwrap();
     let foreign = jsonwebtoken::encode(
@@ -504,9 +444,9 @@ async fn unsigned_or_wrongly_signed_tokens_are_rejected() {
     }
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn a_refresh_token_only_works_with_the_access_token_of_its_owner() {
-    let app = app();
+    let app = app_default().await;
     let alice = logged_in(&app).await;
     assert_eq!(
         register(&app, "bob", "secret456").await,
@@ -528,10 +468,10 @@ async fn a_refresh_token_only_works_with_the_access_token_of_its_owner() {
     assert_eq!(claims.username, "alice");
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn the_role_is_in_the_access_token_and_survives_a_refresh() {
     let store = Arc::new(MemoryStore::new());
-    let app = app_with(store.clone(), Duration::from_secs(3600));
+    let app = app_with(store.clone(), Duration::from_secs(3600)).await;
     let user = logged_in(&app).await;
     assert_eq!(
         decode_access_token(access(&user), SECRET).unwrap().role,
@@ -561,24 +501,23 @@ async fn the_role_is_in_the_access_token_and_survives_a_refresh() {
     );
 }
 
-#[tokio::test]
+#[actix_web::test]
 async fn openapi_docs_are_public() {
-    let app = app();
+    let app = app_default().await;
     for path in ["/openapi.json", "/docs/"] {
-        let response = app
-            .clone()
-            .oneshot(Request::get(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let (status, _) = call(&app, request(TestRequest::get(), path, None)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
     }
-    let response = app
-        .oneshot(Request::get("/openapi.json").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let spec: Value = serde_json::from_slice(&bytes).unwrap();
-    for path in ["/register", "/login", "/refresh", "/logout", "/health"] {
+    let (_, spec) = call(&app, request(TestRequest::get(), "/openapi.json", None)).await;
+    for path in [
+        "/register",
+        "/login",
+        "/refresh",
+        "/logout",
+        "/health",
+        "/users",
+        "/user/{id}",
+    ] {
         assert!(spec["paths"][path].is_object(), "{path} absent de la spec");
     }
 }

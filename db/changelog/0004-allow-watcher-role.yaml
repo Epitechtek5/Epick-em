@@ -1,0 +1,14 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0004-allow-watcher-role
+      author: Quentin Tennerel
+      changes:
+        - sql:
+            sql: >-
+              ALTER TABLE users DROP CONSTRAINT users_role_check;
+              ALTER TABLE users ADD CONSTRAINT users_role_check
+              CHECK (role IN ('user', 'admin', 'watcher'))
+            rollback: >-
+              ALTER TABLE users DROP CONSTRAINT users_role_check;
+              ALTER TABLE users ADD CONSTRAINT users_role_check
+              CHECK (role IN ('user', 'admin'))

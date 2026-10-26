@@ -38,7 +38,7 @@ Contraintes :
 - **Jeton d'accès :** JWT HS256 signé avec `JWT_SECRET`, valable `ACCESS_TOKEN_TTL_SECS` (15 min par défaut). Claims : `sub` (id du compte), `username`, `role`, `iat`, `exp`. Transmis par `Authorization: Bearer`.
 - **Jeton de rafraîchissement :** 256 bits aléatoires, valable `REFRESH_TOKEN_TTL_SECS` (30 jours par défaut). Seule l'empreinte SHA-256 est stockée (`refresh_tokens`). **Usage unique** : chaque `/refresh` le remplace. Il est lié à un compte : il n'est utilisable et révocable que par le titulaire du JWT.
 - **Middleware :** toutes les routes exigent un jeton d'accès valide, **sauf** `/register`, `/login`, `/health` et `/hello`. Une nouvelle route est donc protégée par défaut ; la liste des routes publiques est dans `route_policy` (`api-public/src/guard.rs`). `/refresh` accepte un jeton d'accès expiré (signature valide) : c'est son rôle. `/logout` exige un jeton valide.
-- **Rôles :** colonne `users.role` (`user` par défaut, ou `admin`), reprise dans le claim `role`. Toute inscription crée un `user` ; un `admin` se désigne en base. Le rôle est relu en base à chaque rafraîchissement.
+- **Rôles :** colonne `users.role` (`user` par défaut, `admin` ou `watcher`), reprise dans le claim `role`. Toute inscription crée un `user` ; un `admin` se désigne en base, ou via `PATCH /user/{id}/update` par un administrateur. Le rôle est relu en base à chaque rafraîchissement.
 
 ## Conséquences
 

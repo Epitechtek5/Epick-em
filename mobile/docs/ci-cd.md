@@ -52,3 +52,15 @@ The optional job pins EAS CLI 25.2.0. Apple credentials stay in EAS credential m
 Local validation executes the actual `ci-ok` Bash body against successful, failing, cancelled, skipped and malformed filter fixtures, and the release-upload Bash body with mocked Git/GitHub CLI commands. Those checks verify guards and command construction, not GitHub scheduling, permissions or real uploads. Workflow syntax is checked with actionlint. Full details and raw results are in the [implementation report](BOOTSTRAP_IMPLEMENTATION_REPORT.md).
 
 A GitHub run is still needed to verify PR/fork token permissions, reusable-workflow result propagation, main-push scheduling with skipped semantic-release, runner SDK/gem downloads, actual native compilation, artifact overwrite/download behavior, retained job outputs on failed-job reruns, and release attachment using repository token permissions. The GitHub CLI is unavailable locally and the modified workflows have not been pushed, as instructed. GitHub cannot execute these local changes without a later authorized commit/push; no remote run was triggered. Required-check/ruleset settings must be inspected by a repository maintainer; no branch protection changes are proposed.
+
+## Required public API configuration
+
+Set repository Actions **variables**, not secrets (Settings → Secrets and variables → Actions → Variables):
+
+- `MOBILE_API_URL`: public API base URL, without trailing slash. Required for Android artifacts.
+- `MOBILE_ANDROID_BUILD_PROFILE`: `demo` (default, requires HTTPS) or `demo-emulator` (explicit Android emulator demo; permits HTTP only to `10.0.2.2`).
+- `MOBILE_IOS_API_URL`: HTTPS API URL for the iOS simulator artifact; falls back to `MOBILE_API_URL`. Required separately if Android uses the emulator HTTP URL, which is not an iOS host address.
+
+No API host is invented and no developer `.env` is loaded in Actions. Missing/invalid values fail before native compilation. For an Android emulator demo set `MOBILE_ANDROID_BUILD_PROFILE=demo-emulator` and `MOBILE_API_URL=http://10.0.2.2:8080`; also provide an actual HTTPS endpoint in `MOBILE_IOS_API_URL` for the existing iOS job. For physical-device demos use `demo` and a reachable HTTPS API. API URLs are public and bundled at build time; changing a repository variable requires rebuilding/downloading the artifact.
+
+`release.yml` continues to call the reusable workflow and attach its unchanged artifact names and commit sidecars. Both main builds and manually tagged releases use the same configuration rules. Release-variant demo signing does not make the artifact a production build; production transport remains HTTPS-only. See [native build policies and APK testing](builds.md#api-profiles-and-android-transport).

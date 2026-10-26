@@ -16,12 +16,14 @@ use std::str::FromStr;
 use std::time::Duration;
 use uuid::Uuid;
 
-/// Rôle d'un compte. Toute inscription crée un `User` ; `Admin` se donne en base.
+/// Rôle d'un compte. Toute inscription crée un `User` ; un administrateur peut changer le rôle
+/// d'un compte (`PATCH /user/{id}/update`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     User,
     Admin,
+    Watcher,
 }
 
 impl Role {
@@ -29,6 +31,7 @@ impl Role {
         match self {
             Role::User => "user",
             Role::Admin => "admin",
+            Role::Watcher => "watcher",
         }
     }
 }
@@ -40,6 +43,7 @@ impl FromStr for Role {
         match value {
             "user" => Ok(Role::User),
             "admin" => Ok(Role::Admin),
+            "watcher" => Ok(Role::Watcher),
             other => Err(StoreError::Other(format!("rôle inconnu : {other}"))),
         }
     }
@@ -51,6 +55,33 @@ pub struct UserRecord {
     pub username: String,
     pub password_hash: String,
     pub role: Role,
+}
+
+/// Vue publique d'un compte : jamais l'empreinte du mot de passe. C'est aussi la valeur mise en
+/// cache (voir [`PgStore`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UserProfile {
+    pub id: Uuid,
+    pub username: String,
+    pub role: Role,
+}
+
+impl From<&UserRecord> for UserProfile {
+    fn from(user: &UserRecord) -> Self {
+        UserProfile {
+            id: user.id,
+            username: user.username.clone(),
+            role: user.role,
+        }
+    }
+}
+
+/// Modification partielle d'un compte : seuls les champs renseignés changent.
+#[derive(Debug, Default, Clone)]
+pub struct UserUpdate {
+    pub username: Option<String>,
+    pub password_hash: Option<String>,
+    pub role: Option<Role>,
 }
 
 #[derive(Debug)]
@@ -91,6 +122,23 @@ pub trait AuthStore: Send + Sync {
     -> Result<Option<UserRecord>, StoreError>;
 
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError>;
+
+    /// Profil public d'un compte (sans empreinte de mot de passe), éventuellement mis en cache.
+    async fn find_profile(&self, id: Uuid) -> Result<Option<UserProfile>, StoreError>;
+
+    /// Comptes par ordre de création, `limit` à partir de `offset`.
+    async fn list_profiles(&self, limit: i64, offset: i64) -> Result<Vec<UserProfile>, StoreError>;
+
+    /// Applique `update` ; `None` si le compte n'existe pas, [`StoreError::UsernameTaken`] si le
+    /// nouveau nom est déjà utilisé.
+    async fn update_user(
+        &self,
+        id: Uuid,
+        update: UserUpdate,
+    ) -> Result<Option<UserProfile>, StoreError>;
+
+    /// Supprime le compte (et ses jetons de rafraîchissement) ; `false` s'il n'existait pas.
+    async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError>;
 
     /// Enregistre l'empreinte d'un jeton de rafraîchissement valable pendant `ttl`.
     async fn insert_refresh_token(

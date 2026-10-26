@@ -1,14 +1,14 @@
 //! Point d'entrée de api-public : se connecte à PostgreSQL et Redis, puis sert l'API HTTP.
 
+use actix_web::HttpServer;
 use api_public::config::AuthConfig;
 use api_public::store::PgStore;
-use api_public::{AppState, router};
+use api_public::{AppState, app};
 use std::error::Error;
 use std::process::ExitCode;
 use std::sync::Arc;
-use tokio::net::TcpListener;
 
-#[tokio::main]
+#[actix_web::main]
 async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
@@ -25,15 +25,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let auth_config = AuthConfig::from_env()?;
     let db = infra::connect(&config).await?;
 
-    let store = Arc::new(PgStore::new(db.pool().clone()));
+    let store = Arc::new(PgStore::new(db));
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?;
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    let server = HttpServer::new(move || app(state.clone())).bind(format!("0.0.0.0:{port}"))?;
     println!(
         "api-public (domain {}) en écoute sur :{port}",
         domain::VERSION
     );
-    axum::serve(listener, router(state)).await?;
+    server.run().await?;
     Ok(())
 }

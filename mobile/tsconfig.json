@@ -7,5 +7,12 @@
     },
     "types": ["jest", "react", "react-native"]
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts",
+    "tailwind.config.js",
+    "nativewind-env.d.ts"
+  ]
 }
