@@ -5,8 +5,9 @@ export interface AuthTokens {
 
 // Abstraction de stockage des tokens. Implémentation actuelle : mémoire seule.
 // On évite volontairement localStorage/sessionStorage (lisibles par tout script en
-// cas de XSS). Pour persister la session au rechargement, la cible est un cookie
-// httpOnly posé par le serveur (à trancher avec l'issue #15).
+// cas de XSS). Conséquence : la session est perdue au rechargement de la page. Pour la
+// persister, il faudrait que le serveur pose le refresh token en cookie httpOnly
+// (aujourd'hui /login le renvoie dans le corps JSON).
 export interface TokenStore {
   get(): AuthTokens | null
   set(tokens: AuthTokens): void

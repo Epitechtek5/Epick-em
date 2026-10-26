@@ -19,19 +19,29 @@ npm run build     # typecheck + build de production dans dist/
 | Dossier | Contenu |
 |---|---|
 | `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `NotFoundPage` |
-| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/`, `auth/` (route protégée) |
+| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (route protégée) |
 | `src/lib/api/` | Client HTTP (`client.ts`), appels d'authentification (`auth.ts`), lecture des erreurs serveur |
 | `src/lib/auth/` | `AuthProvider`, `useAuth`, stockage des tokens (`token-store.ts`) |
 | `src/lib/validation/` | Règles de validation alignées sur le backend |
 
 Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`).
 
+`/app` est la page principale, atteinte après connexion : en-tête avec navigation principale, nom du compte et déconnexion, puis un tableau de bord en quatre blocs (tournois en direct, mes pronostics, classement général, mes groupes). Les blocs affichent « Bientôt disponible » tant que les API correspondantes n'existent pas ; pour en brancher un, passer le contenu réel en `children` de `DashboardSection` (`src/components/home/`). Pour ajouter une entrée de navigation, compléter `NAV_ITEMS` dans `src/components/layout/AppHeader.tsx`.
+
 ## Authentification
 
-- `POST /register` est branché (201 → connexion, 400 → erreurs affichées, 409 → nom déjà pris).
-- La connexion est préparée : le contrat `POST /login` → `{ access_token, refresh_token? }` est **provisoire** (voir `src/lib/api/auth.ts`, `TODO(#15)`). Tant que l'endpoint n'existe pas, l'écran affiche « La connexion n'est pas encore disponible ».
+Contrat de l'API publique (voir `backend/crates/api-public`) :
+
+| Appel | Succès | Erreurs gérées |
+|---|---|---|
+| `POST /register` | 201 `{ id, username }` | 400 (`errors` par champ), 409 (nom déjà pris) |
+| `POST /login` | 200 `{ access_token, refresh_token, token_type, expires_in }` | 400, 401 |
+| `POST /logout` | 204 (révoque le refresh token) | ignorées : la session locale est fermée quoi qu'il arrive |
+
+- `register` n'accepte que le **201** : un autre 2xx (proxy mal ciblé, squelette) est traité comme une erreur inattendue plutôt qu'un faux « Compte créé ».
+- Après connexion, `GuestRoute` envoie vers la page visée avant la connexion, sinon vers `/app` ; un utilisateur déjà connecté qui ouvre `/login` ou `/register` est renvoyé vers `/app`.
 - Seul mécanisme d'authentification : `Authorization: Bearer <JWT>`. Jamais d'en-tête `X-User-Id`.
-- Les tokens restent **en mémoire** (pas de `localStorage`, exposé au XSS) ; la persistance de session passera par un cookie httpOnly (#15).
+- Les tokens restent **en mémoire** (pas de `localStorage`, exposé au XSS) : la session est perdue au rechargement de la page. `POST /refresh` existe côté API mais n'est pas encore utilisé par le front.
 
 ## API
 

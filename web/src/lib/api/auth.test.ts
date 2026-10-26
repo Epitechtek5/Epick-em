@@ -1,5 +1,5 @@
 import { jsonResponse, mockFetch } from '@/test/render'
-import { login, register } from './auth'
+import { login, logout, register } from './auth'
 
 describe('register', () => {
   it('appelle POST /register avec username et password', async () => {
@@ -11,6 +11,17 @@ describe('register', () => {
     expect(url).toBe('/api/register')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body)).toEqual({ username: 'alice', password: 'secret123' })
+  })
+})
+
+describe('register (réponse inattendue)', () => {
+  it('refuse un 200 : seul le 201 prouve que le compte est créé', async () => {
+    mockFetch(jsonResponse(200, 'ok'))
+
+    await expect(register({ username: 'alice', password: 'secret123' })).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 200,
+    })
   })
 })
 
@@ -28,5 +39,17 @@ describe('login', () => {
     mockFetch(jsonResponse(200, {}))
 
     await expect(login({ username: 'alice', password: 'secret123' })).rejects.toThrow()
+  })
+})
+
+describe('logout', () => {
+  it('révoque le refresh token via POST /logout', async () => {
+    const fetchMock = mockFetch(jsonResponse(204))
+
+    await logout('refresh-1')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/logout')
+    expect(JSON.parse(init.body)).toEqual({ refresh_token: 'refresh-1' })
   })
 })

@@ -1,6 +1,10 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
 
-import { login as loginRequest, type Credentials } from '@/lib/api/auth'
+import {
+  login as loginRequest,
+  logout as logoutRequest,
+  type Credentials,
+} from '@/lib/api/auth'
 import { AuthContext, type AuthContextValue } from './auth-context'
 import { tokenStore } from './token-store'
 
@@ -16,8 +20,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logout = useCallback(() => {
+    const refreshToken = tokenStore.get()?.refreshToken
+    // La session locale est fermée tout de suite ; la révocation serveur se fait
+    // en arrière-plan et son échec ne bloque jamais la déconnexion.
     tokenStore.clear()
     setUsername(null)
+    if (refreshToken) void logoutRequest(refreshToken).catch(() => {})
   }, [])
 
   const value = useMemo<AuthContextValue>(

@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { Link, Outlet, useLocation } from 'react-router'
+import { Outlet, useLocation } from 'react-router'
+
+import { AppHeader } from './AppHeader'
 
 // Structure commune : lien d'évitement, en-tête, zone principale. À chaque
 // changement de page, le focus revient sur la zone principale (navigation SPA).
@@ -28,11 +30,7 @@ export function AppShell() {
       >
         Aller au contenu principal
       </a>
-      <header className="border-b px-6 py-4">
-        <Link to="/" className="text-lg font-semibold tracking-tight">
-          Epick'em
-        </Link>
-      </header>
+      <AppHeader />
       <main
         id="contenu"
         ref={mainRef}

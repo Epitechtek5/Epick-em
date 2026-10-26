@@ -28,6 +28,9 @@ interface RequestOptions {
   signal?: AbortSignal
   // Ne pas joindre le token (ex. register, login).
   skipAuth?: boolean
+  // Statut de succès attendu (ex. 201). Un autre 2xx est traité comme une erreur :
+  // il trahit un serveur non conforme (mauvaise cible de proxy, squelette…).
+  expectedStatus?: number
 }
 
 async function parseBody(response: Response): Promise<unknown> {
@@ -69,5 +72,8 @@ export async function apiRequest<T = unknown>(
 
   const body = await parseBody(response)
   if (!response.ok) throw new ApiError(response.status, body)
+  if (options.expectedStatus !== undefined && response.status !== options.expectedStatus) {
+    throw new ApiError(response.status, body)
+  }
   return body as T
 }
