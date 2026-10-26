@@ -36,7 +36,7 @@ Contrat de l'API publique (voir `backend/crates/api-public`) :
 |---|---|---|
 | `POST /register` | 201 `{ id, username }` | 400 (`errors` par champ), 409 (nom déjà pris) |
 | `POST /login` | 200 `{ access_token, refresh_token, token_type, expires_in }` | 400, 401 |
-| `POST /logout` | 204 (révoque le refresh token) | ignorées : la session locale est fermée quoi qu'il arrive |
+| `POST /logout` (Bearer JWT + `{ refresh_token }`) | 204 (révoque le refresh token) | ignorées : la session locale est fermée quoi qu'il arrive |
 
 - `register` n'accepte que le **201** : un autre 2xx (proxy mal ciblé, squelette) est traité comme une erreur inattendue plutôt qu'un faux « Compte créé ».
 - Après connexion, `GuestRoute` envoie vers la page visée avant la connexion, sinon vers `/app` ; un utilisateur déjà connecté qui ouvre `/login` ou `/register` est renvoyé vers `/app`.
@@ -76,3 +76,8 @@ Image en deux étapes (build Node, puis nginx non-root sur le port 8080 avec fal
 ## CI
 
 [`.github/workflows/web.yml`](../.github/workflows/web.yml) exécute `npm ci`, `npm run lint`, `npm test` et `npm run build` à chaque PR touchant `web/`.
+
+## Apparence
+
+Configuration shadcn : `npx shadcn@latest init --preset b5vnF8h2A --base radix --template vite`. Les composants existants utilisent ce preset.
+Le logo partagé est servi depuis `public/brand/epickem-logo.svg`. Le bouton de l’en-tête permet de basculer entre les thèmes clair et sombre ; le mode sombre est actif par défaut et le choix est mémorisé localement.

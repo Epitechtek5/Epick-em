@@ -1,8 +1,9 @@
 //! Implémentation PostgreSQL de [`AuthStore`] (tables `users` et `refresh_tokens`,
 //! voir `db/changelog`).
 
-use super::{AuthStore, StoreError, UserRecord};
+use super::{AuthStore, Role, StoreError, UserProfile, UserRecord, UserUpdate};
 use async_trait::async_trait;
+use infra::{CachedDb, Ttl};
 use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
@@ -10,24 +11,61 @@ use uuid::Uuid;
 /// Code SQLSTATE d'une violation de contrainte d'unicité.
 const UNIQUE_VIOLATION: &str = "23505";
 
+/// Durée de vie d'un profil en cache. Les modifications et suppressions invalident l'entrée ;
+/// le TTL ne borne que la durée d'une valeur périmée si l'invalidation échoue.
+const PROFILE_TTL: Ttl = Ttl::from_mins(5);
+
+/// Seuls les profils (sans empreinte de mot de passe) passent par le cache ; la connexion et le
+/// rafraîchissement lisent toujours la base.
 pub struct PgStore {
+    db: CachedDb,
     pool: PgPool,
 }
 
 impl PgStore {
-    pub fn new(pool: PgPool) -> Self {
-        PgStore { pool }
+    pub fn new(db: CachedDb) -> Self {
+        let pool = db.pool().clone();
+        PgStore { db, pool }
     }
 }
 
-type UserRow = (Uuid, String, String);
+fn profile_key(id: Uuid) -> String {
+    format!("user:{id}")
+}
 
-fn user(row: UserRow) -> UserRecord {
-    UserRecord {
+type ProfileRow = (Uuid, String, String);
+
+fn profile(row: ProfileRow) -> Result<UserProfile, StoreError> {
+    Ok(UserProfile {
+        id: row.0,
+        username: row.1,
+        role: row.2.parse::<Role>()?,
+    })
+}
+
+/// Un rôle illisible en base remonte comme une erreur de décodage sqlx.
+fn decode(err: StoreError) -> sqlx::Error {
+    sqlx::Error::Decode(Box::new(err))
+}
+
+fn username_taken(err: sqlx::Error) -> StoreError {
+    match &err {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
+            StoreError::UsernameTaken
+        }
+        _ => err.into(),
+    }
+}
+
+type UserRow = (Uuid, String, String, String);
+
+fn user(row: UserRow) -> Result<UserRecord, StoreError> {
+    Ok(UserRecord {
         id: row.0,
         username: row.1,
         password_hash: row.2,
-    }
+        role: row.3.parse::<Role>()?,
+    })
 }
 
 #[async_trait]
@@ -39,19 +77,14 @@ impl AuthStore for PgStore {
     ) -> Result<UserRecord, StoreError> {
         sqlx::query_as::<_, UserRow>(
             "INSERT INTO users (username, password_hash) VALUES ($1, $2) \
-             RETURNING id, username, password_hash",
+             RETURNING id, username, password_hash, role",
         )
         .bind(username)
         .bind(password_hash)
         .fetch_one(&self.pool)
         .await
-        .map(user)
-        .map_err(|err| match &err {
-            sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
-                StoreError::UsernameTaken
-            }
-            _ => err.into(),
-        })
+        .map_err(username_taken)
+        .and_then(user)
     }
 
     async fn find_user_by_username(
@@ -59,22 +92,94 @@ impl AuthStore for PgStore {
         username: &str,
     ) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash FROM users WHERE lower(username) = lower($1)",
+            "SELECT id, username, password_hash, role FROM users WHERE lower(username) = lower($1)",
         )
         .bind(username)
         .fetch_optional(&self.pool)
         .await?
-        .map(user))
+        .map(user)
+        .transpose()?)
     }
 
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash FROM users WHERE id = $1",
+            "SELECT id, username, password_hash, role FROM users WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?
-        .map(user))
+        .map(user)
+        .transpose()?)
+    }
+
+    async fn find_profile(&self, id: Uuid) -> Result<Option<UserProfile>, StoreError> {
+        Ok(self
+            .db
+            .read_optional(&profile_key(id), PROFILE_TTL, |pool| async move {
+                sqlx::query_as::<_, ProfileRow>(
+                    "SELECT id, username, role FROM users WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_optional(&pool)
+                .await?
+                .map(|row| profile(row).map_err(decode))
+                .transpose()
+            })
+            .await?)
+    }
+
+    async fn list_profiles(&self, limit: i64, offset: i64) -> Result<Vec<UserProfile>, StoreError> {
+        sqlx::query_as::<_, ProfileRow>(
+            "SELECT id, username, role FROM users ORDER BY created_at, id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(profile)
+        .collect()
+    }
+
+    async fn update_user(
+        &self,
+        id: Uuid,
+        update: UserUpdate,
+    ) -> Result<Option<UserProfile>, StoreError> {
+        // L'entrée en cache est invalidée plutôt que réécrite : la prochaine lecture la recharge.
+        self.db
+            .delete(&[&profile_key(id)], |pool| async move {
+                sqlx::query_as::<_, ProfileRow>(
+                    "UPDATE users SET \
+                         username = COALESCE($2, username), \
+                         password_hash = COALESCE($3, password_hash), \
+                         role = COALESCE($4, role) \
+                     WHERE id = $1 RETURNING id, username, role",
+                )
+                .bind(id)
+                .bind(update.username)
+                .bind(update.password_hash)
+                .bind(update.role.map(Role::as_str))
+                .fetch_optional(&pool)
+                .await
+            })
+            .await
+            .map_err(username_taken)?
+            .map(profile)
+            .transpose()
+    }
+
+    async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError> {
+        let result = self
+            .db
+            .delete(&[&profile_key(id)], |pool| async move {
+                sqlx::query("DELETE FROM users WHERE id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await
+            })
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     async fn insert_refresh_token(
@@ -97,24 +202,26 @@ impl AuthStore for PgStore {
 
     async fn rotate_refresh_token(
         &self,
+        user_id: Uuid,
         old_hash: &str,
         new_hash: &str,
         ttl: Duration,
-    ) -> Result<Option<Uuid>, StoreError> {
+    ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
         // L'UPDATE conditionnel verrouille la ligne : deux rafraîchissements simultanés
         // avec le même jeton ne peuvent pas réussir tous les deux.
-        let user_id: Option<Uuid> = sqlx::query_scalar(
+        let rotated = sqlx::query(
             "UPDATE refresh_tokens SET revoked_at = now() \
-             WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now() \
-             RETURNING user_id",
+             WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()",
         )
         .bind(old_hash)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let Some(user_id) = user_id else {
-            return Ok(None);
-        };
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if rotated == 0 {
+            return Ok(false);
+        }
         sqlx::query(
             "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) \
              VALUES ($1, $2, now() + $3::float8 * interval '1 second')",
@@ -125,15 +232,20 @@ impl AuthStore for PgStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(Some(user_id))
+        Ok(true)
     }
 
-    async fn revoke_refresh_token(&self, token_hash: &str) -> Result<(), StoreError> {
+    async fn revoke_refresh_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+    ) -> Result<(), StoreError> {
         sqlx::query(
             "UPDATE refresh_tokens SET revoked_at = now() \
-             WHERE token_hash = $1 AND revoked_at IS NULL",
+             WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL",
         )
         .bind(token_hash)
+        .bind(user_id)
         .execute(&self.pool)
         .await?;
         Ok(())

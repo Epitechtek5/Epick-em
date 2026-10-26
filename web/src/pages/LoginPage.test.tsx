@@ -50,6 +50,7 @@ describe('LoginPage', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     const [url, init] = fetchMock.mock.calls[1]
     expect(url).toBe('/api/logout')
+    expect(init.headers.Authorization).toBe('Bearer jwt')
     expect(JSON.parse(init.body)).toEqual({ refresh_token: 'refresh-1' })
   })
 

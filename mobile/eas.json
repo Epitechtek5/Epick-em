@@ -1,12 +1,36 @@
 {
-  "cli": { "version": ">= 16.0.0", "appVersionSource": "local" },
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
+  },
   "build": {
     "demo": {
       "distribution": "internal",
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EPICKEM_BUILD_PROFILE": "demo"
+      }
     },
-    "simulator": { "ios": { "simulator": true } },
-    "production": { "android": { "buildType": "app-bundle" } }
+    "simulator": {
+      "ios": {
+        "simulator": true
+      },
+      "env": {
+        "EPICKEM_BUILD_PROFILE": "demo"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EPICKEM_BUILD_PROFILE": "production"
+      }
+    }
   },
-  "submit": { "production": {} }
+  "submit": {
+    "production": {}
+  }
 }

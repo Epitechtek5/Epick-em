@@ -1,4 +1,5 @@
 import { Link, NavLink } from 'react-router'
+import { ThemeToggle } from './ThemeToggle'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -14,7 +15,8 @@ export function AppHeader() {
   return (
     <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b px-6 py-4">
       <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
-        <Link to="/" className="text-lg font-semibold tracking-tight">
+        <Link to="/" className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+          <img src="/brand/epickem-logo.svg" alt="" className="size-10" width="40" height="40" />
           Epick'em
         </Link>
         {isAuthenticated ? (
@@ -39,6 +41,8 @@ export function AppHeader() {
           </nav>
         ) : null}
       </div>
+      <div className="flex flex-wrap items-center gap-3">
+      <ThemeToggle />
       {isAuthenticated ? (
         <div className="flex items-center gap-3">
           {username ? (
@@ -52,6 +56,7 @@ export function AppHeader() {
           </Button>
         </div>
       ) : null}
+      </div>
     </header>
   )
 }

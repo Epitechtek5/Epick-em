@@ -23,9 +23,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const refreshToken = tokenStore.get()?.refreshToken
     // La session locale est fermée tout de suite ; la révocation serveur se fait
     // en arrière-plan et son échec ne bloque jamais la déconnexion.
+    if (refreshToken) void logoutRequest(refreshToken).catch(() => {})
     tokenStore.clear()
     setUsername(null)
-    if (refreshToken) void logoutRequest(refreshToken).catch(() => {})
   }, [])
 
   const value = useMemo<AuthContextValue>(

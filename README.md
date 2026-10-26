@@ -12,7 +12,7 @@ make up      # crée .env depuis .env.example puis lance toute la plateforme
 make test    # lance tous les tests
 ```
 
-L'API publique répond ensuite sur http://localhost:8080.
+L'API publique répond ensuite sur http://localhost:8080 (routes et authentification : [`docs/api-public.md`](docs/api-public.md)).
 
 ## Organisation du dépôt
 

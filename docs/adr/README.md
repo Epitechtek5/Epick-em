@@ -20,6 +20,8 @@ Ce dossier trace les décisions d'architecture du projet : contexte, options ét
 | [006](006-migrations-liquibase.md) | Migrations de base de données avec Liquibase, publiées en image Docker | Accepté |
 | [007](007-gestion-des-secrets.md) | Gestion des secrets | Accepté |
 | [008](008-couche-infra-et-cache.md) | Crate `infra` partagée et cache Redis des requêtes SQL | Proposé |
+| [009](009-authentification-jwt-et-roles.md) | Authentification par JWT d'accès, jeton de rafraîchissement opaque et rôles | Proposé |
+| [010](010-api-publique-actix-web.md) | `api-public` sur actix-web | Proposé |
 
 ## Créer un nouvel ADR
 
