@@ -2,11 +2,11 @@
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, MemberImport, ParticipantInput, ParticipantStatus,
-    ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition, ScoringRuleInput,
-    StatInput, StatType, StatUpdate, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode,
-    TeamUpdate, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
-    UserUpdate,
+    AuthStore, GameInput, GameUpdate, MemberImport, ParticipantImport, ParticipantInput,
+    ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
+    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StoreError, TeamImport,
+    TeamInput, TeamRole, TeamScoringMode, TeamUpdate, TournamentImport, TournamentInput,
+    TournamentStatus, TournamentTeamInput, TournamentUpdate, UserUpdate,
 };
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
@@ -1321,4 +1321,194 @@ async fn participants_are_unique_and_capped_by_max_participants() {
             .is_empty()
     );
     assert!(store.find_tournament_team(team.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn tournaments_are_unique_per_game_and_upserted_by_name() {
+    let store = store().await;
+    let (alice, bob) = (user(&store, "alice").await, user(&store, "bob").await);
+    let game_id = game(&store).await;
+    let stat = store
+        .create_stat(StatInput {
+            name: "Kills".into(),
+            key: unique("kills").replace('-', "_").to_lowercase(),
+            kind: StatType::Flat,
+        })
+        .await
+        .unwrap();
+    assert!(store.link_stat(game_id, stat.id).await.unwrap());
+
+    // Le nom est unique par jeu, sans tenir compte de la casse.
+    let first = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let mut clash = tournament_input(game_id);
+    clash.name = first.name.to_uppercase();
+    assert!(matches!(
+        store.create_tournament(clash).await,
+        Err(StoreError::TournamentNameTaken)
+    ));
+    let second = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .update_tournament(
+                second.id,
+                TournamentUpdate {
+                    name: Some(first.name.to_lowercase()),
+                    ..Default::default()
+                },
+            )
+            .await,
+        Err(StoreError::TournamentNameTaken)
+    ));
+    // Un autre jeu peut réutiliser le nom.
+    let mut elsewhere = tournament_input(game(&store).await);
+    elsewhere.name = first.name.clone();
+    store.create_tournament(elsewhere).await.unwrap();
+
+    let rule = |coefficient: f64| ScoringRuleImport {
+        stat_id: stat.id,
+        definition: ScoringRuleDefinition {
+            mode: ScoringMode::Linear,
+            coefficient: Some(coefficient),
+            points_table: None,
+        },
+    };
+    let mut renamed = tournament_input(game_id);
+    renamed.name = first.name.to_uppercase();
+    renamed.max_participants = 8;
+    let fresh = tournament_input(game_id);
+    let saved = store
+        .import_tournaments(vec![
+            TournamentImport {
+                input: renamed,
+                status: TournamentStatus::Registration,
+                rules: vec![rule(2.0)],
+            },
+            TournamentImport {
+                input: fresh.clone(),
+                status: TournamentStatus::Draft,
+                rules: Vec::new(),
+            },
+        ])
+        .await
+        .unwrap();
+    assert_eq!(saved.len(), 2);
+    assert_eq!((saved[0].0.id, saved[0].1), (first.id, false));
+    assert_eq!(saved[0].0.status, TournamentStatus::Registration);
+    assert_eq!(saved[0].0.max_participants, 8);
+    assert!(saved[1].1);
+    let rules = store.list_scoring_rules(first.id).await.unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].coefficient, Some(2.0));
+
+    // Réimporter remplace le barème.
+    let again = store
+        .import_tournaments(vec![TournamentImport {
+            input: tournament_input_named(game_id, &first.name),
+            status: TournamentStatus::Draft,
+            rules: vec![rule(3.0)],
+        }])
+        .await
+        .unwrap();
+    assert!(!again[0].1);
+    let rules = store.list_scoring_rules(first.id).await.unwrap();
+    assert_eq!((rules.len(), rules[0].coefficient), (1, Some(3.0)));
+
+    // Un lot en échec n'écrit rien : la statistique n'est pas liée à l'autre jeu.
+    let before = store
+        .list_tournaments(Some(game_id), None, 100, 0)
+        .await
+        .unwrap()
+        .len();
+    let stray = store
+        .import_tournaments(vec![
+            TournamentImport {
+                input: tournament_input(game_id),
+                status: TournamentStatus::Draft,
+                rules: Vec::new(),
+            },
+            TournamentImport {
+                input: tournament_input(game(&store).await),
+                status: TournamentStatus::Draft,
+                rules: vec![rule(1.0)],
+            },
+        ])
+        .await;
+    assert!(stray.is_err());
+    assert_eq!(
+        store
+            .list_tournaments(Some(game_id), None, 100, 0)
+            .await
+            .unwrap()
+            .len(),
+        before
+    );
+
+    // Les inscrits se remplacent d'un bloc.
+    let participant = |user_id: Uuid, status: ParticipantStatus| ParticipantImport {
+        user_id: Some(user_id),
+        tournament_team_id: None,
+        status,
+        registered_at: Some("2026-11-02T08:00:00.000000Z".into()),
+    };
+    store
+        .add_participant(ParticipantInput {
+            tournament_id: first.id,
+            user_id: Some(alice),
+            tournament_team_id: None,
+        })
+        .await
+        .unwrap();
+    store
+        .replace_participants(
+            first.id,
+            vec![
+                participant(bob, ParticipantStatus::CheckedIn),
+                ParticipantImport {
+                    registered_at: Some("2026-11-03T08:00:00.000000Z".into()),
+                    ..participant(alice, ParticipantStatus::Registered)
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let listed = store.list_participants(first.id, 10, 0).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].user_id, Some(bob));
+    assert_eq!(listed[0].registered_at, "2026-11-02T08:00:00.000000Z");
+    assert_eq!(listed[0].status, ParticipantStatus::CheckedIn);
+    // Un doublon fait échouer le remplacement, qui laisse l'existant intact.
+    assert!(
+        store
+            .replace_participants(
+                first.id,
+                vec![
+                    participant(bob, ParticipantStatus::Registered),
+                    participant(bob, ParticipantStatus::Registered),
+                ],
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .list_participants(first.id, 10, 0)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+fn tournament_input_named(game_id: Uuid, name: &str) -> TournamentInput {
+    TournamentInput {
+        name: name.to_string(),
+        ..tournament_input(game_id)
+    }
 }

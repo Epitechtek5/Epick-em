@@ -2,11 +2,12 @@
 
 use super::teams::now_rfc3339;
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, ParticipantInput, ParticipantStatus, Role, ScoringRule,
-    ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, StoreError, Team,
-    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentInput,
-    TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
+    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate,
+    StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament,
+    TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus, TournamentTeam,
+    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
+    UserUpdate,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -912,6 +913,10 @@ impl AuthStore for MemoryStore {
     }
 
     async fn create_tournament(&self, input: TournamentInput) -> Result<Tournament, StoreError> {
+        let mut state = self.state();
+        if state.tournament_name_taken(input.game_id, &input.name, None) {
+            return Err(StoreError::TournamentNameTaken);
+        }
         let now = now_rfc3339();
         let tournament = Tournament {
             id: Uuid::new_v4(),
@@ -931,7 +936,7 @@ impl AuthStore for MemoryStore {
             created_at: now.clone(),
             updated_at: now,
         };
-        self.state().tournaments.push(tournament.clone());
+        state.tournaments.push(tournament.clone());
         Ok(tournament)
     }
 
@@ -941,6 +946,19 @@ impl AuthStore for MemoryStore {
         update: TournamentUpdate,
     ) -> Result<Option<Tournament>, StoreError> {
         let mut state = self.state();
+        let Some(game_id) = state
+            .tournaments
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.game_id)
+        else {
+            return Ok(None);
+        };
+        if let Some(name) = &update.name
+            && state.tournament_name_taken(game_id, name, Some(id))
+        {
+            return Err(StoreError::TournamentNameTaken);
+        }
         let Some(t) = state.tournaments.iter_mut().find(|t| t.id == id) else {
             return Ok(None);
         };
@@ -1200,6 +1218,104 @@ impl AuthStore for MemoryStore {
             .filter_map(|p| state.points.get(&p.id).map(|points| (p.id, *points)))
             .collect())
     }
+
+    async fn import_tournaments(
+        &self,
+        tournaments: Vec<TournamentImport>,
+    ) -> Result<Vec<(Tournament, bool)>, StoreError> {
+        let mut state = self.state();
+        let mut result = Vec::with_capacity(tournaments.len());
+        for import in tournaments {
+            let TournamentImport {
+                input,
+                status,
+                rules,
+            } = import;
+            let now = now_rfc3339();
+            let existing = state.tournaments.iter().position(|t| {
+                t.game_id == input.game_id && t.name.to_lowercase() == input.name.to_lowercase()
+            });
+            let (tournament, created) = match existing {
+                Some(index) => {
+                    let t = &mut state.tournaments[index];
+                    t.name = input.name;
+                    t.description = input.description;
+                    t.start_date = input.start_date;
+                    t.end_date = input.end_date;
+                    t.registration_open_at = input.registration_open_at;
+                    t.registration_close_at = input.registration_close_at;
+                    t.participant_type = input.participant_type;
+                    t.team_size = input.team_size;
+                    t.max_participants = input.max_participants;
+                    t.team_scoring_mode = input.team_scoring_mode;
+                    t.team_scoring_n = input.team_scoring_n;
+                    t.status = status;
+                    t.updated_at = now;
+                    (t.clone(), false)
+                }
+                None => {
+                    let t = Tournament {
+                        id: Uuid::new_v4(),
+                        game_id: input.game_id,
+                        name: input.name,
+                        description: input.description,
+                        start_date: input.start_date,
+                        end_date: input.end_date,
+                        registration_open_at: input.registration_open_at,
+                        registration_close_at: input.registration_close_at,
+                        participant_type: input.participant_type,
+                        team_size: input.team_size,
+                        max_participants: input.max_participants,
+                        team_scoring_mode: input.team_scoring_mode,
+                        team_scoring_n: input.team_scoring_n,
+                        status,
+                        created_at: now.clone(),
+                        updated_at: now,
+                    };
+                    state.tournaments.push(t.clone());
+                    (t, true)
+                }
+            };
+            state
+                .scoring_rules
+                .retain(|r| r.tournament_id != tournament.id);
+            state
+                .scoring_rules
+                .extend(rules.into_iter().map(|rule| ScoringRule {
+                    id: Uuid::new_v4(),
+                    tournament_id: tournament.id,
+                    stat_id: rule.stat_id,
+                    mode: rule.definition.mode,
+                    coefficient: rule.definition.coefficient,
+                    points_table: rule.definition.points_table,
+                }));
+            result.push((tournament, created));
+        }
+        Ok(result)
+    }
+
+    async fn replace_participants(
+        &self,
+        tournament_id: Uuid,
+        participants: Vec<ParticipantImport>,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state();
+        state
+            .participants
+            .retain(|p| p.tournament_id != tournament_id);
+        let now = now_rfc3339();
+        state
+            .participants
+            .extend(participants.into_iter().map(|p| TournamentParticipant {
+                id: Uuid::new_v4(),
+                tournament_id,
+                user_id: p.user_id,
+                tournament_team_id: p.tournament_team_id,
+                status: p.status,
+                registered_at: p.registered_at.unwrap_or_else(|| now.clone()),
+            }));
+        Ok(())
+    }
 }
 
 impl State {
@@ -1221,6 +1337,14 @@ impl State {
     }
 
     /// Supprime l'équipe et ses membres ; ses copies de tournoi perdent leur origine.
+    fn tournament_name_taken(&self, game_id: Uuid, name: &str, except: Option<Uuid>) -> bool {
+        self.tournaments.iter().any(|t| {
+            t.game_id == game_id
+                && Some(t.id) != except
+                && t.name.to_lowercase() == name.to_lowercase()
+        })
+    }
+
     /// Le barème d'un tournoi `ongoing` s'appuie sur la statistique (pour ce jeu, si précisé).
     fn stat_locked(&self, stat_id: Uuid, game_id: Option<Uuid>) -> bool {
         self.scoring_rules.iter().any(|rule| {

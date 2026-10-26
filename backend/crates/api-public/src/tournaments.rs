@@ -34,7 +34,10 @@ const TEAM_SIZE_LIMIT: i32 = 100;
 
 /// Routes des tournois, avec leur documentation OpenAPI.
 pub fn routes(cfg: &mut ServiceConfig) {
-    cfg.service(list_tournaments)
+    // `/tournaments/export` et `/tournaments/import` avant `/tournaments/{id}`.
+    cfg.service(crate::tournament_io::export_tournaments)
+        .service(crate::tournament_io::import_tournaments)
+        .service(list_tournaments)
         .service(get_tournament)
         .service(create_tournament)
         .service(update_tournament)
@@ -247,6 +250,7 @@ async fn get_tournament(
         (status = 400, description = "Requête invalide ou jeu introuvable", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
+        (status = 409, description = "Nom déjà pris pour ce jeu", body = ErrorResponse),
     ),
 )]
 #[post("/tournaments")]
@@ -291,7 +295,7 @@ async fn create_tournament(
         .store
         .create_tournament(input)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(tournament_error)?;
     Ok(HttpResponse::Created().json(tournament))
 }
 
@@ -310,7 +314,7 @@ async fn create_tournament(
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
         (status = 404, description = "Tournoi introuvable", body = ErrorResponse),
-        (status = 409, description = "Paramètres verrouillés, le tournoi est en cours", body = ErrorResponse),
+        (status = 409, description = "Nom déjà pris pour ce jeu, ou paramètres verrouillés parce que le tournoi est en cours", body = ErrorResponse),
     ),
 )]
 #[patch("/tournaments/{id}")]
@@ -390,7 +394,7 @@ async fn update_tournament(
         .store
         .update_tournament(current.id, update)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(tournament_error)?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(tournament))
 }
@@ -1284,6 +1288,15 @@ fn definition(
     coefficient: Option<f64>,
     points_table: Option<Value>,
 ) -> Result<ScoringRuleDefinition, ApiError> {
+    definition_checked(mode, coefficient, points_table).map_err(ApiError::Validation)
+}
+
+/// Comme [`definition`], avec les erreurs par champ plutôt qu'une [`ApiError`].
+pub(crate) fn definition_checked(
+    mode: ScoringMode,
+    coefficient: Option<f64>,
+    points_table: Option<Value>,
+) -> Result<ScoringRuleDefinition, Vec<(&'static str, String)>> {
     let mut errors = Vec::new();
     match mode {
         ScoringMode::Linear => {
@@ -1332,12 +1345,12 @@ fn definition(
             points_table,
         })
     } else {
-        Err(ApiError::Validation(errors))
+        Err(errors)
     }
 }
 
 /// Nettoie les champs d'un tournoi (noms, dates normalisées) et renvoie les erreurs par champ.
-fn check(input: &mut TournamentInput) -> Vec<(&'static str, String)> {
+pub(crate) fn check(input: &mut TournamentInput) -> Vec<(&'static str, String)> {
     let mut errors = Vec::new();
     input.name = input.name.trim().to_string();
     if !(1..=NAME_MAX).contains(&input.name.chars().count()) {
@@ -1438,6 +1451,7 @@ fn tournament_error(err: StoreError) -> ApiError {
         StoreError::ScoringRuleTaken => ApiError::ScoringRuleTaken,
         StoreError::AlreadyParticipant => ApiError::AlreadyRegistered,
         StoreError::TournamentFull => ApiError::TournamentFull,
+        StoreError::TournamentNameTaken => ApiError::TournamentNameTaken,
         other => ApiError::internal(other),
     }
 }

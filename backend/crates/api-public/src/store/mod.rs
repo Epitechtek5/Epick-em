@@ -20,9 +20,10 @@ pub use self::teams::{
     TournamentTeamInput, TournamentTeamMember,
 };
 pub use self::tournaments::{
-    ParticipantInput, ParticipantStatus, ParticipantType, ScoringMode, ScoringRule,
-    ScoringRuleDefinition, ScoringRuleInput, TeamScoringMode, Tournament, TournamentInput,
-    TournamentParticipant, TournamentStatus, TournamentUpdate,
+    ParticipantImport, ParticipantInput, ParticipantStatus, ParticipantType, ScoringMode,
+    ScoringRule, ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, TeamScoringMode,
+    Tournament, TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus,
+    TournamentUpdate,
 };
 
 use async_trait::async_trait;
@@ -119,6 +120,8 @@ pub enum StoreError {
     TeamAlreadyRegistered,
     /// Le joueur est déjà dans une équipe de ce tournoi.
     PlayerAlreadyRegistered,
+    /// Le nom de tournoi existe déjà pour ce jeu (sans tenir compte de la casse).
+    TournamentNameTaken,
     /// Une règle de barème existe déjà pour cette statistique dans ce tournoi.
     ScoringRuleTaken,
     /// Le joueur ou l'équipe est déjà inscrit à ce tournoi.
@@ -141,6 +144,7 @@ impl fmt::Display for StoreError {
             StoreError::PlayerAlreadyRegistered => {
                 f.write_str("joueur déjà dans une équipe du tournoi")
             }
+            StoreError::TournamentNameTaken => f.write_str("nom de tournoi déjà pris"),
             StoreError::ScoringRuleTaken => {
                 f.write_str("règle de barème déjà définie pour cette statistique")
             }
@@ -487,4 +491,22 @@ pub trait AuthStore: Send + Sync {
         &self,
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError>;
+    /// Crée ou met à jour (par jeu et nom, sans tenir compte de la casse) les tournois donnés,
+    /// en une seule opération : en cas d'erreur, aucun n'est modifié. Le barème d'un tournoi
+    /// existant est **remplacé** ; ses inscrits, ses équipes, ses étapes et ses matchs sont
+    /// laissés à leurs sous-niveaux. Chaque tournoi est renvoyé avec `true` s'il vient d'être
+    /// créé. Les couples (jeu, nom) sont distincts, les jeux existent et les statistiques sont
+    /// liées au jeu de leur tournoi.
+    async fn import_tournaments(
+        &self,
+        tournaments: Vec<TournamentImport>,
+    ) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
+    /// et les équipes existent, et les équipes sont celles du tournoi.
+    async fn replace_participants(
+        &self,
+        tournament_id: Uuid,
+        participants: Vec<ParticipantImport>,
+    ) -> Result<(), StoreError>;
 }

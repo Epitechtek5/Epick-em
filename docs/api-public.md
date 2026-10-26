@@ -59,6 +59,8 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /tournament-teams/{id}/members` | JWT valide, **propriétaire** | `{ user_id, role }` (`member` ou `substitute`) | `201` le membre ; `409` s'il est déjà dans une équipe du tournoi |
 | `PATCH /tournament-teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | `{ role }` | `200` le membre |
 | `DELETE /tournament-teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | — | `204` |
+| `GET /tournaments/export` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` | `200` fichier en pièce jointe |
+| `POST /tournaments/import` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` ; contenu du fichier en corps (256 Kio max) | `200` `{ created, updated }` |
 | `GET /tournaments` | JWT valide | `?game_id`, `?status`, `?limit`, `?offset` | `200` `[Tournament]`, par date de début |
 | `GET /tournaments/{id}` | JWT valide | — | `200` le tournoi |
 | `POST /tournaments` | JWT valide, **administrateur** | `{ game_id, name, description?, start_date, end_date, registration_open_at?, registration_close_at?, participant_type, team_size?, max_participants, team_scoring_mode?, team_scoring_n? }` | `201` le tournoi, au statut `draft` |
@@ -123,7 +125,7 @@ Même principe, portée `stat` et `stat - game` uniquement.
 
 ### Tournois
 
-- **Champs :** `name` de 1 à 128 caractères ; `start_date`, `end_date`, `registration_open_at` et `registration_close_at` en RFC 3339 UTC (`2026-11-14T18:00:00Z`), la fin ne précède pas le début ni la clôture l'ouverture ; `max_participants` de 1 à 10 000 ; `participant_type` vaut `solo` ou `team` et ne se change pas ; `team_size` (1 à 100) est renseigné si et seulement si le tournoi est `team` ; `team_scoring_mode` vaut `none` (défaut), `sum`, `best` ou `top_n`, et `team_scoring_n` (1 à 100) est renseigné si et seulement si le mode est `top_n`.
+- **Champs :** `name` de 1 à 128 caractères, unique par jeu sans tenir compte de la casse ; `start_date`, `end_date`, `registration_open_at` et `registration_close_at` en RFC 3339 UTC (`2026-11-14T18:00:00Z`), la fin ne précède pas le début ni la clôture l'ouverture ; `max_participants` de 1 à 10 000 ; `participant_type` vaut `solo` ou `team` et ne se change pas ; `team_size` (1 à 100) est renseigné si et seulement si le tournoi est `team` ; `team_scoring_mode` vaut `none` (défaut), `sum`, `best` ou `top_n`, et `team_scoring_n` (1 à 100) est renseigné si et seulement si le mode est `top_n`.
 - **Statuts :** `draft` → `registration` → `ongoing` → `finished`, et `draft`, `registration` ou `ongoing` → `cancelled`. Le passage en `ongoing` exige au moins deux inscrits actifs (ni `withdrawn` ni `disqualified`) et, pour un tournoi par équipes, exactement `team_size` titulaires (propriétaire et membres, remplaçants exclus) dans chaque équipe inscrite ; la validation des étapes s'y ajoutera avec #52.
 - **Barème :** une règle par statistique, qui doit être liée au jeu du tournoi. `linear` : points = valeur × `coefficient` ; `table` : `points_table` associe une valeur à des points (`{"1": 8, "2": 7}`). Le barème est modifiable en `draft` et `registration` seulement. Dès qu'un tournoi est `ongoing`, ses statistiques ne peuvent plus être supprimées ni déliées du jeu (`409 stat_in_use`).
 - **Inscriptions :** seulement au statut `registration` et dans la fenêtre d'inscription, si elle est définie. En **solo**, l'appelant s'inscrit lui-même (un administrateur peut désigner `user_id`), seul ou pour une équipe du tournoi dont il est membre (`tournament_team_id`) : les joueurs d'une même équipe s'affrontent mais marquent pour elle. Dans un tournoi **par équipes**, le propriétaire (ou un administrateur) inscrit son équipe (`tournament_team_id` seul), qui doit compter exactement `team_size` titulaires. Un joueur ou une équipe ne s'inscrit qu'une fois ; un inscrit `withdrawn` libère sa place mais garde sa ligne. Le check-in n'est possible qu'au statut `registration`.
@@ -137,6 +139,16 @@ Les équipes de tournoi sont hors périmètre : seuls `teams` et `team_member` s
 - **CSV :** en-tête `game,name,tag,picture_url,owner,members` ; `members` contient le tableau JSON des membres.
 - **Membres :** le tableau décrit l'état complet de l'équipe, anciens membres compris (`left_at` renseigné). Le propriétaire y figure comme unique membre `owner` actif ; un compte n'est membre actif qu'une fois. Les horodatages sont en RFC 3339 UTC (`2026-10-26T14:03:09Z`, six décimales au plus) ; `joined_at` vaut l'instant de l'import s'il est absent, et `left_at` exige `joined_at`.
 - **Import :** une équipe dont le jeu et le nom (sans tenir compte de la casse) existent déjà met à jour cette équipe (tag, photo, propriétaire) et **remplace** ses membres, sinon elle est créée. Les jeux et les comptes doivent exister. Le fichier est validé en entier avant toute écriture (mêmes règles que `POST /teams`, équipes distinctes) ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus).
+
+### Import et export des tournois
+
+Un fichier exporté se réimporte sans perte (hors horodatages de création et de modification). Un jeu est désigné par son nom, une statistique par sa clé et un compte par son nom d'utilisateur.
+
+- **JSON :** `{ "version": 1, "tournaments": [{ "game", "name", "description", "start_date", "end_date", "registration_open_at", "registration_close_at", "participant_type", "team_size", "max_participants", "team_scoring_mode", "team_scoring_n", "status", "scoring_rules": [{ "stat", "mode", "coefficient", "points_table" }], "participants": [{ "user", "team", "status", "registered_at" }], "teams": [], "steps": [], "matches": [] }] }` ; seuls `game`, `name`, `start_date`, `end_date`, `participant_type` et `max_participants` sont obligatoires, les autres clés inconnues sont refusées.
+- **CSV :** en-tête `game,name,description,start_date,end_date,registration_open_at,registration_close_at,participant_type,team_size,max_participants,team_scoring_mode,team_scoring_n,status,scoring_rules,participants,teams,steps,matches` ; les cinq dernières colonnes contiennent le tableau JSON correspondant.
+- **Inscrits :** `user` désigne un joueur (obligatoire en solo, interdit dans un tournoi par équipes) et `team` le rang, à partir de 0, d'une équipe du tableau `teams` (obligatoire dans un tournoi par équipes, facultatif en solo où le joueur marque pour cette équipe).
+- **Composition :** `teams`, `steps` et `matches` sont des valeurs opaques pour ce niveau : leur validation, leur export et leur import sont délégués à leur propre sous-niveau (`TournamentChild`, branché sur `AppState`). Les équipes de tournoi sont gérées par `tournament_team_io` : `{ name, tag, picture_url, owner, origin, members: [{ username, role }] }`, `origin` étant le nom de l'équipe globale copiée dans le jeu du tournoi. Les étapes et les matchs ne sont pas encore pris en charge (#52) : un fichier qui en contient est refusé.
+- **Import :** un tournoi dont le jeu et le nom (sans tenir compte de la casse) existent déjà met à jour ce tournoi et **remplace** son barème, ses inscrits, ses équipes, ses étapes et ses matchs, sinon il est créé avec le `status` du fichier (`draft` par défaut). Un tournoi existant `ongoing` ou `finished` est refusé, ses résultats étant verrouillés. Le fichier est validé en entier avant toute écriture (champs comme `POST /tournaments`, statistiques liées au jeu, barème, inscrits, plafond `max_participants`, sous-niveaux) ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus). Les écritures se font ensuite dans l'ordre (tournois et barèmes en une transaction, puis équipes, étapes, matchs et inscrits de chaque tournoi) : une panne en cours de route peut laisser un tournoi à moitié importé, qu'un nouvel import du même fichier complète.
 
 ### Erreurs
 
@@ -156,6 +168,7 @@ Format `{ "error", "message", "errors"? }` :
 | `409` | `already_team_member` | compte déjà membre actif de l'équipe |
 | `409` | `team_already_registered` | équipe globale déjà inscrite à ce tournoi |
 | `409` | `player_already_registered` | joueur déjà dans une équipe de ce tournoi |
+| `409` | `tournament_name_taken` | nom de tournoi déjà pris pour ce jeu |
 | `409` | `scoring_rule_taken` | le barème définit déjà cette statistique |
 | `409` | `already_registered` | joueur ou équipe déjà inscrit au tournoi |
 | `409` | `tournament_full` | `max_participants` atteint |
