@@ -1,4 +1,4 @@
-# API publique — authentification
+# API publique — authentification, comptes et jeux
 
 Référence des routes de `api-public` (décisions : [ADR-009](adr/009-authentification-jwt-et-roles.md)). Les routes sont exposées sans préfixe ; le front les appelle en `/api/*` et nginx (ou le proxy Vite) retire le préfixe.
 
@@ -22,6 +22,11 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `DELETE /user/{id}/delete` | JWT valide, **administrateur** | — | `204` |
 | `PATCH /me/update` | JWT valide | `{ username?, password? }` (`role` refusé) | `200` `{ id, username, role }` |
 | `DELETE /me/delete` | JWT valide | — | `204` |
+| `GET /games` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, name, description, images }]`, par ordre alphabétique |
+| `GET /games/{id}` | JWT valide | — | `200` `{ id, name, description, images }` |
+| `POST /games` | JWT valide, **administrateur** | `{ name, description?, images? }` | `201` `{ id, name, description, images }` |
+| `PATCH /games/{id}` | JWT valide, **administrateur** | `{ name?, description?, images? }` | `200` `{ id, name, description, images }` |
+| `DELETE /games/{id}` | JWT valide, **administrateur** | — | `204` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -45,6 +50,8 @@ Le jeton d'accès est un JWT HS256 dont les claims sont `sub` (id du compte), `u
 - **`/refresh`** : le jeton de rafraîchissement est à usage unique (il est remplacé à chaque appel) et doit appartenir au compte du JWT. Le rôle est relu en base.
 - **`/logout`** : révoque le jeton de rafraîchissement, s'il appartient au compte du JWT. Idempotent : `204` même si le jeton est inconnu, déjà révoqué ou d'un autre compte (dans ce dernier cas il n'est pas révoqué). Le jeton d'accès reste valable jusqu'à son expiration.
 
+- **Jeux :** nom de 1 à 64 caractères (espaces autour retirés), unique sans tenir compte de la casse ; description de 2000 caractères au maximum ; 10 images au maximum, chacune une URL `http(s)` sans espace de 2048 caractères au maximum. `PATCH` remplace les champs fournis (`images` est remplacé en entier).
+
 ### Erreurs
 
 Format `{ "error", "message", "errors"? }` :
@@ -54,8 +61,9 @@ Format `{ "error", "message", "errors"? }` :
 | `400` | `invalid_request` | corps illisible ou champs invalides (`errors` donne le détail par champ) |
 | `401` | `unauthorized` | jeton absent, invalide ou expiré ; identifiants ou jeton de rafraîchissement refusés |
 | `403` | `forbidden` | action réservée aux administrateurs, ou changement de son propre rôle |
-| `404` | `not_found` | compte introuvable (ou identifiant qui n'est pas un UUID) |
+| `404` | `not_found` | compte ou jeu introuvable (ou identifiant qui n'est pas un UUID) |
 | `409` | `username_taken` | nom d'utilisateur déjà pris |
+| `409` | `game_name_taken` | nom de jeu déjà pris |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
 ## Configuration
