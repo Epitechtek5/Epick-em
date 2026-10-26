@@ -10,7 +10,7 @@
       "publishCmd": "echo \"version=${nextRelease.version}\" >> \"$GITHUB_OUTPUT\""
     }],
     ["@semantic-release/git", {
-      "assets": ["CHANGELOG.md", "backend/Cargo.toml", "backend/Cargo.lock", "deploy/helm/epickem/Chart.yaml"],
+      "assets": ["CHANGELOG.md", "backend/Cargo.toml", "backend/Cargo.lock", "deploy/helm/epickem/Chart.yaml", "openapi/openapi.json", "web/src/lib/api/generated/schema.ts", "mobile/src/api/generated/schema.ts"],
       "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
     }],
     "@semantic-release/github"

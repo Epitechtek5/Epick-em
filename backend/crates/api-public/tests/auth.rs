@@ -560,3 +560,25 @@ async fn the_role_is_in_the_access_token_and_survives_a_refresh() {
         Role::Admin
     );
 }
+
+#[tokio::test]
+async fn openapi_docs_are_public() {
+    let app = app();
+    for path in ["/openapi.json", "/docs/"] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    let response = app
+        .oneshot(Request::get("/openapi.json").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let spec: Value = serde_json::from_slice(&bytes).unwrap();
+    for path in ["/register", "/login", "/refresh", "/logout", "/health"] {
+        assert!(spec["paths"][path].is_object(), "{path} absent de la spec");
+    }
+}

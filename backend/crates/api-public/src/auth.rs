@@ -9,7 +9,7 @@
 //!   jusqu'à son expiration (`ACCESS_TOKEN_TTL_SECS`).
 
 use crate::config::AuthConfig;
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorResponse};
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
 use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
@@ -17,14 +17,16 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
-use axum::routing::{get, post};
-use axum::{Extension, Json, Router};
+use axum::{Extension, Json};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 use uuid::Uuid;
 
 pub const USERNAME_MIN: usize = 3;
@@ -55,42 +57,39 @@ impl AppState {
     }
 }
 
-pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .route("/hello", get(|| async { "Hello, world!" }))
-        .route("/register", post(register))
-        .route("/login", post(login))
-        .route("/refresh", post(refresh))
-        .route("/logout", post(logout))
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::guard::require_auth,
-        ))
-        .with_state(state)
+/// Routes d'authentification, avec leur documentation OpenAPI.
+pub fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(register))
+        .routes(routes!(login))
+        .routes(routes!(refresh))
+        .routes(routes!(logout))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct Credentials {
+    #[schema(min_length = 3, max_length = 32, example = "alice")]
     username: String,
+    #[schema(min_length = 8, max_length = 128, format = Password)]
     password: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct RefreshRequest {
     refresh_token: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct RegisterResponse {
     id: Uuid,
     username: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct TokenResponse {
     access_token: String,
     refresh_token: String,
+    #[schema(example = "Bearer")]
     token_type: &'static str,
     /// Durée de validité du jeton d'accès, en secondes.
     expires_in: u64,
@@ -130,6 +129,18 @@ fn decode_claims(token: &str, secret: &str, check_expiry: bool) -> Option<Claims
     .map(|data| data.claims)
 }
 
+/// Crée un compte.
+#[utoipa::path(
+    post,
+    path = "/register",
+    tag = "auth",
+    request_body = Credentials,
+    responses(
+        (status = 201, description = "Compte créé", body = RegisterResponse),
+        (status = 400, description = "Requête invalide", body = ErrorResponse),
+        (status = 409, description = "Nom d'utilisateur déjà pris", body = ErrorResponse),
+    ),
+)]
 async fn register(
     State(state): State<AppState>,
     body: Result<Json<Credentials>, JsonRejection>,
@@ -159,6 +170,18 @@ async fn register(
     ))
 }
 
+/// Échange des identifiants contre un jeton d'accès et un jeton de rafraîchissement.
+#[utoipa::path(
+    post,
+    path = "/login",
+    tag = "auth",
+    request_body = Credentials,
+    responses(
+        (status = 200, description = "Jetons émis", body = TokenResponse),
+        (status = 400, description = "Requête invalide", body = ErrorResponse),
+        (status = 401, description = "Identifiants refusés", body = ErrorResponse),
+    ),
+)]
 async fn login(
     State(state): State<AppState>,
     body: Result<Json<Credentials>, JsonRejection>,
@@ -211,6 +234,18 @@ async fn login(
 
 /// Le jeton de rafraîchissement doit appartenir au compte du jeton d'accès (éventuellement
 /// expiré), vérifié par le middleware.
+#[utoipa::path(
+    post,
+    path = "/refresh",
+    tag = "auth",
+    security(("bearer" = [])),
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Nouveaux jetons ; l'ancien jeton de rafraîchissement est invalidé", body = TokenResponse),
+        (status = 400, description = "Requête invalide", body = ErrorResponse),
+        (status = 401, description = "Jeton d'accès ou de rafraîchissement refusé", body = ErrorResponse),
+    ),
+)]
 async fn refresh(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -242,6 +277,18 @@ async fn refresh(
 
 /// Idempotent : répond 204 même si le jeton est inconnu, déjà révoqué ou appartient à un
 /// autre compte (dans ce cas il n'est pas révoqué).
+#[utoipa::path(
+    post,
+    path = "/logout",
+    tag = "auth",
+    security(("bearer" = [])),
+    request_body = RefreshRequest,
+    responses(
+        (status = 204, description = "Jeton de rafraîchissement révoqué"),
+        (status = 400, description = "Requête invalide", body = ErrorResponse),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+    ),
+)]
 async fn logout(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
