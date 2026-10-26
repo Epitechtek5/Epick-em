@@ -32,6 +32,7 @@ jobs:
           filters: |
             backend:
               - 'backend/**'
+              - 'db/**'
               - '.github/workflows/backend.yml'
             db:
               - 'db/**'
