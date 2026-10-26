@@ -4,6 +4,7 @@
 //! [`MemoryStore`] sert aux tests sans base.
 
 mod games;
+mod matches;
 mod memory;
 mod postgres;
 mod stats;
@@ -12,6 +13,7 @@ mod teams;
 mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
+pub use self::matches::{Bracket, Match, MatchParticipant, MatchResult, MatchStatus};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
