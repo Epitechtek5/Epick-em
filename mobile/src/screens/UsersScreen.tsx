@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from '@/i18n';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -6,12 +7,9 @@ import {
   RefreshControl,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-
+import { router, useFocusEffect } from 'expo-router';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import type { AppStackParamList } from '@/navigation/AppNavigator';
 
 import type { User } from '@/features/auth/types';
 import { useAuth } from '@/features/auth/session';
@@ -20,11 +18,9 @@ import { getUserErrorMessage } from '@/features/users/errors';
 
 const PAGE_SIZE = 20;
 
-type Navigation = NativeStackNavigationProp<AppStackParamList>;
-
 export default function UsersScreen() {
-  const navigation = useNavigation<Navigation>();
-  const { token } = useAuth();
+  const { t } = useTranslation();
+  const { token, refreshUser } = useAuth();
 
   const [users, setUsers] = useState<User[]>([]);
   const [page, setPage] = useState(0);
@@ -62,41 +58,12 @@ export default function UsersScreen() {
     [token],
   );
 
-  useEffect(() => {
-    let active = true;
-
-    async function loadInitialPage() {
-      if (!token) return;
-
-      try {
-        const results = await listUsers(token, {
-          limit: PAGE_SIZE,
-          offset: 0,
-        });
-
-        if (!active) return;
-
-        setUsers(results);
-        setPage(0);
-        setHasNext(results.length === PAGE_SIZE);
-        setError('');
-      } catch (caught) {
-        if (active) {
-          setError(getUserErrorMessage(caught));
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void loadInitialPage();
-
-    return () => {
-      active = false;
-    };
-  }, [token]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadPage(0);
+      void refreshUser().catch(() => undefined);
+    }, [loadPage, refreshUser]),
+  );
 
   async function refresh() {
     setRefreshing(true);
@@ -106,26 +73,26 @@ export default function UsersScreen() {
   return (
     <View className="flex-1 bg-background px-5 py-5">
       <Text variant="h2" className="mb-2">
-        Users
+        {t('users.title')}
       </Text>
 
       <Text className="mb-5 text-muted-foreground">
-        Browse registered users.
+        {t('users.description')}
       </Text>
 
       {error ? (
         <View className="mb-4 gap-3">
           <Text accessibilityRole="alert" className="text-destructive">
-            {error}
+            {t(error)}
           </Text>
           <Button variant="outline" onPress={() => void loadPage(page)}>
-            <Text>Retry</Text>
+            <Text>{t('common.retry')}</Text>
           </Button>
         </View>
       ) : null}
 
       {loading ? (
-        <ActivityIndicator accessibilityLabel="Loading users" />
+        <ActivityIndicator accessibilityLabel={t('users.loading')} />
       ) : (
         <FlatList
           data={users}
@@ -135,16 +102,19 @@ export default function UsersScreen() {
           }
           ListEmptyComponent={
             <Text className="py-6 text-center text-muted-foreground">
-              No users found.
+              {t('users.empty')}
             </Text>
           }
           renderItem={({ item }) => (
             <Pressable
               className="mb-3 min-h-14 justify-center rounded-md border border-border bg-card px-4 py-3"
               accessibilityRole="button"
-              accessibilityLabel={`View profile for ${item.username}`}
+              accessibilityLabel={t('users.view', { username: item.username })}
               onPress={() =>
-                navigation.navigate('UserDetails', { id: item.id })
+                router.push({
+                  pathname: '/(authenticated)/user/[id]',
+                  params: { id: item.id },
+                })
               }
             >
               <Text className="font-semibold">{item.username}</Text>
@@ -160,17 +130,17 @@ export default function UsersScreen() {
           disabled={loading || page === 0}
           onPress={() => void loadPage(page - 1)}
         >
-          <Text>Previous</Text>
+          <Text>{t('users.previous')}</Text>
         </Button>
 
-        <Text>Page {page + 1}</Text>
+        <Text>{t('users.page', { page: page + 1 })}</Text>
 
         <Button
           variant="outline"
           disabled={loading || !hasNext}
           onPress={() => void loadPage(page + 1)}
         >
-          <Text>Next</Text>
+          <Text>{t('users.next')}</Text>
         </Button>
       </View>
     </View>

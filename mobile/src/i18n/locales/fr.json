@@ -1,0 +1,113 @@
+{
+  "common": {
+    "username": "Nom d’utilisateur",
+    "password": "Mot de passe",
+    "confirmPassword": "Confirmer le mot de passe",
+    "newPassword": "Nouveau mot de passe",
+    "confirmNewPassword": "Confirmer le nouveau mot de passe",
+    "role": "Rôle",
+    "cancel": "Annuler",
+    "retry": "Réessayer",
+    "save": "Enregistrer",
+    "loading": "Chargement…",
+    "restoring": "Restauration de la session",
+    "usernameHint": "3 à 32 lettres, chiffres, tirets bas, points ou tirets",
+    "logo": "Logo Epick'em",
+    "back": "Retour"
+  },
+  "login": {
+    "title": "Heureux de vous revoir",
+    "description": "Connectez-vous à votre compte Epick'em.",
+    "submit": "Se connecter",
+    "submitting": "Connexion…",
+    "noAccount": "Vous n’avez pas de compte ?",
+    "create": "Créer un compte",
+    "missing": "Saisissez votre nom d’utilisateur et votre mot de passe.",
+    "invalid": "Nom d’utilisateur ou mot de passe incorrect.",
+    "failed": "Connexion impossible. Veuillez réessayer."
+  },
+  "register": {
+    "title": "Créer un compte",
+    "description": "Rejoignez Epick'em et commencez vos pronostics.",
+    "submit": "Créer le compte",
+    "success": "Votre compte a été créé avec succès.",
+    "explanation": "Vous pouvez maintenant vous connecter avec vos identifiants.",
+    "login": "Aller à la connexion",
+    "hasAccount": "Vous avez déjà un compte ?",
+    "failed": "Création du compte impossible. Veuillez réessayer."
+  },
+  "settings": {
+    "title": "Paramètres",
+    "account": "Compte",
+    "edit": "Modifier le compte",
+    "appearance": "Apparence",
+    "system": "Système",
+    "light": "Clair",
+    "dark": "Sombre",
+    "language": "Langue",
+    "english": "English",
+    "french": "Français",
+    "session": "Session",
+    "logout": "Se déconnecter",
+    "loggingOut": "Déconnexion",
+    "localLogout": "Déconnexion locale effectuée",
+    "logoutFailed": "La déconnexion du serveur n’a pas pu être confirmée. Vérifiez votre connexion.",
+    "storageFailed": "Enregistrement des préférences impossible. Veuillez réessayer."
+  },
+  "account": {
+    "id": "Identifiant du compte : {{id}}",
+    "username": "Nom d’utilisateur : {{username}}",
+    "role": "Rôle : {{role}}",
+    "currentRole": "Rôle actuel : {{role}}",
+    "danger": "Zone de danger",
+    "delete": "Supprimer le compte",
+    "deleteMine": "Supprimer mon compte",
+    "deleteWarning": "Cette action est définitive. Votre compte sera supprimé.",
+    "irreversible": "La suppression de votre compte est irréversible."
+  },
+  "users": {
+    "title": "Utilisateurs",
+    "description": "Consultez les utilisateurs inscrits.",
+    "empty": "Aucun utilisateur trouvé.",
+    "loading": "Chargement des utilisateurs",
+    "view": "Voir le profil de {{username}}",
+    "previous": "Précédent",
+    "next": "Suivant",
+    "page": "Page {{page}}"
+  },
+  "user": {
+    "title": "Profil utilisateur",
+    "loading": "Chargement du profil utilisateur"
+  },
+  "admin": {
+    "title": "Gérer l’utilisateur",
+    "manage": "Gérer {{username}}",
+    "loading": "Chargement de l’utilisateur",
+    "delete": "Supprimer l’utilisateur",
+    "deleteNamed": "Supprimer l’utilisateur {{username}}",
+    "confirmDelete": "Supprimer définitivement {{username}} ?",
+    "thisUser": "cet utilisateur"
+  },
+  "validation": {
+    "username": "Le nom d’utilisateur doit contenir 3 à 32 lettres, chiffres, _, . ou -.",
+    "password": "Le mot de passe doit contenir 8 à 128 caractères.",
+    "match": "Les mots de passe ne correspondent pas."
+  },
+  "form": {
+    "noChanges": "Aucune modification à enregistrer.",
+    "saved": "Modifications enregistrées avec succès.",
+    "failed": "Enregistrement des modifications impossible."
+  },
+  "errors": {
+    "invalid": "Informations invalides. Vérifiez les champs saisis.",
+    "unauthorized": "Authentification requise. Veuillez vous reconnecter.",
+    "forbidden": "Vous n’avez pas l’autorisation d’effectuer cette action.",
+    "notFound": "L’utilisateur demandé est introuvable.",
+    "conflict": "Ce nom d’utilisateur est déjà utilisé.",
+    "network": "Impossible de contacter le serveur. Veuillez réessayer.",
+    "server": "Le serveur n’a pas pu traiter cette demande. Veuillez réessayer."
+  },
+  "welcome": {
+    "ready": "L’application mobile est prête pour le développement."
+  }
+}

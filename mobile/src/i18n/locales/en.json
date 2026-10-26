@@ -1,0 +1,113 @@
+{
+  "common": {
+    "username": "Username",
+    "password": "Password",
+    "confirmPassword": "Confirm password",
+    "newPassword": "New password",
+    "confirmNewPassword": "Confirm new password",
+    "role": "Role",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "save": "Save changes",
+    "loading": "Loading…",
+    "restoring": "Restoring session",
+    "usernameHint": "3 to 32 letters, numbers, underscores, dots or hyphens",
+    "logo": "Epick'em logo",
+    "back": "Back"
+  },
+  "login": {
+    "title": "Welcome back",
+    "description": "Sign in to your Epick'em account.",
+    "submit": "Sign in",
+    "submitting": "Signing in…",
+    "noAccount": "Don't have an account?",
+    "create": "Create one",
+    "missing": "Enter your username and password.",
+    "invalid": "Invalid username or password.",
+    "failed": "Unable to sign in. Please try again."
+  },
+  "register": {
+    "title": "Create an account",
+    "description": "Join Epick'em and start making predictions.",
+    "submit": "Create account",
+    "success": "Your account has been created successfully.",
+    "explanation": "You can now sign in with your credentials.",
+    "login": "Go to login",
+    "hasAccount": "Already have an account?",
+    "failed": "Unable to create account. Please try again."
+  },
+  "settings": {
+    "title": "Settings",
+    "account": "Account",
+    "edit": "Edit account",
+    "appearance": "Appearance",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark",
+    "language": "Language",
+    "english": "English",
+    "french": "Français",
+    "session": "Session",
+    "logout": "Log out",
+    "loggingOut": "Logging out",
+    "localLogout": "Signed out locally",
+    "logoutFailed": "Server logout could not be confirmed. Please check your connection.",
+    "storageFailed": "Unable to save preferences. Please try again."
+  },
+  "account": {
+    "id": "Account ID: {{id}}",
+    "username": "Username: {{username}}",
+    "role": "Role: {{role}}",
+    "currentRole": "Current role: {{role}}",
+    "danger": "Danger zone",
+    "delete": "Delete account",
+    "deleteMine": "Delete my account",
+    "deleteWarning": "This action is permanent. Your account will be deleted.",
+    "irreversible": "Deleting your account cannot be undone."
+  },
+  "users": {
+    "title": "Users",
+    "description": "Browse registered users.",
+    "empty": "No users found.",
+    "loading": "Loading users",
+    "view": "View profile for {{username}}",
+    "previous": "Previous",
+    "next": "Next",
+    "page": "Page {{page}}"
+  },
+  "user": {
+    "title": "User profile",
+    "loading": "Loading user profile"
+  },
+  "admin": {
+    "title": "Manage user",
+    "manage": "Manage {{username}}",
+    "loading": "Loading user",
+    "delete": "Delete user",
+    "deleteNamed": "Delete user {{username}}",
+    "confirmDelete": "Permanently delete {{username}}?",
+    "thisUser": "this user"
+  },
+  "validation": {
+    "username": "Username must contain 3–32 letters, numbers, _, . or -.",
+    "password": "Password must contain 8–128 characters.",
+    "match": "Passwords do not match."
+  },
+  "form": {
+    "noChanges": "No changes to save.",
+    "saved": "Changes saved successfully.",
+    "failed": "Unable to save changes."
+  },
+  "errors": {
+    "invalid": "Invalid information. Check the submitted fields.",
+    "unauthorized": "Authentication required. Please sign in again.",
+    "forbidden": "You do not have permission to perform this action.",
+    "notFound": "The requested user could not be found.",
+    "conflict": "This username is already taken.",
+    "network": "Unable to contact the server. Please try again.",
+    "server": "The server could not complete this request. Please try again."
+  },
+  "welcome": {
+    "ready": "The mobile application is ready for development."
+  }
+}

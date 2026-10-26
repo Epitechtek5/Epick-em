@@ -1,18 +1,16 @@
+import { useTranslation } from '@/i18n';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, View } from 'react-native';
 import {
   useFocusEffect,
-  useNavigation,
-  useRoute,
-  type RouteProp,
-} from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { router } from 'expo-router';
+  useLocalSearchParams,
+  router,
+  Redirect,
+} from 'expo-router';
 
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { UserForm } from '@/components/users/user-form';
-import type { AppStackParamList } from '@/navigation/AppNavigator';
 
 import type { User } from '@/features/auth/types';
 import { useAuth } from '@/features/auth/session';
@@ -24,18 +22,16 @@ import {
 } from '@/features/users/api';
 import { getUserErrorMessage } from '@/features/users/errors';
 
-type AdminRoute = RouteProp<AppStackParamList, 'AdminUser'>;
-type Navigation = NativeStackNavigationProp<AppStackParamList>;
-
 export default function AdminUserScreen() {
-  const route = useRoute<AdminRoute>();
-  const navigation = useNavigation<Navigation>();
+  const { t } = useTranslation();
+  const { id } = useLocalSearchParams<{ id: string }>();
 
   const {
     token,
     user: currentUser,
     updateCurrentUser,
     clearSession,
+    refreshUser,
   } = useAuth();
 
   const [user, setUser] = useState<User | null>(null);
@@ -43,7 +39,7 @@ export default function AdminUserScreen() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
-  const userId = route.params.id;
+  const userId = id;
   const isAdmin = Boolean(token && currentUser?.role === 'admin');
 
   const loadUser = useCallback(async () => {
@@ -68,40 +64,37 @@ export default function AdminUserScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadUser();
-    }, [loadUser]),
+      void refreshUser().catch(() => undefined);
+    }, [loadUser, refreshUser]),
   );
 
-  if (!isAdmin) {
-    return (
-      <View className="flex-1 justify-center bg-background px-5">
-        <Text accessibilityRole="alert">Administrator access required.</Text>
-      </View>
-    );
-  }
+  if (!isAdmin) return <Redirect href="/(authenticated)/(tabs)/users" />;
 
   async function saveUser(changes: UpdateUserRequest) {
-    if (!token || !currentUser) {
-      throw new Error('Authentication required.');
+    if (!token || currentUser?.role !== 'admin') {
+      throw new Error('errors.unauthorized');
     }
 
     try {
       const updated = await updateUser(token, userId, changes);
       setUser(updated);
+      await refreshUser();
 
       if (updated.id === currentUser.id) {
         updateCurrentUser(updated);
 
         if (updated.role !== 'admin') {
-          navigation.navigate('MainTabs');
+          router.replace('/(authenticated)/(tabs)/users');
         }
       }
     } catch (caught) {
+      await refreshUser().catch(() => undefined);
       throw new Error(getUserErrorMessage(caught));
     }
   }
 
   async function confirmDeletion() {
-    if (!token || !currentUser) return;
+    if (!token || currentUser?.role !== 'admin') return;
 
     setDeleting(true);
     setError('');
@@ -110,12 +103,13 @@ export default function AdminUserScreen() {
       await deleteUser(token, userId);
 
       if (userId === currentUser.id) {
-        clearSession();
-        router.replace('/register');
+        await clearSession();
+        router.replace('/login');
       } else {
-        navigation.navigate('MainTabs');
+        router.replace('/(authenticated)/(tabs)/users');
       }
     } catch (caught) {
+      await refreshUser().catch(() => undefined);
       setError(getUserErrorMessage(caught));
     } finally {
       setDeleting(false);
@@ -124,12 +118,14 @@ export default function AdminUserScreen() {
 
   function requestDeletion() {
     Alert.alert(
-      'Delete user',
-      `Permanently delete ${user?.username ?? 'this user'}?`,
+      t('admin.delete'),
+      t('admin.confirmDelete', {
+        username: user?.username ?? t('admin.thisUser'),
+      }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete user',
+          text: t('admin.delete'),
           style: 'destructive',
           onPress: () => void confirmDeletion(),
         },
@@ -143,48 +139,50 @@ export default function AdminUserScreen() {
       contentContainerClassName="gap-6 px-5 py-8"
       keyboardShouldPersistTaps="handled"
     >
-      <Text variant="h2">Manage user</Text>
+      <Text variant="h2">{t('admin.title')}</Text>
 
       {loading ? (
-        <ActivityIndicator accessibilityLabel="Loading user" />
+        <ActivityIndicator accessibilityLabel={t('admin.loading')} />
       ) : error && !user ? (
         <View className="gap-3">
           <Text accessibilityRole="alert" className="text-destructive">
-            {error}
+            {t(error)}
           </Text>
           <Button variant="outline" onPress={() => void loadUser()}>
-            <Text>Retry</Text>
+            <Text>{t('common.retry')}</Text>
           </Button>
         </View>
       ) : user ? (
         <>
           <View className="gap-2">
-            <Text>Account ID: {user.id}</Text>
-            <Text>Current role: {user.role}</Text>
+            <Text>{t('account.id', { id: user.id })}</Text>
+            <Text>{t('account.currentRole', { role: user.role })}</Text>
           </View>
 
-          <UserForm
-            key={`${user.id}-${user.username}-${user.role}`}
-            user={user}
-            onSave={saveUser}
-          />
+          <UserForm user={user} allowRoleEdit onSave={saveUser} />
 
           <View className="gap-3 border-t border-border pt-6">
-            <Text variant="h3">Danger zone</Text>
+            <Text variant="h3">{t('account.danger')}</Text>
 
             {error ? (
               <Text accessibilityRole="alert" className="text-destructive">
-                {error}
+                {t(error)}
               </Text>
             ) : null}
 
             <Button
               variant="destructive"
               disabled={deleting}
-              accessibilityLabel={`Delete user ${user.username}`}
+              accessibilityLabel={t('admin.deleteNamed', {
+                username: user.username,
+              })}
               onPress={requestDeletion}
             >
-              {deleting ? <ActivityIndicator /> : <Text>Delete user</Text>}
+              {deleting ? (
+                <ActivityIndicator accessibilityLabel={t('common.loading')} />
+              ) : (
+                <Text>{t('admin.delete')}</Text>
+              )}
             </Button>
           </View>
         </>

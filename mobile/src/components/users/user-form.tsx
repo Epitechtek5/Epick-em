@@ -1,3 +1,4 @@
+import { useTranslation } from '@/i18n';
 import { useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
@@ -24,6 +25,7 @@ export function UserForm({
   allowRoleEdit = false,
   onSave,
 }: UserFormProps) {
+  const { t } = useTranslation();
   const [form, setForm] = useState<UserFormValues>({
     username: user.username,
     password: '',
@@ -35,6 +37,20 @@ export function UserForm({
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const [originalUser, setOriginalUser] = useState(user);
+  if (
+    originalUser.id !== user.id ||
+    originalUser.username !== user.username ||
+    originalUser.role !== user.role
+  ) {
+    setOriginalUser(user);
+    setForm((previous) => ({
+      ...previous,
+      username: user.username,
+      role: user.role,
+    }));
+  }
 
   function updateField<K extends keyof UserFormValues>(
     field: K,
@@ -69,7 +85,7 @@ export function UserForm({
     }
 
     if (Object.keys(changes).length === 0) {
-      setError('No changes to save.');
+      setError('form.noChanges');
       return;
     }
 
@@ -84,11 +100,9 @@ export function UserForm({
         password: '',
         confirmPassword: '',
       }));
-      setSuccess('Changes saved successfully.');
+      setSuccess('form.saved');
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : 'Unable to save changes.',
-      );
+      setError(caught instanceof Error ? caught.message : 'form.failed');
     } finally {
       setSaving(false);
     }
@@ -97,11 +111,11 @@ export function UserForm({
   return (
     <View className="gap-5">
       <View className="gap-2">
-        <Text nativeID="user-form-username">Username</Text>
+        <Text nativeID="user-form-username">{t('common.username')}</Text>
         <Input
-          accessibilityLabel="Username"
+          accessibilityLabel={t('common.username')}
           accessibilityLabelledBy="user-form-username"
-          accessibilityHint="3 to 32 letters, numbers, underscores, dots or hyphens"
+          accessibilityHint={t('common.usernameHint')}
           autoCapitalize="none"
           autoCorrect={false}
           value={form.username}
@@ -110,15 +124,15 @@ export function UserForm({
         />
         {errors.username ? (
           <Text accessibilityRole="alert" className="text-destructive">
-            {errors.username}
+            {t(errors.username)}
           </Text>
         ) : null}
       </View>
 
       <View className="gap-2">
-        <Text nativeID="user-form-password">New password</Text>
+        <Text nativeID="user-form-password">{t('common.newPassword')}</Text>
         <Input
-          accessibilityLabel="New password"
+          accessibilityLabel={t('common.newPassword')}
           accessibilityLabelledBy="user-form-password"
           secureTextEntry
           autoComplete="new-password"
@@ -128,15 +142,17 @@ export function UserForm({
         />
         {errors.password ? (
           <Text accessibilityRole="alert" className="text-destructive">
-            {errors.password}
+            {t(errors.password)}
           </Text>
         ) : null}
       </View>
 
       <View className="gap-2">
-        <Text nativeID="user-form-confirm">Confirm new password</Text>
+        <Text nativeID="user-form-confirm">
+          {t('common.confirmNewPassword')}
+        </Text>
         <Input
-          accessibilityLabel="Confirm new password"
+          accessibilityLabel={t('common.confirmNewPassword')}
           accessibilityLabelledBy="user-form-confirm"
           secureTextEntry
           autoComplete="new-password"
@@ -146,21 +162,21 @@ export function UserForm({
         />
         {errors.confirmPassword ? (
           <Text accessibilityRole="alert" className="text-destructive">
-            {errors.confirmPassword}
+            {t(errors.confirmPassword)}
           </Text>
         ) : null}
       </View>
 
       {allowRoleEdit ? (
         <View className="gap-2">
-          <Text>Role</Text>
+          <Text>{t('common.role')}</Text>
           <View className="flex-row flex-wrap gap-2">
             {(['admin', 'user', 'watcher'] as const).map((role) => (
               <Button
                 key={role}
                 variant={form.role === role ? 'default' : 'outline'}
                 disabled={saving}
-                accessibilityLabel={`Role: ${role}`}
+                accessibilityLabel={t('account.role', { role })}
                 accessibilityState={{ selected: form.role === role }}
                 onPress={() => updateField('role', role)}
               >
@@ -173,18 +189,22 @@ export function UserForm({
 
       {error ? (
         <Text accessibilityRole="alert" className="text-destructive">
-          {error}
+          {t(error)}
         </Text>
       ) : null}
 
-      {success ? <Text accessibilityRole="alert">{success}</Text> : null}
+      {success ? <Text accessibilityRole="alert">{t(success)}</Text> : null}
 
       <Button
         disabled={saving}
         onPress={() => void submit()}
-        accessibilityLabel="Save changes"
+        accessibilityLabel={t('common.save')}
       >
-        {saving ? <ActivityIndicator /> : <Text>Save changes</Text>}
+        {saving ? (
+          <ActivityIndicator accessibilityLabel={t('common.loading')} />
+        ) : (
+          <Text>{t('common.save')}</Text>
+        )}
       </Button>
     </View>
   );

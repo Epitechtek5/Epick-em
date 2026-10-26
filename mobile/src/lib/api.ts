@@ -28,16 +28,8 @@ export async function apiRequest<T>(
   });
 
   if (!response.ok) {
-    const body: unknown = await response.json().catch(() => null);
-
-    // L'API répond `{ error, message }` : `error` est un code stable, `message` son libellé.
-    const message =
-      typeof body === 'object' &&
-      body !== null &&
-      'message' in body &&
-      typeof body.message === 'string'
-        ? body.message
-        : `HTTP error ${response.status}`;
+    // Never surface server-controlled text that could contain credentials.
+    const message = `HTTP error ${response.status}`;
 
     throw new ApiError(response.status, message);
   }
@@ -47,4 +39,23 @@ export async function apiRequest<T>(
   }
 
   return (await response.json()) as T;
+}
+
+export type AuthenticatedRequest = <T>(
+  path: string,
+  options: RequestInit,
+) => Promise<T>;
+let sessionRequest: AuthenticatedRequest | null = null;
+
+export function configureSessionRequest(request: AuthenticatedRequest | null) {
+  sessionRequest = request;
+}
+
+export function authenticatedRequest<T>(
+  path: string,
+  options: RequestInit,
+): Promise<T> {
+  return sessionRequest
+    ? sessionRequest<T>(path, options)
+    : apiRequest<T>(path, options);
 }
