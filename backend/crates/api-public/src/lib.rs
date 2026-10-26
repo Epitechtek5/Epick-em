@@ -11,6 +11,7 @@ pub mod error;
 pub mod game_io;
 pub mod games;
 pub mod guard;
+pub mod matches;
 pub mod openapi;
 pub mod ranking;
 pub mod router;
