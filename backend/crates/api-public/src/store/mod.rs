@@ -7,6 +7,7 @@ mod games;
 mod memory;
 mod postgres;
 mod stats;
+mod steps;
 mod teams;
 mod tournaments;
 
@@ -14,6 +15,9 @@ pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
+pub use self::steps::{
+    MatchType, Step, StepFormat, StepGroup, StepParticipant, StepParticipantStatus, StepStatus,
+};
 pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
     MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,

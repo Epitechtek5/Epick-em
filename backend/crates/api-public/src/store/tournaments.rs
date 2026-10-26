@@ -38,6 +38,8 @@ macro_rules! text_enum {
     };
 }
 
+pub(super) use text_enum;
+
 text_enum! {
     /// Qui s'inscrit : des joueurs un par un, ou des équipes.
     ParticipantType, "type de participant", { Solo => "solo", Team => "team" }

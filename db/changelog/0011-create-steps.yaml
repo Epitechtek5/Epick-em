@@ -1,0 +1,208 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0011-create-steps
+      author: epickem
+      changes:
+        - sql:
+            sql: >-
+              ALTER TABLE tournament_participant
+              ADD CONSTRAINT tournament_participant_id_tournament_key UNIQUE (id, tournament_id)
+        - createTable:
+            tableName: step
+            remarks: Étape d'un tournoi ; verrouillée dès le statut ongoing
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tournament_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: step_tournament_fk
+                    references: tournaments(id)
+                    deleteCascade: true
+              - column:
+                  name: position
+                  type: integer
+                  remarks: Rang de l'étape dans le tournoi (1, 2, 3...)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: format
+                  type: varchar(16)
+                  remarks: pool, swiss, single_elim ou double_elim
+                  constraints:
+                    nullable: false
+              - column:
+                  name: match_type
+                  type: varchar(8)
+                  remarks: "duel : deux participants par match ; ffa : tous les participants du groupe"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: group_count
+                  type: integer
+                  constraints:
+                    nullable: false
+              - column:
+                  name: group_size
+                  type: integer
+                  constraints:
+                    nullable: false
+              - column:
+                  name: matches_per_group
+                  type: integer
+                  remarks: Nombre de manches (pool) ou de rondes (swiss) par groupe
+                  constraints:
+                    nullable: false
+              - column:
+                  name: advance_per_group
+                  type: integer
+                  remarks: Nombre de participants qualifiés par groupe (ex. group_size / 2 pour garder la moitié haute)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tiebreak
+                  type: jsonb
+                  remarks: Liste ordonnée des critères de départage
+                  defaultValue: "[]"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: varchar(16)
+                  remarks: pending, ongoing ou finished
+                  defaultValue: pending
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE step
+              ADD CONSTRAINT step_id_tournament_key UNIQUE (id, tournament_id),
+              ADD CONSTRAINT step_tournament_position_key UNIQUE (tournament_id, position),
+              ADD CONSTRAINT step_position_check CHECK (position > 0),
+              ADD CONSTRAINT step_format_check CHECK (format IN ('pool', 'swiss', 'single_elim', 'double_elim')),
+              ADD CONSTRAINT step_match_type_check CHECK (match_type IN ('duel', 'ffa')),
+              ADD CONSTRAINT step_group_count_check CHECK (group_count > 0),
+              ADD CONSTRAINT step_group_size_check CHECK (group_size > 0),
+              ADD CONSTRAINT step_matches_per_group_check CHECK (matches_per_group > 0),
+              ADD CONSTRAINT step_advance_per_group_check CHECK (advance_per_group > 0 AND advance_per_group <= group_size),
+              ADD CONSTRAINT step_single_group_check CHECK (format = 'pool' OR group_count = 1),
+              ADD CONSTRAINT step_tiebreak_check CHECK (jsonb_typeof(tiebreak) = 'array'),
+              ADD CONSTRAINT step_status_check CHECK (status IN ('pending', 'ongoing', 'finished'))
+        - createTable:
+            tableName: step_group
+            remarks: Groupe d'une étape ; swiss et élimination n'en ont qu'un (classement global)
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: step_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: step_group_step_fk
+                    references: step(id)
+                    deleteCascade: true
+              - column:
+                  name: index
+                  type: integer
+                  remarks: Rang du groupe dans l'étape (1, 2, 3...)
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE step_group
+              ADD CONSTRAINT step_group_id_step_key UNIQUE (id, step_id),
+              ADD CONSTRAINT step_group_step_index_key UNIQUE (step_id, index),
+              ADD CONSTRAINT step_group_index_check CHECK (index > 0)
+        - createTable:
+            tableName: step_participant
+            remarks: Participant d'une étape, dans son groupe, avec ses points et son issue
+            columns:
+              - column:
+                  name: step_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tournament_id
+                  type: uuid
+                  remarks: Recopie de step.tournament_id, pour garantir que le participant est inscrit au tournoi de l'étape
+                  constraints:
+                    nullable: false
+              - column:
+                  name: participant_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: group_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: points
+                  type: numeric
+                  remarks: Total de points de l'étape
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: final_rank
+                  type: integer
+                  remarks: Rang dans le groupe à la clôture de l'étape
+              - column:
+                  name: status
+                  type: varchar(16)
+                  remarks: in, qualified ou eliminated
+                  defaultValue: in
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE step_participant
+              ADD CONSTRAINT step_participant_pkey PRIMARY KEY (step_id, participant_id),
+              ADD CONSTRAINT step_participant_step_fk FOREIGN KEY (step_id, tournament_id)
+                  REFERENCES step (id, tournament_id) ON DELETE CASCADE,
+              ADD CONSTRAINT step_participant_participant_fk FOREIGN KEY (participant_id, tournament_id)
+                  REFERENCES tournament_participant (id, tournament_id) ON DELETE CASCADE,
+              ADD CONSTRAINT step_participant_group_fk FOREIGN KEY (group_id, step_id)
+                  REFERENCES step_group (id, step_id) ON DELETE CASCADE,
+              ADD CONSTRAINT step_participant_final_rank_check CHECK (final_rank IS NULL OR final_rank > 0),
+              ADD CONSTRAINT step_participant_status_check CHECK (status IN ('in', 'qualified', 'eliminated'));
+              CREATE INDEX step_participant_participant_idx ON step_participant (participant_id);
+              CREATE INDEX step_participant_group_idx ON step_participant (group_id)
+      rollback:
+        - dropTable:
+            tableName: step_participant
+        - dropTable:
+            tableName: step_group
+        - dropTable:
+            tableName: step
+        - sql:
+            sql: >-
+              ALTER TABLE tournament_participant
+              DROP CONSTRAINT tournament_participant_id_tournament_key
