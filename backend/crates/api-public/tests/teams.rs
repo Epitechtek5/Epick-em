@@ -33,6 +33,7 @@ struct Setup {
     bob: Account,
     carol: Account,
     game: String,
+    tournament: String,
 }
 
 async fn account(app: &app_type!(), name: &str) -> Account {
@@ -62,6 +63,27 @@ async fn send(
     .await
 }
 
+/// Crée un tournoi solo pour `game` et renvoie son identifiant.
+async fn create_tournament(app: &app_type!(), admin: &str, game: &str) -> String {
+    let (status, tournament) = send(
+        app,
+        TestRequest::post(),
+        "/tournaments",
+        admin,
+        Some(json!({
+            "game_id": game,
+            "name": "Open",
+            "start_date": "2026-11-14T18:00:00Z",
+            "end_date": "2026-11-15T18:00:00Z",
+            "participant_type": "solo",
+            "max_participants": 8,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{tournament}");
+    tournament["id"].as_str().unwrap().to_string()
+}
+
 async fn setup() -> (app_type!(), Setup) {
     let store = Arc::new(MemoryStore::new());
     let app = app_with(store.clone(), Duration::from_secs(3600)).await;
@@ -82,12 +104,14 @@ async fn setup() -> (app_type!(), Setup) {
     .await;
     assert_eq!(status, StatusCode::CREATED);
     let game = game["id"].as_str().unwrap().to_string();
+    let tournament = create_tournament(&app, &admin, &game).await;
     let setup = Setup {
         admin,
         alice,
         bob,
         carol,
         game,
+        tournament,
     };
     (app, setup)
 }
@@ -432,6 +456,11 @@ async fn owner_manages_members() {
     assert_eq!(list.as_array().unwrap().len(), 3);
 }
 
+/// Un second tournoi du même jeu.
+async fn other_tournament(app: &app_type!(), s: &Setup) -> String {
+    create_tournament(app, &s.admin, &s.game).await
+}
+
 /// Inscrit une équipe de zéro ou par copie à `tournament`.
 async fn register(
     app: &app_type!(),
@@ -467,7 +496,7 @@ async fn copy_is_complete_and_independent() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let tournament = Uuid::new_v4().to_string();
+    let tournament = s.tournament.clone();
     // Seul le propriétaire inscrit sa propre équipe.
     let (status, _) = register(
         &app,
@@ -599,7 +628,7 @@ async fn copy_can_pick_members_but_only_active_ones() {
     let team = create_team(&app, &s, &s.alice.token, "Karmine").await;
     let team_id = id(&team);
     add_member(&app, &s.alice.token, team_id, &s.bob.id, "member").await;
-    let tournament = Uuid::new_v4().to_string();
+    let tournament = s.tournament.clone();
 
     // Carol n'a jamais été membre.
     let (status, error) = register(
@@ -625,7 +654,7 @@ async fn copy_can_pick_members_but_only_active_ones() {
     let (status, error) = register(
         &app,
         &s.alice.token,
-        &Uuid::new_v4().to_string(),
+        &s.tournament,
         json!({ "team_id": Uuid::new_v4() }),
     )
     .await;
@@ -633,7 +662,7 @@ async fn copy_can_pick_members_but_only_active_ones() {
     let (status, _) = register(
         &app,
         &s.alice.token,
-        &Uuid::new_v4().to_string(),
+        &other_tournament(&app, &s).await,
         json!({ "team_id": team_id, "name": "Autre" }),
     )
     .await;
@@ -646,7 +675,7 @@ async fn a_team_registers_once_and_a_player_joins_one_team_per_tournament() {
     let team = create_team(&app, &s, &s.alice.token, "Karmine").await;
     let team_id = id(&team);
     add_member(&app, &s.alice.token, team_id, &s.bob.id, "member").await;
-    let tournament = Uuid::new_v4().to_string();
+    let tournament = s.tournament.clone();
 
     let (status, _) = register(
         &app,
@@ -688,7 +717,7 @@ async fn a_team_registers_once_and_a_player_joins_one_team_per_tournament() {
     let (status, _) = register(
         &app,
         &s.alice.token,
-        &Uuid::new_v4().to_string(),
+        &other_tournament(&app, &s).await,
         json!({ "name": "Ailleurs" }),
     )
     .await;
@@ -698,7 +727,7 @@ async fn a_team_registers_once_and_a_player_joins_one_team_per_tournament() {
 #[actix_web::test]
 async fn tournament_team_crud_is_owner_only() {
     let (app, s) = setup().await;
-    let tournament = Uuid::new_v4().to_string();
+    let tournament = s.tournament.clone();
     let (status, team) = register(
         &app,
         &s.alice.token,
