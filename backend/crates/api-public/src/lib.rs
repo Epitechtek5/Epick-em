@@ -13,6 +13,7 @@ pub mod games;
 pub mod guard;
 pub mod openapi;
 pub mod router;
+pub mod stat_io;
 pub mod stats;
 pub mod store;
 pub mod users;
