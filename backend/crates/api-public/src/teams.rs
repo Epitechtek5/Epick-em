@@ -21,7 +21,10 @@ const TAG_MAX: usize = 8;
 
 /// Routes des équipes globales, avec leur documentation OpenAPI.
 pub fn routes(cfg: &mut ServiceConfig) {
-    cfg.service(list_teams)
+    // `/teams/export` et `/teams/import` avant `/teams/{id}`.
+    cfg.service(crate::team_io::export_teams)
+        .service(crate::team_io::import_teams)
+        .service(list_teams)
         .service(get_team)
         .service(create_team)
         .service(update_team)

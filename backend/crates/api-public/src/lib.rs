@@ -16,6 +16,7 @@ pub mod router;
 pub mod stat_io;
 pub mod stats;
 pub mod store;
+pub mod team_io;
 pub mod teams;
 pub mod tournament_teams;
 pub mod users;

@@ -2,8 +2,8 @@
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, PgStore, Role, StatInput, StatType, StatUpdate, StoreError,
-    TeamInput, TeamRole, TeamUpdate, TournamentTeamInput, UserUpdate,
+    AuthStore, GameInput, GameUpdate, MemberImport, PgStore, Role, StatInput, StatType, StatUpdate,
+    StoreError, TeamImport, TeamInput, TeamRole, TeamUpdate, TournamentTeamInput, UserUpdate,
 };
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
@@ -860,4 +860,107 @@ async fn tournament_teams_are_independent_copies() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn teams_are_upserted_with_their_members_in_one_transaction() {
+    let store = store().await;
+    let (alice, bob, carol) = (
+        user(&store, "alice").await,
+        user(&store, "bob").await,
+        user(&store, "carol").await,
+    );
+    let game_id = game(&store).await;
+    let name = unique("Karmine");
+    let member = |user_id, role, joined: Option<&str>, left: Option<&str>| MemberImport {
+        user_id,
+        role,
+        joined_at: joined.map(str::to_string),
+        left_at: left.map(str::to_string),
+    };
+    let input = |name: &str, owner, members| TeamImport {
+        game_id,
+        name: name.to_string(),
+        tag: Some("KC".into()),
+        picture_url: None,
+        owner_id: owner,
+        members,
+    };
+
+    let saved = store
+        .import_teams(vec![input(
+            &name,
+            alice,
+            vec![
+                member(
+                    alice,
+                    TeamRole::Owner,
+                    Some("2026-01-02T03:04:05.123456Z"),
+                    None,
+                ),
+                member(
+                    bob,
+                    TeamRole::Substitute,
+                    Some("2026-01-03T00:00:00.000000Z"),
+                    Some("2026-02-03T00:00:00.000000Z"),
+                ),
+            ],
+        )])
+        .await
+        .unwrap();
+    assert!(saved[0].1);
+    let team = saved[0].0.clone();
+    let members = store.list_team_members(team.id).await.unwrap().unwrap();
+    assert_eq!(members[0].joined_at, "2026-01-02T03:04:05.123456Z");
+    assert_eq!(
+        members[1].left_at.as_deref(),
+        Some("2026-02-03T00:00:00.000000Z")
+    );
+
+    // Même équipe (nom en majuscules) : mise à jour, membres remplacés, identifiant conservé.
+    let saved = store
+        .import_teams(vec![input(
+            &name.to_uppercase(),
+            carol,
+            vec![member(carol, TeamRole::Owner, None, None)],
+        )])
+        .await
+        .unwrap();
+    assert!(!saved[0].1);
+    assert_eq!(saved[0].0.id, team.id);
+    assert_eq!(saved[0].0.owner_id, carol);
+    assert_eq!(saved[0].0.name, name.to_uppercase());
+    let members = store.list_team_members(team.id).await.unwrap().unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].user_id, carol);
+
+    // Un lot qui échoue (deux propriétaires actifs) n'écrit rien, pas même ses équipes valides.
+    let other = unique("Autre");
+    let failed = store
+        .import_teams(vec![
+            input(
+                &other,
+                alice,
+                vec![member(alice, TeamRole::Owner, None, None)],
+            ),
+            input(
+                &unique("Cassée"),
+                alice,
+                vec![
+                    member(alice, TeamRole::Owner, None, None),
+                    member(bob, TeamRole::Owner, None, None),
+                ],
+            ),
+        ])
+        .await;
+    assert!(failed.is_err());
+    let names: Vec<String> = store
+        .list_teams(Some(game_id), 10, 0)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, [name.to_uppercase()]);
 }

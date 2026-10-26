@@ -3,7 +3,7 @@
 
 use super::{
     AuthStore, Game, GameInput, GameUpdate, Role, Stat, StatInput, StatUpdate, StoreError, Team,
-    TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
+    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
     TournamentTeamMember, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
@@ -865,6 +865,72 @@ impl AuthStore for PgStore {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn import_teams(&self, teams: Vec<TeamImport>) -> Result<Vec<(Team, bool)>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let mut result = Vec::with_capacity(teams.len());
+        for input in teams {
+            // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour.
+            let row = sqlx::query_as::<
+                _,
+                (
+                    Uuid,
+                    Uuid,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    Uuid,
+                    String,
+                    String,
+                    bool,
+                ),
+            >(&format!(
+                "INSERT INTO teams (game_id, name, tag, picture_url, owner_id) \
+                 VALUES ($1, $2, $3, $4, $5) \
+                 ON CONFLICT (game_id, lower(name)) DO UPDATE SET \
+                     name = EXCLUDED.name, \
+                     tag = EXCLUDED.tag, \
+                     picture_url = EXCLUDED.picture_url, \
+                     owner_id = EXCLUDED.owner_id, \
+                     updated_at = now() \
+                 RETURNING {}, (xmax = 0)",
+                team_columns()
+            ))
+            .bind(input.game_id)
+            .bind(input.name)
+            .bind(input.tag)
+            .bind(input.picture_url)
+            .bind(input.owner_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(team_conflict)?;
+            // Le fichier décrit l'état complet de l'équipe : ses membres remplacent les anciens.
+            sqlx::query("DELETE FROM team_member WHERE team_id = $1")
+                .bind(row.0)
+                .execute(&mut *tx)
+                .await?;
+            for member in input.members {
+                sqlx::query(
+                    "INSERT INTO team_member (team_id, user_id, role, joined_at, left_at) \
+                     VALUES ($1, $2, $3, COALESCE($4::timestamptz, now()), $5::timestamptz)",
+                )
+                .bind(row.0)
+                .bind(member.user_id)
+                .bind(member.role.as_str())
+                .bind(member.joined_at)
+                .bind(member.left_at)
+                .execute(&mut *tx)
+                .await
+                .map_err(team_conflict)?;
+            }
+            result.push((
+                team((row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7)),
+                row.8,
+            ));
+        }
+        tx.commit().await?;
+        Ok(result)
     }
 
     async fn list_tournament_teams(
