@@ -27,6 +27,8 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /games` | JWT valide, **administrateur** | `{ name, description?, images? }` | `201` `{ id, name, description, images }` |
 | `PATCH /games/{id}` | JWT valide, **administrateur** | `{ name?, description?, images? }` | `200` `{ id, name, description, images }` |
 | `DELETE /games/{id}` | JWT valide, **administrateur** | — | `204` |
+| `GET /games/export` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` | `200` fichier `games.json` / `games.csv` |
+| `POST /games/import` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` ; contenu du fichier en corps (256 Kio max) | `200` `{ created, updated }` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -51,6 +53,15 @@ Le jeton d'accès est un JWT HS256 dont les claims sont `sub` (id du compte), `u
 - **`/logout`** : révoque le jeton de rafraîchissement, s'il appartient au compte du JWT. Idempotent : `204` même si le jeton est inconnu, déjà révoqué ou d'un autre compte (dans ce dernier cas il n'est pas révoqué). Le jeton d'accès reste valable jusqu'à son expiration.
 
 - **Jeux :** nom de 1 à 64 caractères (espaces autour retirés), unique sans tenir compte de la casse ; description de 2000 caractères au maximum ; 10 images au maximum, chacune une URL `http(s)` sans espace de 2048 caractères au maximum. `PATCH` remplace les champs fournis (`images` est remplacé en entier).
+
+### Import et export des jeux
+
+Un seul format pour les deux sens : un fichier exporté se réimporte sans perte.
+
+- **JSON :** `{ "version": 1, "games": [{ "name", "description", "images": [], "stats": [] }] }` ; `description`, `images` et `stats` sont facultatifs à l'import, les autres clés sont refusées.
+- **CSV :** en-tête `name,description,images,stats` ; `images` sépare les URLs par une espace ; `stats` contient le tableau JSON des statistiques (vide accepté).
+- **Import :** un jeu dont le nom (sans tenir compte de la casse) existe déjà met à jour ce jeu, sinon il est créé. Le fichier est validé en entier (mêmes règles que `POST /games`, noms distincts dans le fichier) avant toute écriture, puis les jeux sont écrits en une transaction ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus).
+- **Statistiques :** ce niveau les traite comme des valeurs opaques. Leur validation, leur export et leur import sont délégués au trait `game_io::GameStats` (branché avec `AppState::with_stats`) ; il n'en lit ni n'en interprète le contenu. Tant que les statistiques ne sont pas branchées (`NoStats`), l'export les renvoie vides et l'import refuse un fichier qui en contient.
 
 ### Erreurs
 

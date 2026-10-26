@@ -22,7 +22,10 @@ const IMAGE_URL_MAX: usize = 2048;
 
 /// Routes des jeux, avec leur documentation OpenAPI.
 pub fn routes(cfg: &mut ServiceConfig) {
-    cfg.service(list_games)
+    // `/games/export` et `/games/import` avant `/games/{id}`.
+    cfg.service(crate::game_io::export_games)
+        .service(crate::game_io::import_games)
+        .service(list_games)
         .service(get_game)
         .service(create_game)
         .service(update_game)

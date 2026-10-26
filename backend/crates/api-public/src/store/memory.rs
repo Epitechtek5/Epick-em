@@ -275,4 +275,34 @@ impl AuthStore for MemoryStore {
         state.games.retain(|g| g.id != id);
         Ok(state.games.len() != before)
     }
+
+    async fn upsert_games(&self, games: Vec<GameInput>) -> Result<Vec<(Game, bool)>, StoreError> {
+        let mut state = self.state();
+        let mut result = Vec::with_capacity(games.len());
+        for input in games {
+            let existing = state
+                .games
+                .iter_mut()
+                .find(|g| g.name.to_lowercase() == input.name.to_lowercase());
+            match existing {
+                Some(game) => {
+                    game.name = input.name;
+                    game.description = input.description;
+                    game.images = input.images;
+                    result.push((game.clone(), false));
+                }
+                None => {
+                    let game = Game {
+                        id: Uuid::new_v4(),
+                        name: input.name,
+                        description: input.description,
+                        images: input.images,
+                    };
+                    state.games.push(game.clone());
+                    result.push((game, true));
+                }
+            }
+        }
+        Ok(result)
+    }
 }
