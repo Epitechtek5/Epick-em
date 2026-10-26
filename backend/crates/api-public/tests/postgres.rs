@@ -2139,9 +2139,9 @@ async fn match_tables_enforce_their_constraints() {
     let match_id = insert(Some(step_id), Some(group_id), Some("winners"), "scheduled")
         .await
         .unwrap();
-    // Un match hors tournoi n'a ni groupe ni tableau ; le groupe est celui de l'étape ; tableau
-    // et statut connus.
-    insert(None, None, None, "scheduled").await.unwrap();
+    // Un match appartient toujours à une étape (donc à un tournoi) ; le groupe est celui de
+    // l'étape ; tableau et statut connus.
+    assert!(insert(None, None, None, "scheduled").await.is_err());
     assert!(
         insert(None, Some(group_id), None, "scheduled")
             .await
@@ -2323,7 +2323,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         .await
         .unwrap();
     assert_eq!(semi.status, MatchStatus::Scheduled);
-    assert_eq!(semi.step_id, Some(step.id));
+    assert_eq!(semi.step_id, step.id);
     assert_eq!(
         semi.scheduled_at.as_deref(),
         Some("2026-11-14T18:00:00.000000Z")

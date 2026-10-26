@@ -740,7 +740,7 @@ async fn find_match(state: &AppState, step: &Step, match_id: Uuid) -> Result<Mat
         .find_match(match_id)
         .await
         .map_err(ApiError::internal)?
-        .filter(|m| m.step_id == Some(step.id))
+        .filter(|m| m.step_id == step.id)
         .ok_or(ApiError::NotFound)
 }
 
@@ -1314,7 +1314,7 @@ mod tests {
         Match {
             id: Uuid::new_v4(),
             game_id: Uuid::nil(),
-            step_id: Some(Uuid::nil()),
+            step_id: Uuid::nil(),
             group_id: Some(group),
             round: None,
             bracket: None,

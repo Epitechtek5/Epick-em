@@ -1445,7 +1445,7 @@ impl AuthStore for MemoryStore {
         let mut matches: Vec<Match> = state
             .matches
             .iter()
-            .filter(|m| m.step_id == Some(step_id))
+            .filter(|m| m.step_id == step_id)
             .filter(|m| group_id.is_none_or(|id| m.group_id == Some(id)))
             .filter(|m| status.is_none_or(|status| m.status == status))
             .cloned()
@@ -1468,7 +1468,7 @@ impl AuthStore for MemoryStore {
             state
                 .matches
                 .iter()
-                .any(|m| m.id == match_id && m.step_id == Some(step_id))
+                .any(|m| m.id == match_id && m.step_id == step_id)
         };
         let mut participants: Vec<MatchParticipant> = state
             .match_participants
@@ -1486,7 +1486,7 @@ impl AuthStore for MemoryStore {
         let created = Match {
             id: Uuid::new_v4(),
             game_id: input.game_id,
-            step_id: Some(input.step_id),
+            step_id: input.step_id,
             group_id: Some(input.group_id),
             round: input.round,
             bracket: input.bracket,
@@ -1599,15 +1599,13 @@ impl AuthStore for MemoryStore {
                 .match_participants
                 .push(empty_participant(next_id, participant_id));
         }
-        if let Some(step_id) = step_id {
-            for (participant_id, points) in finish.step_points {
-                if let Some(member) = state
-                    .step_participants
-                    .iter_mut()
-                    .find(|p| p.step_id == step_id && p.participant_id == participant_id)
-                {
-                    member.points = points;
-                }
+        for (participant_id, points) in finish.step_points {
+            if let Some(member) = state
+                .step_participants
+                .iter_mut()
+                .find(|p| p.step_id == step_id && p.participant_id == participant_id)
+            {
+                member.points = points;
             }
         }
         let now = now_rfc3339();
@@ -1636,7 +1634,7 @@ impl AuthStore for MemoryStore {
         let doomed: Vec<Uuid> = state
             .matches
             .iter()
-            .filter(|m| m.step_id == Some(step_id))
+            .filter(|m| m.step_id == step_id)
             .map(|m| m.id)
             .collect();
         for id in doomed {
@@ -1648,7 +1646,7 @@ impl AuthStore for MemoryStore {
             state.matches.push(Match {
                 id: ids[index],
                 game_id,
-                step_id: Some(step_id),
+                step_id,
                 group_id: import.group_id,
                 round: import.round,
                 bracket: import.bracket,
@@ -1862,7 +1860,7 @@ impl State {
         let doomed: Vec<Uuid> = self
             .matches
             .iter()
-            .filter(|m| m.step_id == Some(id))
+            .filter(|m| m.step_id == id)
             .map(|m| m.id)
             .collect();
         for match_id in doomed {

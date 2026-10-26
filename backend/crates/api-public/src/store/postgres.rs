@@ -438,7 +438,7 @@ fn match_columns() -> String {
 type MatchRow = (
     Uuid,
     Uuid,
-    Option<Uuid>,
+    Uuid,
     Option<Uuid>,
     Option<i32>,
     Option<String>,
@@ -545,8 +545,8 @@ async fn save_match_scores_in(
 async fn lock_open_match(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     match_id: Uuid,
-) -> Result<Option<Option<Uuid>>, StoreError> {
-    let row = sqlx::query_as::<_, (String, Option<Uuid>)>(
+) -> Result<Option<Uuid>, StoreError> {
+    let row = sqlx::query_as::<_, (String, Uuid)>(
         "SELECT status, step_id FROM match WHERE id = $1 FOR UPDATE",
     )
     .bind(match_id)
@@ -2229,18 +2229,16 @@ impl AuthStore for PgStore {
         if let Some((next_id, participant_id)) = finish.advance {
             insert_match_participant(&mut tx, next_id, participant_id).await?;
         }
-        if let Some(step_id) = step_id {
-            for (participant_id, points) in finish.step_points {
-                sqlx::query(
-                    "UPDATE step_participant SET points = $3::float8::numeric \
-                     WHERE step_id = $1 AND participant_id = $2",
-                )
-                .bind(step_id)
-                .bind(participant_id)
-                .bind(points)
-                .execute(&mut *tx)
-                .await?;
-            }
+        for (participant_id, points) in finish.step_points {
+            sqlx::query(
+                "UPDATE step_participant SET points = $3::float8::numeric \
+                 WHERE step_id = $1 AND participant_id = $2",
+            )
+            .bind(step_id)
+            .bind(participant_id)
+            .bind(points)
+            .execute(&mut *tx)
+            .await?;
         }
         let row = sqlx::query_as::<_, MatchRow>(&format!(
             "UPDATE match SET status = 'finished', started_at = COALESCE(started_at, now()), \

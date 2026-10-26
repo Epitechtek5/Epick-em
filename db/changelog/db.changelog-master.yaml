@@ -24,3 +24,5 @@ databaseChangeLog:
       file: changelog/0011-create-steps.yaml
   - include:
       file: changelog/0012-create-matches.yaml
+  - include:
+      file: changelog/0013-match-in-step.yaml

@@ -32,13 +32,13 @@ text_enum! {
     MatchResult, "résultat de match", { Win => "win", Loss => "loss", Draw => "draw" }
 }
 
-/// Match d'un jeu, dans un groupe d'étape ou hors tournoi.
+/// Match d'un jeu, dans une étape de tournoi (jamais hors tournoi).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Match {
     pub id: Uuid,
     pub game_id: Uuid,
-    /// Étape du match, `null` hors tournoi.
-    pub step_id: Option<Uuid>,
+    /// Étape du match.
+    pub step_id: Uuid,
     /// Groupe de l'étape.
     pub group_id: Option<Uuid>,
     /// N° de manche (`pool`), de ronde (`swiss`) ou de tour (élimination), à partir de 1.
