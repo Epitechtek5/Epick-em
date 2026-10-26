@@ -29,7 +29,7 @@ Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`).
 ## Authentification
 
 - `POST /register` est branché (201 → connexion, 400 → erreurs affichées, 409 → nom déjà pris).
-- La connexion est préparée : le contrat `POST /login` → `{ access_token, refresh_token? }` est **provisoire** (voir `src/lib/api/auth.ts`, `TODO(#15)`). Tant que l'endpoint n'existe pas, l'écran affiche « La connexion n'est pas encore disponible ».
+- `POST /login` renvoie `{ access_token, refresh_token, token_type, expires_in }` et `POST /refresh` / `POST /logout` existent côté API (voir [`docs/api-public.md`](../docs/api-public.md)). Le client web utilise encore un contrat provisoire (`src/lib/api/auth.ts`, `TODO(#15)`) à aligner : `/refresh` et `/logout` exigent un `Authorization: Bearer` et un corps `{ refresh_token }`.
 - Seul mécanisme d'authentification : `Authorization: Bearer <JWT>`. Jamais d'en-tête `X-User-Id`.
 - Les tokens restent **en mémoire** (pas de `localStorage`, exposé au XSS) ; la persistance de session passera par un cookie httpOnly (#15).
 
