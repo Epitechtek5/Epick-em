@@ -40,6 +40,8 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `GET /stats/export` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` | `200` fichier `stats.json` / `stats.csv` |
 | `POST /stats/import` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` ; contenu du fichier en corps (256 Kio max) | `200` `{ created, updated }` |
 | `GET /teams` | JWT valide | `?game_id`, `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, game_id, name, tag, picture_url, owner_id, created_at, updated_at }]`, par ordre alphabétique |
+| `GET /teams/export` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` | `200` fichier `teams.json` / `teams.csv` |
+| `POST /teams/import` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` ; contenu du fichier en corps (256 Kio max) | `200` `{ created, updated }` |
 | `GET /teams/{id}` | JWT valide | — | `200` l'équipe |
 | `POST /teams` | JWT valide | `{ game_id, name, tag?, picture_url? }` | `201` l'équipe ; l'appelant en est le propriétaire et le premier membre |
 | `PATCH /teams/{id}` | JWT valide, **propriétaire** | `{ name?, tag?, picture_url? }` (chaîne vide : efface `tag` / `picture_url`) | `200` l'équipe |
@@ -101,6 +103,15 @@ Même principe, portée `stat` et `stat - game` uniquement.
 
 - **Équipes :** nom de 1 à 64 caractères, unique par jeu sans tenir compte de la casse ; tag de 1 à 8 caractères ; photo : URL `http(s)` de 2048 caractères au maximum. Seul le **propriétaire** (l'appelant de `POST /teams`) modifie ou supprime l'équipe et gère ses membres, les administrateurs n'ont pas ce droit. Le propriétaire est membre `owner` : son rôle est fixe, il ne peut pas être retiré et `owner` n'est pas attribuable.
 - **Équipes de tournoi :** créées de zéro ou par **copie** d'une équipe globale (nom, tag, photo, propriétaire et membres actifs, éventuellement restreints par `member_ids`, qui doivent être membres actifs). La copie est indépendante : aucune modification ne se propage de l'une à l'autre, et supprimer l'équipe globale garde la copie (`team_id` devient `null`). Une équipe globale s'inscrit une seule fois par tournoi, un joueur n'est que dans une équipe par tournoi. La table des tournois (#62) n'existe pas encore : `tournament_id` n'est pas vérifié, ni la règle « le jeu de l'équipe est celui du tournoi ».
+
+### Import et export des équipes
+
+Les équipes de tournoi sont hors périmètre : seuls `teams` et `team_member` sont exportés. Un fichier exporté se réimporte sans perte (l'export d'une base réimportée est identique). Un jeu est désigné par son nom et un compte par son nom d'utilisateur.
+
+- **JSON :** `{ "version": 1, "teams": [{ "game", "name", "tag", "picture_url", "owner", "members": [{ "username", "role", "joined_at", "left_at" }] }] }` ; `tag`, `picture_url`, `joined_at` et `left_at` sont facultatifs à l'import, les autres clés sont refusées.
+- **CSV :** en-tête `game,name,tag,picture_url,owner,members` ; `members` contient le tableau JSON des membres.
+- **Membres :** le tableau décrit l'état complet de l'équipe, anciens membres compris (`left_at` renseigné). Le propriétaire y figure comme unique membre `owner` actif ; un compte n'est membre actif qu'une fois. Les horodatages sont en RFC 3339 UTC (`2026-10-26T14:03:09Z`, six décimales au plus) ; `joined_at` vaut l'instant de l'import s'il est absent, et `left_at` exige `joined_at`.
+- **Import :** une équipe dont le jeu et le nom (sans tenir compte de la casse) existent déjà met à jour cette équipe (tag, photo, propriétaire) et **remplace** ses membres, sinon elle est créée. Les jeux et les comptes doivent exister. Le fichier est validé en entier avant toute écriture (mêmes règles que `POST /teams`, équipes distinctes) ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus).
 
 ### Erreurs
 

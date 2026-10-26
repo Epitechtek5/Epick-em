@@ -3,7 +3,7 @@
 use super::teams::now_rfc3339;
 use super::{
     AuthStore, Game, GameInput, GameUpdate, Role, Stat, StatInput, StatUpdate, StoreError, Team,
-    TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
+    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
     TournamentTeamMember, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
@@ -617,6 +617,57 @@ impl AuthStore for MemoryStore {
             .active_team_member(team_id, user_id)
             .map(|member| member.left_at = Some(now_rfc3339()))
             .is_some())
+    }
+
+    async fn import_teams(&self, teams: Vec<TeamImport>) -> Result<Vec<(Team, bool)>, StoreError> {
+        let mut state = self.state();
+        let mut result = Vec::with_capacity(teams.len());
+        for input in teams {
+            let now = now_rfc3339();
+            let existing = state.teams.iter_mut().find(|t| {
+                t.game_id == input.game_id && t.name.to_lowercase() == input.name.to_lowercase()
+            });
+            let (team, created) = match existing {
+                Some(team) => {
+                    team.name = input.name;
+                    team.tag = input.tag;
+                    team.picture_url = input.picture_url;
+                    team.owner_id = input.owner_id;
+                    team.updated_at = now.clone();
+                    (team.clone(), false)
+                }
+                None => {
+                    let team = Team {
+                        id: Uuid::new_v4(),
+                        game_id: input.game_id,
+                        name: input.name,
+                        tag: input.tag,
+                        picture_url: input.picture_url,
+                        owner_id: input.owner_id,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                    };
+                    state.teams.push(team.clone());
+                    (team, true)
+                }
+            };
+            state.team_members.retain(|(id, _)| *id != team.id);
+            state
+                .team_members
+                .extend(input.members.into_iter().map(|member| {
+                    (
+                        team.id,
+                        TeamMember {
+                            user_id: member.user_id,
+                            role: member.role,
+                            joined_at: member.joined_at.unwrap_or_else(|| now.clone()),
+                            left_at: member.left_at,
+                        },
+                    )
+                }));
+            result.push((team, created));
+        }
+        Ok(result)
     }
 
     async fn list_tournament_teams(
