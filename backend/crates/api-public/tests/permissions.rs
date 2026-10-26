@@ -75,12 +75,7 @@ async fn every_admin_route_refuses_an_ordinary_account() {
     let admin = access(&session).to_string();
     let user = access(&logged_in_as(&app, "alice", "secret123").await).to_string();
 
-    let (a, b, c, d) = (
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-    );
+    let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     let steps = format!("/tournaments/{a}/steps");
     let matches = format!("{steps}/{b}/matches");
     let routes: Vec<Route> = vec![
