@@ -8,6 +8,7 @@ mod memory;
 mod postgres;
 mod stats;
 mod teams;
+mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
@@ -16,6 +17,10 @@ pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::teams::{
     MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
     TournamentTeamInput, TournamentTeamMember,
+};
+pub use self::tournaments::{
+    ParticipantStatus, ParticipantType, ScoringMode, ScoringRule, TeamScoringMode, Tournament,
+    TournamentInput, TournamentParticipant, TournamentStatus,
 };
 
 use async_trait::async_trait;
