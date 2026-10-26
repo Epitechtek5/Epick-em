@@ -1,0 +1,47 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0005-create-games
+      author: epickem
+      changes:
+        - createTable:
+            tableName: games
+            remarks: Jeux supportés par la plateforme (un tournoi, un match ou une statistique en dépend)
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: varchar(64)
+                  remarks: Nom du jeu, unique sans tenir compte de la casse
+                  constraints:
+                    nullable: false
+              - column:
+                  name: description
+                  type: text
+                  defaultValue: ''
+                  constraints:
+                    nullable: false
+              - column:
+                  name: images
+                  type: text[]
+                  defaultValueComputed: "'{}'"
+                  remarks: URLs des images du jeu, la première sert de visuel principal
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: CREATE UNIQUE INDEX games_name_lower_key ON games (lower(name))
+            rollback: DROP INDEX games_name_lower_key
+      rollback:
+        - dropTable:
+            tableName: games
