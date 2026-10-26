@@ -124,3 +124,48 @@ pub struct TournamentTeamMember {
     pub user_id: Uuid,
     pub role: TeamRole,
 }
+
+/// Instant présent au format des horodatages de l'API (`2026-10-26T14:03:09.123456Z`), pour le
+/// store en mémoire ; PostgreSQL produit le même format.
+pub(super) fn now_rfc3339() -> String {
+    let since_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = since_epoch.as_secs();
+    let (days, rest) = (secs / 86_400, secs % 86_400);
+    // Date civile depuis le nombre de jours écoulés depuis 1970 (algorithme de H. Hinnant).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:06}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60,
+        since_epoch.subsec_micros()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_has_the_postgres_shape() {
+        let now = now_rfc3339();
+        assert_eq!(now.len(), 27, "{now}");
+        assert!(now.starts_with("20") && now.ends_with('Z'), "{now}");
+        assert_eq!(&now[10..11], "T");
+    }
+}

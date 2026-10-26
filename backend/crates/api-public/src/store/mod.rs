@@ -103,6 +103,14 @@ pub enum StoreError {
     StatKeyTaken,
     /// La statistique est utilisée par le barème d'un tournoi en cours.
     StatInUse,
+    /// Le nom d'équipe existe déjà pour ce jeu (sans tenir compte de la casse).
+    TeamNameTaken,
+    /// Le compte est déjà membre actif de l'équipe.
+    AlreadyTeamMember,
+    /// L'équipe globale est déjà inscrite à ce tournoi.
+    TeamAlreadyRegistered,
+    /// Le joueur est déjà dans une équipe de ce tournoi.
+    PlayerAlreadyRegistered,
     Other(String),
 }
 
@@ -113,6 +121,12 @@ impl fmt::Display for StoreError {
             StoreError::GameNameTaken => f.write_str("nom de jeu déjà pris"),
             StoreError::StatKeyTaken => f.write_str("clé de statistique déjà prise"),
             StoreError::StatInUse => f.write_str("statistique utilisée par un tournoi en cours"),
+            StoreError::TeamNameTaken => f.write_str("nom d'équipe déjà pris"),
+            StoreError::AlreadyTeamMember => f.write_str("compte déjà membre de l'équipe"),
+            StoreError::TeamAlreadyRegistered => f.write_str("équipe déjà inscrite au tournoi"),
+            StoreError::PlayerAlreadyRegistered => {
+                f.write_str("joueur déjà dans une équipe du tournoi")
+            }
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -240,4 +254,113 @@ pub trait AuthStore: Send + Sync {
     /// Remplace les jeux liés à la statistique par `game_ids`, en une seule opération. `false`
     /// si la statistique ou l'un des jeux n'existe pas (rien n'est alors modifié).
     async fn set_stat_games(&self, stat_id: Uuid, game_ids: Vec<Uuid>) -> Result<bool, StoreError>;
+
+    /// Équipes globales par ordre de nom, éventuellement d'un seul jeu, `limit` à partir de
+    /// `offset`.
+    async fn list_teams(
+        &self,
+        game_id: Option<Uuid>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Team>, StoreError>;
+
+    async fn find_team(&self, id: Uuid) -> Result<Option<Team>, StoreError>;
+
+    /// Crée l'équipe et y inscrit son propriétaire (rôle `owner`) ;
+    /// [`StoreError::TeamNameTaken`] si le nom est déjà pris pour ce jeu. Le jeu et le
+    /// propriétaire existent.
+    async fn create_team(&self, team: TeamInput) -> Result<Team, StoreError>;
+
+    /// Applique `update` ; `None` si l'équipe n'existe pas, [`StoreError::TeamNameTaken`] si le
+    /// nouveau nom est déjà pris pour ce jeu.
+    async fn update_team(&self, id: Uuid, update: TeamUpdate) -> Result<Option<Team>, StoreError>;
+
+    /// Supprime l'équipe et ses membres ; les équipes de tournoi copiées sont conservées
+    /// (`team_id` repasse à `null`). `false` si elle n'existait pas.
+    async fn delete_team(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Membres de l'équipe, actuels et anciens, par date d'arrivée ; `None` si elle n'existe pas.
+    async fn list_team_members(&self, team_id: Uuid)
+    -> Result<Option<Vec<TeamMember>>, StoreError>;
+
+    /// Ajoute le compte à l'équipe ; `None` si l'équipe ou le compte n'existe pas,
+    /// [`StoreError::AlreadyTeamMember`] s'il en est déjà membre actif.
+    async fn add_team_member(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError>;
+
+    /// Change le rôle d'un membre actif ; `None` s'il n'en est pas un.
+    async fn set_team_member_role(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError>;
+
+    /// Fait quitter l'équipe à un membre actif (la ligne est conservée avec `left_at`) ;
+    /// `false` s'il n'en était pas un.
+    async fn remove_team_member(&self, team_id: Uuid, user_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Équipes d'un tournoi par ordre de nom, `limit` à partir de `offset`.
+    async fn list_tournament_teams(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentTeam>, StoreError>;
+
+    async fn find_tournament_team(&self, id: Uuid) -> Result<Option<TournamentTeam>, StoreError>;
+
+    /// Crée l'équipe de tournoi et ses membres en une seule opération ;
+    /// [`StoreError::TeamAlreadyRegistered`] si l'équipe globale d'origine est déjà inscrite à
+    /// ce tournoi, [`StoreError::PlayerAlreadyRegistered`] si un membre est déjà dans une autre
+    /// équipe du tournoi.
+    async fn create_tournament_team(
+        &self,
+        team: TournamentTeamInput,
+    ) -> Result<TournamentTeam, StoreError>;
+
+    /// Applique `update` ; `None` si l'équipe de tournoi n'existe pas. Aucune propagation vers
+    /// l'équipe globale d'origine.
+    async fn update_tournament_team(
+        &self,
+        id: Uuid,
+        update: TeamUpdate,
+    ) -> Result<Option<TournamentTeam>, StoreError>;
+
+    /// Supprime l'équipe de tournoi et ses membres ; `false` si elle n'existait pas.
+    async fn delete_tournament_team(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Membres de l'équipe de tournoi ; `None` si elle n'existe pas.
+    async fn list_tournament_team_members(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<Vec<TournamentTeamMember>>, StoreError>;
+
+    /// Ajoute le compte à l'équipe de tournoi ; `None` si l'équipe ou le compte n'existe pas,
+    /// [`StoreError::PlayerAlreadyRegistered`] s'il est déjà dans une équipe de ce tournoi.
+    async fn add_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError>;
+
+    /// Change le rôle d'un membre ; `None` s'il n'est pas dans l'équipe.
+    async fn set_tournament_team_member_role(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError>;
+
+    /// Retire un membre de l'équipe de tournoi ; `false` s'il n'y était pas.
+    async fn remove_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool, StoreError>;
 }

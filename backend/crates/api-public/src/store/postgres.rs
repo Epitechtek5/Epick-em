@@ -2,8 +2,9 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Role, Stat, StatInput, StatUpdate, StoreError,
-    UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, Role, Stat, StatInput, StatUpdate, StoreError, Team,
+    TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
@@ -100,6 +101,125 @@ fn stat_key_taken(err: sqlx::Error) -> StoreError {
         }
         _ => err.into(),
     }
+}
+
+/// Horodatage RFC 3339 en UTC, avec les microsecondes de PostgreSQL : sans perte à l'aller-retour.
+fn ts(column: &str) -> String {
+    format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+}
+
+/// Colonnes de `teams`, dans l'ordre de [`TeamRow`].
+fn team_columns() -> String {
+    format!(
+        "id, game_id, name, tag, picture_url, owner_id, {} AS created_at, {} AS updated_at",
+        ts("created_at"),
+        ts("updated_at")
+    )
+}
+
+/// Colonnes de `tournament_teams`, dans l'ordre de [`TournamentTeamRow`].
+fn tournament_team_columns() -> String {
+    format!(
+        "id, tournament_id, team_id, name, tag, picture_url, owner_id, {} AS created_at",
+        ts("created_at")
+    )
+}
+
+fn member_columns() -> String {
+    format!(
+        "user_id, role, {} AS joined_at, {} AS left_at",
+        ts("joined_at"),
+        ts("left_at")
+    )
+}
+
+type TeamRow = (
+    Uuid,
+    Uuid,
+    String,
+    Option<String>,
+    Option<String>,
+    Uuid,
+    String,
+    String,
+);
+
+fn team(row: TeamRow) -> Team {
+    Team {
+        id: row.0,
+        game_id: row.1,
+        name: row.2,
+        tag: row.3,
+        picture_url: row.4,
+        owner_id: row.5,
+        created_at: row.6,
+        updated_at: row.7,
+    }
+}
+
+type TeamMemberRow = (Uuid, String, String, Option<String>);
+
+fn team_member(row: TeamMemberRow) -> Result<TeamMember, StoreError> {
+    Ok(TeamMember {
+        user_id: row.0,
+        role: row.1.parse::<TeamRole>()?,
+        joined_at: row.2,
+        left_at: row.3,
+    })
+}
+
+type TournamentTeamRow = (
+    Uuid,
+    Uuid,
+    Option<Uuid>,
+    String,
+    Option<String>,
+    Option<String>,
+    Uuid,
+    String,
+);
+
+fn tournament_team(row: TournamentTeamRow) -> TournamentTeam {
+    TournamentTeam {
+        id: row.0,
+        tournament_id: row.1,
+        team_id: row.2,
+        name: row.3,
+        tag: row.4,
+        picture_url: row.5,
+        owner_id: row.6,
+        created_at: row.7,
+    }
+}
+
+fn tournament_member(row: (Uuid, String)) -> Result<TournamentTeamMember, StoreError> {
+    Ok(TournamentTeamMember {
+        user_id: row.0,
+        role: row.1.parse::<TeamRole>()?,
+    })
+}
+
+/// Traduit la violation d'une contrainte d'unicité des équipes (reconnue à son nom) ; les autres
+/// erreurs restent des pannes.
+fn team_conflict(err: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db) = &err
+        && db.code().as_deref() == Some(UNIQUE_VIOLATION)
+    {
+        match db.constraint() {
+            Some("teams_game_name_lower_key") => return StoreError::TeamNameTaken,
+            Some("team_member_active_key") => return StoreError::AlreadyTeamMember,
+            Some("tournament_teams_team_key") => return StoreError::TeamAlreadyRegistered,
+            Some("tournament_team_member_user_key") => {
+                return StoreError::PlayerAlreadyRegistered;
+            }
+            _ => {}
+        }
+    }
+    err.into()
+}
+
+fn is_foreign_key_violation(err: &sqlx::Error) -> bool {
+    matches!(err, sqlx::Error::Database(db) if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION))
 }
 
 type UserRow = (Uuid, String, String, String);
@@ -579,5 +699,355 @@ impl AuthStore for PgStore {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    async fn list_teams(
+        &self,
+        game_id: Option<Uuid>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Team>, StoreError> {
+        Ok(sqlx::query_as::<_, TeamRow>(&format!(
+            "SELECT {} FROM teams WHERE $1::uuid IS NULL OR game_id = $1 \
+             ORDER BY lower(name), id LIMIT $2 OFFSET $3",
+            team_columns()
+        ))
+        .bind(game_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(team)
+        .collect())
+    }
+
+    async fn find_team(&self, id: Uuid) -> Result<Option<Team>, StoreError> {
+        Ok(sqlx::query_as::<_, TeamRow>(&format!(
+            "SELECT {} FROM teams WHERE id = $1",
+            team_columns()
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(team))
+    }
+
+    async fn create_team(&self, input: TeamInput) -> Result<Team, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, TeamRow>(&format!(
+            "INSERT INTO teams (game_id, name, tag, picture_url, owner_id) \
+             VALUES ($1, $2, $3, $4, $5) RETURNING {}",
+            team_columns()
+        ))
+        .bind(input.game_id)
+        .bind(input.name)
+        .bind(input.tag)
+        .bind(input.picture_url)
+        .bind(input.owner_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(team_conflict)?;
+        sqlx::query("INSERT INTO team_member (team_id, user_id, role) VALUES ($1, $2, 'owner')")
+            .bind(row.0)
+            .bind(input.owner_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(team(row))
+    }
+
+    async fn update_team(&self, id: Uuid, update: TeamUpdate) -> Result<Option<Team>, StoreError> {
+        Ok(sqlx::query_as::<_, TeamRow>(&format!(
+            "UPDATE teams SET \
+                 name = COALESCE($2, name), \
+                 tag = CASE WHEN $3 THEN $4 ELSE tag END, \
+                 picture_url = CASE WHEN $5 THEN $6 ELSE picture_url END, \
+                 updated_at = now() \
+             WHERE id = $1 RETURNING {}",
+            team_columns()
+        ))
+        .bind(id)
+        .bind(update.name)
+        .bind(update.tag.is_some())
+        .bind(update.tag.flatten())
+        .bind(update.picture_url.is_some())
+        .bind(update.picture_url.flatten())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(team_conflict)?
+        .map(team))
+    }
+
+    async fn delete_team(&self, id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query("DELETE FROM teams WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_team_members(
+        &self,
+        team_id: Uuid,
+    ) -> Result<Option<Vec<TeamMember>>, StoreError> {
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM teams WHERE id = $1)")
+                .bind(team_id)
+                .fetch_one(&self.pool)
+                .await?;
+        if !exists {
+            return Ok(None);
+        }
+        sqlx::query_as::<_, TeamMemberRow>(&format!(
+            "SELECT {} FROM team_member WHERE team_id = $1 ORDER BY joined_at, user_id",
+            member_columns()
+        ))
+        .bind(team_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(team_member)
+        .collect::<Result<_, _>>()
+        .map(Some)
+    }
+
+    async fn add_team_member(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError> {
+        let row = sqlx::query_as::<_, TeamMemberRow>(&format!(
+            "INSERT INTO team_member (team_id, user_id, role) VALUES ($1, $2, $3) RETURNING {}",
+            member_columns()
+        ))
+        .bind(team_id)
+        .bind(user_id)
+        .bind(role.as_str())
+        .fetch_one(&self.pool)
+        .await;
+        match row {
+            Ok(row) => team_member(row).map(Some),
+            // L'équipe ou le compte n'existe pas.
+            Err(err) if is_foreign_key_violation(&err) => Ok(None),
+            Err(err) => Err(team_conflict(err)),
+        }
+    }
+
+    async fn set_team_member_role(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError> {
+        sqlx::query_as::<_, TeamMemberRow>(&format!(
+            "UPDATE team_member SET role = $3 \
+             WHERE team_id = $1 AND user_id = $2 AND left_at IS NULL RETURNING {}",
+            member_columns()
+        ))
+        .bind(team_id)
+        .bind(user_id)
+        .bind(role.as_str())
+        .fetch_optional(&self.pool)
+        .await?
+        .map(team_member)
+        .transpose()
+    }
+
+    async fn remove_team_member(&self, team_id: Uuid, user_id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "UPDATE team_member SET left_at = now() \
+             WHERE team_id = $1 AND user_id = $2 AND left_at IS NULL",
+        )
+        .bind(team_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_tournament_teams(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentTeam>, StoreError> {
+        Ok(sqlx::query_as::<_, TournamentTeamRow>(&format!(
+            "SELECT {} FROM tournament_teams WHERE tournament_id = $1 \
+             ORDER BY lower(name), id LIMIT $2 OFFSET $3",
+            tournament_team_columns()
+        ))
+        .bind(tournament_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(tournament_team)
+        .collect())
+    }
+
+    async fn find_tournament_team(&self, id: Uuid) -> Result<Option<TournamentTeam>, StoreError> {
+        Ok(sqlx::query_as::<_, TournamentTeamRow>(&format!(
+            "SELECT {} FROM tournament_teams WHERE id = $1",
+            tournament_team_columns()
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(tournament_team))
+    }
+
+    async fn create_tournament_team(
+        &self,
+        input: TournamentTeamInput,
+    ) -> Result<TournamentTeam, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, TournamentTeamRow>(&format!(
+            "INSERT INTO tournament_teams (tournament_id, team_id, name, tag, picture_url, owner_id) \
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING {}",
+            tournament_team_columns()
+        ))
+        .bind(input.tournament_id)
+        .bind(input.team_id)
+        .bind(input.name)
+        .bind(input.tag)
+        .bind(input.picture_url)
+        .bind(input.owner_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(team_conflict)?;
+        for (user_id, role) in input.members {
+            sqlx::query(
+                "INSERT INTO tournament_team_member (tournament_team_id, tournament_id, user_id, role) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(row.0)
+            .bind(input.tournament_id)
+            .bind(user_id)
+            .bind(role.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(team_conflict)?;
+        }
+        tx.commit().await?;
+        Ok(tournament_team(row))
+    }
+
+    async fn update_tournament_team(
+        &self,
+        id: Uuid,
+        update: TeamUpdate,
+    ) -> Result<Option<TournamentTeam>, StoreError> {
+        Ok(sqlx::query_as::<_, TournamentTeamRow>(&format!(
+            "UPDATE tournament_teams SET \
+                 name = COALESCE($2, name), \
+                 tag = CASE WHEN $3 THEN $4 ELSE tag END, \
+                 picture_url = CASE WHEN $5 THEN $6 ELSE picture_url END \
+             WHERE id = $1 RETURNING {}",
+            tournament_team_columns()
+        ))
+        .bind(id)
+        .bind(update.name)
+        .bind(update.tag.is_some())
+        .bind(update.tag.flatten())
+        .bind(update.picture_url.is_some())
+        .bind(update.picture_url.flatten())
+        .fetch_optional(&self.pool)
+        .await?
+        .map(tournament_team))
+    }
+
+    async fn delete_tournament_team(&self, id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query("DELETE FROM tournament_teams WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_tournament_team_members(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<Vec<TournamentTeamMember>>, StoreError> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM tournament_teams WHERE id = $1)",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+        if !exists {
+            return Ok(None);
+        }
+        sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT user_id, role FROM tournament_team_member \
+             WHERE tournament_team_id = $1 ORDER BY user_id",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(tournament_member)
+        .collect::<Result<_, _>>()
+        .map(Some)
+    }
+
+    async fn add_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError> {
+        let row = sqlx::query_as::<_, (Uuid, String)>(
+            "INSERT INTO tournament_team_member (tournament_team_id, tournament_id, user_id, role) \
+             SELECT id, tournament_id, $2, $3 FROM tournament_teams WHERE id = $1 \
+             RETURNING user_id, role",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(role.as_str())
+        .fetch_optional(&self.pool)
+        .await;
+        match row {
+            Ok(row) => row.map(tournament_member).transpose(),
+            // Le compte n'existe pas.
+            Err(err) if is_foreign_key_violation(&err) => Ok(None),
+            Err(err) => Err(team_conflict(err)),
+        }
+    }
+
+    async fn set_tournament_team_member_role(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError> {
+        sqlx::query_as::<_, (Uuid, String)>(
+            "UPDATE tournament_team_member SET role = $3 \
+             WHERE tournament_team_id = $1 AND user_id = $2 RETURNING user_id, role",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(role.as_str())
+        .fetch_optional(&self.pool)
+        .await?
+        .map(tournament_member)
+        .transpose()
+    }
+
+    async fn remove_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "DELETE FROM tournament_team_member WHERE tournament_team_id = $1 AND user_id = $2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 }
