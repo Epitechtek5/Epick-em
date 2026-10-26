@@ -1,7 +1,9 @@
 //! Implémentation PostgreSQL de [`AuthStore`] (tables `users` et `refresh_tokens`,
 //! voir `db/changelog`).
 
-use super::{AuthStore, Role, StoreError, UserProfile, UserRecord, UserUpdate};
+use super::{
+    AuthStore, Game, GameInput, GameUpdate, Role, StoreError, UserProfile, UserRecord, UserUpdate,
+};
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
 use sqlx::PgPool;
@@ -52,6 +54,26 @@ fn username_taken(err: sqlx::Error) -> StoreError {
     match &err {
         sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
             StoreError::UsernameTaken
+        }
+        _ => err.into(),
+    }
+}
+
+type GameRow = (Uuid, String, String, Vec<String>);
+
+fn game(row: GameRow) -> Game {
+    Game {
+        id: row.0,
+        name: row.1,
+        description: row.2,
+        images: row.3,
+    }
+}
+
+fn game_name_taken(err: sqlx::Error) -> StoreError {
+    match &err {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
+            StoreError::GameNameTaken
         }
         _ => err.into(),
     }
@@ -249,5 +271,69 @@ impl AuthStore for PgStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn list_games(&self, limit: i64, offset: i64) -> Result<Vec<Game>, StoreError> {
+        Ok(sqlx::query_as::<_, GameRow>(
+            "SELECT id, name, description, images FROM games \
+             ORDER BY lower(name), id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(game)
+        .collect())
+    }
+
+    async fn find_game(&self, id: Uuid) -> Result<Option<Game>, StoreError> {
+        Ok(sqlx::query_as::<_, GameRow>(
+            "SELECT id, name, description, images FROM games WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(game))
+    }
+
+    async fn create_game(&self, input: GameInput) -> Result<Game, StoreError> {
+        sqlx::query_as::<_, GameRow>(
+            "INSERT INTO games (name, description, images) VALUES ($1, $2, $3) \
+             RETURNING id, name, description, images",
+        )
+        .bind(input.name)
+        .bind(input.description)
+        .bind(input.images)
+        .fetch_one(&self.pool)
+        .await
+        .map(game)
+        .map_err(game_name_taken)
+    }
+
+    async fn update_game(&self, id: Uuid, update: GameUpdate) -> Result<Option<Game>, StoreError> {
+        sqlx::query_as::<_, GameRow>(
+            "UPDATE games SET \
+                 name = COALESCE($2, name), \
+                 description = COALESCE($3, description), \
+                 images = COALESCE($4, images) \
+             WHERE id = $1 RETURNING id, name, description, images",
+        )
+        .bind(id)
+        .bind(update.name)
+        .bind(update.description)
+        .bind(update.images)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(game))
+        .map_err(game_name_taken)
+    }
+
+    async fn delete_game(&self, id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query("DELETE FROM games WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 }
