@@ -89,6 +89,51 @@ pub struct StepParticipant {
     pub status: StepParticipantStatus,
 }
 
+/// Réglages d'une étape, communs à la création et au remplacement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepDefinition {
+    pub position: i32,
+    pub format: StepFormat,
+    pub match_type: MatchType,
+    pub group_count: i32,
+    pub group_size: i32,
+    pub matches_per_group: i32,
+    pub advance_per_group: i32,
+    pub tiebreak: serde_json::Value,
+}
+
+/// Étape à créer ; elle démarre toujours au statut `pending`.
+#[derive(Debug, Clone)]
+pub struct StepInput {
+    pub tournament_id: Uuid,
+    pub definition: StepDefinition,
+}
+
+/// Lancement d'une étape : un tableau d'inscrits par groupe, dans l'ordre des groupes (le
+/// premier devient le groupe 1).
+#[derive(Debug, Clone)]
+pub struct StepStart {
+    pub step_id: Uuid,
+    pub groups: Vec<Vec<Uuid>>,
+}
+
+/// Issue d'un participant à la clôture de son étape.
+#[derive(Debug, Clone)]
+pub struct StepOutcome {
+    pub participant_id: Uuid,
+    pub final_rank: i32,
+    pub status: StepParticipantStatus,
+}
+
+/// Clôture d'une étape : l'issue de chaque participant et, s'il y en a une, l'étape suivante à
+/// lancer dans la même opération.
+#[derive(Debug, Clone)]
+pub struct StepClosing {
+    pub step_id: Uuid,
+    pub outcomes: Vec<StepOutcome>,
+    pub next: Option<StepStart>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

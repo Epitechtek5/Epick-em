@@ -2,11 +2,13 @@
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, MemberImport, ParticipantImport, ParticipantInput,
+    AuthStore, GameInput, GameUpdate, MatchType, MemberImport, ParticipantImport, ParticipantInput,
     ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
-    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StoreError, TeamImport,
-    TeamInput, TeamRole, TeamScoringMode, TeamUpdate, TournamentImport, TournamentInput,
-    TournamentStatus, TournamentTeamInput, TournamentUpdate, UserUpdate,
+    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
+    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
+    StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
+    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
+    UserUpdate,
 };
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
@@ -1627,4 +1629,245 @@ async fn step_tables_enforce_their_constraints() {
         .await
         .unwrap();
     assert_eq!(left, 0);
+}
+
+fn step_definition(
+    position: i32,
+    group_count: i32,
+    group_size: i32,
+    advance: i32,
+) -> StepDefinition {
+    StepDefinition {
+        position,
+        format: StepFormat::Pool,
+        match_type: MatchType::Ffa,
+        group_count,
+        group_size,
+        matches_per_group: 3,
+        advance_per_group: advance,
+        tiebreak: serde_json::json!(["wins"]),
+    }
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn steps_start_close_and_open_the_next_one_atomically() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+
+    let create = |input: StepDefinition| {
+        store.create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: input,
+        })
+    };
+    let first = create(step_definition(1, 1, 4, 2)).await.unwrap().unwrap();
+    let last = create(step_definition(2, 1, 2, 1)).await.unwrap().unwrap();
+    assert_eq!(first.status, StepStatus::Pending);
+    assert_eq!(first.tiebreak, serde_json::json!(["wins"]));
+    assert!(matches!(
+        create(step_definition(1, 1, 4, 2)).await,
+        Err(StoreError::StepPositionTaken)
+    ));
+    assert!(
+        store
+            .create_step(StepInput {
+                tournament_id: Uuid::new_v4(),
+                definition: step_definition(1, 1, 4, 2),
+            })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let listed = store.list_steps(tournament.id).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|s| s.position).collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let replaced = store
+        .replace_step(last.id, step_definition(2, 1, 3, 1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replaced.group_size, 3);
+    assert!(matches!(
+        store
+            .replace_step(last.id, step_definition(1, 1, 3, 1))
+            .await,
+        Err(StoreError::StepPositionTaken)
+    ));
+
+    // Lancement : groupes et participants créés avec l'étape, une seule fois.
+    let started = store
+        .start_step(StepStart {
+            step_id: first.id,
+            groups: vec![players.clone()],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(started.status, StepStatus::Ongoing);
+    assert!(matches!(
+        store
+            .start_step(StepStart {
+                step_id: first.id,
+                groups: vec![players.clone()],
+            })
+            .await,
+        Err(StoreError::StepState)
+    ));
+    assert!(
+        store
+            .start_step(StepStart {
+                step_id: Uuid::new_v4(),
+                groups: vec![],
+            })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let groups = store.list_step_groups(first.id).await.unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].index, 1);
+    let members = store.list_step_participants(first.id).await.unwrap();
+    assert_eq!(members.len(), 4);
+    assert!(
+        members
+            .iter()
+            .all(|m| m.points == 0.0 && m.final_rank.is_none())
+    );
+
+    assert!(
+        store
+            .set_step_points(first.id, players[0], 12.5)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_step_points(first.id, Uuid::new_v4(), 1.0)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .participant_points(tournament.id)
+            .await
+            .unwrap()
+            .get(&players[0]),
+        Some(&12.5)
+    );
+
+    // Clôture : l'étape suivante s'ouvre avec les deux qualifiés, dans la même transaction.
+    let outcomes: Vec<StepOutcome> = players
+        .iter()
+        .zip(1..)
+        .map(|(id, rank)| StepOutcome {
+            participant_id: *id,
+            final_rank: rank,
+            status: if rank <= 2 {
+                StepParticipantStatus::Qualified
+            } else {
+                StepParticipantStatus::Eliminated
+            },
+        })
+        .collect();
+    // Un inscrit étranger au tournoi fait échouer l'ouverture : rien ne change.
+    assert!(
+        store
+            .close_step(StepClosing {
+                step_id: first.id,
+                outcomes: outcomes.clone(),
+                next: Some(StepStart {
+                    step_id: last.id,
+                    groups: vec![vec![Uuid::new_v4()]],
+                }),
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.find_step(first.id).await.unwrap().unwrap().status,
+        StepStatus::Ongoing
+    );
+    assert!(store.list_step_groups(last.id).await.unwrap().is_empty());
+
+    let finished = store
+        .close_step(StepClosing {
+            step_id: first.id,
+            outcomes,
+            next: Some(StepStart {
+                step_id: last.id,
+                groups: vec![vec![players[0], players[1]]],
+            }),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.status, StepStatus::Finished);
+    assert_eq!(
+        store.find_step(last.id).await.unwrap().unwrap().status,
+        StepStatus::Ongoing
+    );
+    let members = store.list_step_participants(first.id).await.unwrap();
+    assert_eq!(
+        members
+            .iter()
+            .filter(|m| m.status == StepParticipantStatus::Qualified)
+            .count(),
+        2
+    );
+    assert!(members.iter().all(|m| m.final_rank.is_some()));
+    assert_eq!(
+        store.list_step_participants(last.id).await.unwrap().len(),
+        2
+    );
+    assert!(matches!(
+        store
+            .close_step(StepClosing {
+                step_id: first.id,
+                outcomes: vec![],
+                next: None,
+            })
+            .await,
+        Err(StoreError::StepState)
+    ));
+
+    // Retirer un inscrit retire sa participation aux étapes ; supprimer une étape, ses groupes.
+    assert!(store.delete_participant(players[3]).await.unwrap());
+    assert_eq!(
+        store.list_step_participants(first.id).await.unwrap().len(),
+        3
+    );
+    assert!(store.delete_step(last.id).await.unwrap());
+    assert!(!store.delete_step(last.id).await.unwrap());
+    assert!(
+        store
+            .list_step_participants(last.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.delete_tournament(tournament.id).await.unwrap());
+    assert!(store.find_step(first.id).await.unwrap().is_none());
 }
