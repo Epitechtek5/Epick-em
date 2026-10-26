@@ -22,3 +22,5 @@ databaseChangeLog:
       file: changelog/0010-tournament-unique-name.yaml
   - include:
       file: changelog/0011-create-steps.yaml
+  - include:
+      file: changelog/0012-create-matches.yaml

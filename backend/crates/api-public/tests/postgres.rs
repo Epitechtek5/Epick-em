@@ -1994,3 +1994,201 @@ async fn steps_export_and_reimport_into_another_tournament() {
     let totals = store.participant_points(copy.id).await.unwrap();
     assert_eq!(totals.values().copied().fold(0.0, f64::max), 9.0);
 }
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn match_tables_enforce_their_constraints() {
+    let store = store().await;
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    let game_id = game(&store).await;
+    let alice = user(&store, "alice").await;
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let other = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let participant = store
+        .add_participant(ParticipantInput {
+            tournament_id: tournament.id,
+            user_id: Some(alice),
+            tournament_team_id: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let step = |tournament: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO step (tournament_id, position, format, match_type, group_count, \
+                 group_size, matches_per_group, advance_per_group) \
+                 VALUES ($1, 1, 'pool', 'ffa', 1, 4, 3, 2) RETURNING id",
+            )
+            .bind(tournament)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let step_id = step(tournament.id).await;
+    let other_step = step(other.id).await;
+    let group = |step: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO step_group (step_id, index) VALUES ($1, 1) RETURNING id",
+            )
+            .bind(step)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let group_id = group(step_id).await;
+
+    let insert = |step: Option<Uuid>, group: Option<Uuid>, bracket: Option<&str>, status: &str| {
+        let pool = pool.clone();
+        let bracket = bracket.map(str::to_string);
+        let status = status.to_string();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match (game_id, step_id, group_id, round, bracket, status) \
+                 VALUES ($1, $2, $3, 1, $4, $5) RETURNING id",
+            )
+            .bind(game_id)
+            .bind(step)
+            .bind(group)
+            .bind(bracket)
+            .bind(status)
+            .fetch_one(&pool)
+            .await
+        }
+    };
+    let match_id = insert(Some(step_id), Some(group_id), Some("winners"), "scheduled")
+        .await
+        .unwrap();
+    // Un match hors tournoi n'a ni groupe ni tableau ; le groupe est celui de l'étape ; tableau
+    // et statut connus.
+    insert(None, None, None, "scheduled").await.unwrap();
+    assert!(
+        insert(None, Some(group_id), None, "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(None, None, Some("winners"), "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(Some(other_step), Some(group_id), None, "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(Some(step_id), Some(group_id), Some("upper"), "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(Some(step_id), Some(group_id), None, "postponed")
+            .await
+            .is_err()
+    );
+
+    // Le vainqueur va dans un autre match, jamais dans le même ; supprimer le suivant détache.
+    let next = insert(Some(step_id), Some(group_id), Some("winners"), "scheduled")
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE match SET next_match_id = id WHERE id = $1")
+            .bind(match_id)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE match SET next_match_id = $2 WHERE id = $1")
+        .bind(match_id)
+        .bind(next)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query(
+            "UPDATE match SET started_at = now(), ended_at = now() - interval '1 hour' WHERE id = $1"
+        )
+        .bind(match_id)
+        .execute(&pool)
+            .await
+            .is_err()
+    );
+
+    let enroll = |match_id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("INSERT INTO match_participant (match_id, participant_id) VALUES ($1, $2)")
+                .bind(match_id)
+                .bind(participant.id)
+                .execute(&pool)
+                .await
+        }
+    };
+    enroll(match_id).await.unwrap();
+    assert!(enroll(match_id).await.is_err());
+    let (stats, points): (serde_json::Value, f64) =
+        sqlx::query_as("SELECT stats, points::float8 FROM match_participant WHERE match_id = $1")
+            .bind(match_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((stats, points), (serde_json::json!({}), 0.0));
+    for bad in [
+        "UPDATE match_participant SET stats = '[1]'::jsonb WHERE match_id = $1",
+        "UPDATE match_participant SET rank = 0 WHERE match_id = $1",
+        "UPDATE match_participant SET result = 'forfeit' WHERE match_id = $1",
+    ] {
+        let attempt = sqlx::query(bad).bind(match_id).execute(&pool).await;
+        assert!(attempt.is_err(), "{bad}");
+    }
+    sqlx::query(
+        "UPDATE match_participant SET stats = '{\"placement\": 2, \"kills\": 7}', \
+         rank = 2, result = 'loss' WHERE match_id = $1",
+    )
+    .bind(match_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("DELETE FROM match WHERE id = $1")
+        .bind(next)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let detached: Option<Uuid> =
+        sqlx::query_scalar("SELECT next_match_id FROM match WHERE id = $1")
+            .bind(match_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(detached, None);
+
+    // Supprimer le tournoi emporte ses étapes, leurs matchs et leurs participants.
+    sqlx::query("DELETE FROM tournaments WHERE id = $1")
+        .bind(tournament.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM match WHERE id = $1) \
+         + (SELECT count(*) FROM match_participant WHERE match_id = $1)",
+    )
+    .bind(match_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(left, 0);
+}
