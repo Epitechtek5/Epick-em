@@ -11,10 +11,11 @@
 use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
+use crate::match_io::InSteps;
 use crate::stat_io::StoreStats;
 use crate::step_io::StoreSteps;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
-use crate::tournament_io::{NoChild, TournamentChild};
+use crate::tournament_io::TournamentChild;
 use crate::tournament_team_io::StoreTournamentTeams;
 use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
@@ -47,7 +48,8 @@ pub struct AppState {
     pub(crate) stats: Arc<dyn GameStats>,
     /// Équipes, étapes et matchs des tournois, importés et exportés avec eux (opaques pour les
     /// tournois). Par défaut les équipes et les étapes sont celles de la base
-    /// ([`StoreTournamentTeams`], [`StoreSteps`]) ; les matchs ne sont pas encore pris en charge.
+    /// ([`StoreTournamentTeams`], [`StoreSteps`]) ; les matchs voyagent avec leur étape
+    /// ([`StoreMatches`](crate::match_io::StoreMatches)), le niveau des tournois n'en accepte pas.
     pub(crate) tournament_teams: Arc<dyn TournamentChild>,
     pub(crate) steps: Arc<dyn TournamentChild>,
     pub(crate) matches: Arc<dyn TournamentChild>,
@@ -63,7 +65,7 @@ impl AppState {
             stats: Arc::new(StoreStats(store.clone())),
             tournament_teams: Arc::new(StoreTournamentTeams(store.clone())),
             steps: Arc::new(StoreSteps::new(store.clone())),
-            matches: Arc::new(NoChild("les matchs")),
+            matches: Arc::new(InSteps),
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),

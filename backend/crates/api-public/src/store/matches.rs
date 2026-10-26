@@ -119,6 +119,21 @@ pub struct MatchFinish {
     pub step_points: Vec<(Uuid, f64)>,
 }
 
+/// Match d'une étape tel qu'un fichier le décrit. Les horodatages sont en RFC 3339 UTC.
+#[derive(Debug, Clone)]
+pub struct MatchImport {
+    pub group_id: Option<Uuid>,
+    pub round: Option<i32>,
+    pub bracket: Option<Bracket>,
+    /// Rang, dans la liste importée, du match où va le vainqueur.
+    pub next: Option<usize>,
+    pub scheduled_at: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub status: MatchStatus,
+    pub participants: Vec<MatchScore>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

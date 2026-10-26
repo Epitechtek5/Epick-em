@@ -2,14 +2,14 @@
 
 use super::teams::now_rfc3339;
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchInput, MatchParticipant,
-    MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
-    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step,
-    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepParticipantStatus,
-    StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole,
-    TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentParticipant,
-    TournamentStatus, TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate,
-    UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
+    MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
+    ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
+    StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
+    StepParticipantStatus, StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput,
+    TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput,
+    TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -1621,6 +1621,57 @@ impl AuthStore for MemoryStore {
         m.ended_at = Some(now.clone());
         m.updated_at = now;
         Ok(Some(m.clone()))
+    }
+
+    async fn replace_step_matches(
+        &self,
+        step_id: Uuid,
+        game_id: Uuid,
+        matches: Vec<MatchImport>,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if !state.steps.iter().any(|s| s.id == step_id) {
+            return Ok(false);
+        }
+        let doomed: Vec<Uuid> = state
+            .matches
+            .iter()
+            .filter(|m| m.step_id == Some(step_id))
+            .map(|m| m.id)
+            .collect();
+        for id in doomed {
+            state.remove_match(id);
+        }
+        let ids: Vec<Uuid> = matches.iter().map(|_| Uuid::new_v4()).collect();
+        let now = now_rfc3339();
+        for (index, import) in matches.into_iter().enumerate() {
+            state.matches.push(Match {
+                id: ids[index],
+                game_id,
+                step_id: Some(step_id),
+                group_id: import.group_id,
+                round: import.round,
+                bracket: import.bracket,
+                next_match_id: import.next.and_then(|next| ids.get(next).copied()),
+                scheduled_at: import.scheduled_at,
+                started_at: import.started_at,
+                ended_at: import.ended_at,
+                status: import.status,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            });
+            for score in import.participants {
+                state.match_participants.push(MatchParticipant {
+                    match_id: ids[index],
+                    participant_id: score.participant_id,
+                    stats: score.stats,
+                    points: score.points,
+                    rank: score.rank,
+                    result: score.result,
+                });
+            }
+        }
+        Ok(true)
     }
 
     async fn import_tournaments(

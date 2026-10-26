@@ -1960,12 +1960,58 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .await
         .unwrap();
 
+    // Deux matchs dans la finale : un terminé, un qui attend ses participants.
+    let group = store.list_step_groups(last.id).await.unwrap()[0].id;
+    let created = |round: i32, participants: Vec<Uuid>| {
+        store.create_match(MatchInput {
+            game_id,
+            step_id: last.id,
+            group_id: group,
+            round: Some(round),
+            bracket: None,
+            next_match_id: None,
+            scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+            participants,
+        })
+    };
+    let played = created(1, vec![players[0], players[1]]).await.unwrap();
+    created(2, vec![players[1]]).await.unwrap();
+    store
+        .finish_match(MatchFinish {
+            match_id: played.id,
+            scores: vec![
+                MatchScore {
+                    participant_id: players[0],
+                    stats: serde_json::json!({}),
+                    points: 2.5,
+                    rank: Some(1),
+                    result: Some(MatchResult::Win),
+                },
+                MatchScore {
+                    participant_id: players[1],
+                    stats: serde_json::json!({}),
+                    points: 1.0,
+                    rank: Some(2),
+                    result: Some(MatchResult::Loss),
+                },
+            ],
+            advance: None,
+            step_points: vec![(players[0], 2.5), (players[1], 1.0)],
+        })
+        .await
+        .unwrap();
+
     let steps = StoreSteps::new(store.clone());
     let exported = steps.export_in(source.id, &[]).await.unwrap();
     assert_eq!(exported.len(), 2);
     let items: Vec<serde_json::Value> = exported.iter().map(|(_, item)| item.clone()).collect();
     assert_eq!(items[0]["status"], "finished");
     assert_eq!(items[1]["status"], "ongoing");
+    let matches = items[1]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0]["status"], "finished");
+    assert_eq!(matches[0]["participants"][0]["points"], 2.5);
+    assert_eq!(matches[1]["status"], "scheduled");
 
     let mut scope = FileScope::default();
     for user_id in &users {
@@ -1985,6 +2031,27 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .map(|(_, item)| item)
         .collect();
     assert_eq!(again, items);
+
+    // Réimporter remplace aussi les matchs de l'étape.
+    let copied_last = store.list_steps(copy.id).await.unwrap()[1].id;
+    assert_eq!(
+        store
+            .list_matches(copied_last, None, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    steps.import_in(copy.id, items.clone(), &[]).await.unwrap();
+    let copied_last = store.list_steps(copy.id).await.unwrap()[1].id;
+    assert_eq!(
+        store
+            .list_matches(copied_last, None, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 
     // Réimporter remplace : les étapes de la copie repartent du fichier.
     steps

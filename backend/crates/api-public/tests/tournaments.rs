@@ -1699,7 +1699,7 @@ async fn invalid_files_are_refused_without_any_write() {
             "étape 1 invalide",
         ),
         (
-            "matchs non pris en charge",
+            "matchs hors de leur étape",
             valid(json!({ "matches": [{}] })),
             "matchs",
         ),

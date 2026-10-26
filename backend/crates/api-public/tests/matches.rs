@@ -714,3 +714,291 @@ async fn a_cancelled_match_is_closed_for_good() {
     let (status, _) = send(&app, TestRequest::delete(), &one, &s.admin, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
+
+async fn export_file(app: &app_type!(), token: &str, format: &str) -> String {
+    let response = actix_web::test::call_service(
+        app,
+        request(
+            TestRequest::get(),
+            &format!("/tournaments/export?format={format}"),
+            Some(token),
+        )
+        .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    String::from_utf8(actix_web::test::read_body(response).await.to_vec()).unwrap()
+}
+
+async fn import_file(
+    app: &app_type!(),
+    token: &str,
+    format: &str,
+    body: String,
+) -> (StatusCode, Value) {
+    call(
+        app,
+        request(
+            TestRequest::post(),
+            &format!("/tournaments/import?format={format}"),
+            Some(token),
+        )
+        .set_payload(body),
+    )
+    .await
+}
+
+fn tournament_named<'a>(document: &'a Value, name: &str) -> &'a Value {
+    document["tournaments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == name)
+        .unwrap_or_else(|| panic!("tournoi {name} absent de {document}"))
+}
+
+/// Un tableau d'élimination à mi-parcours : première demi-finale terminée, seconde en cours avec
+/// ses statistiques, finale annoncée avec son premier finaliste.
+async fn halfway(app: &app_type!(), s: &Setup) -> (String, Vec<String>) {
+    let (tid, step, group, ids) = running(app, s, "single_elim", "duel").await;
+    let base = format!("/tournaments/{tid}/steps/{step}/matches");
+    let (_, last) = post(
+        app,
+        &base,
+        &s.admin,
+        json!({ "group_id": group, "round": 2, "scheduled_at": "2026-11-15T18:00:00Z" }),
+    )
+    .await;
+    let last = id(&last);
+    let mut semis = Vec::new();
+    for pair in [[&ids[0], &ids[1]], [&ids[2], &ids[3]]] {
+        let (_, semi) = post(
+            app,
+            &base,
+            &s.admin,
+            json!({ "group_id": group, "round": 1, "next_match_id": last,
+                    "scheduled_at": "2026-11-14T18:00:00Z", "participant_ids": pair }),
+        )
+        .await;
+        semis.push(id(&semi));
+    }
+    put(
+        app,
+        &format!("{base}/{}/results", semis[0]),
+        &s.admin,
+        json!({ "results": [
+            { "participant_id": ids[0], "stats": { "kills": 3, "accuracy": 62.5 } },
+            { "participant_id": ids[1], "stats": { "kills": 1 } },
+        ] }),
+    )
+    .await;
+    let (status, _) = post(
+        app,
+        &format!("{base}/{}/status", semis[0]),
+        &s.admin,
+        json!({ "status": "finished" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    put(
+        app,
+        &format!("{base}/{}/results", semis[1]),
+        &s.admin,
+        json!({ "results": [{ "participant_id": ids[2], "stats": { "kills": 2 } }] }),
+    )
+    .await;
+    post(
+        app,
+        &format!("{base}/{}/status", semis[1]),
+        &s.admin,
+        json!({ "status": "ongoing" }),
+    )
+    .await;
+    (tid, ids)
+}
+
+#[actix_web::test]
+async fn exported_matches_reimport_without_loss_in_json_and_csv() {
+    let (app, s) = setup().await;
+    let (tid, _) = halfway(&app, &s).await;
+    let (_, tournament) = get(&app, &format!("/tournaments/{tid}"), &s.admin).await;
+    let name = tournament["name"].as_str().unwrap().to_string();
+
+    let original =
+        serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    let steps = tournament_named(&original, &name)["steps"].clone();
+    let matches = steps[0]["matches"].clone();
+    assert_eq!(tournament_named(&original, &name)["matches"], json!([]));
+    assert_eq!(matches.as_array().unwrap().len(), 3);
+    // Les demi-finales d'abord (tour 1), la finale à la fin ; `next` désigne la finale.
+    assert_eq!(matches[0]["round"], 1);
+    assert_eq!(matches[0]["status"], "finished");
+    assert_eq!(matches[0]["next"], 2);
+    assert_eq!(matches[0]["group"], 1);
+    assert_eq!(matches[1]["status"], "ongoing");
+    assert_eq!(matches[2]["round"], 2);
+    assert_eq!(matches[2]["next"], Value::Null);
+    let winner = &matches[0]["participants"][0];
+    assert!(winner["user"].as_str().unwrap().starts_with("player"));
+    assert_eq!(winner["stats"], json!({ "kills": 3, "accuracy": 62.5 }));
+    assert_eq!(winner["points"], 4.5);
+    assert_eq!(winner["rank"], 1);
+    assert_eq!(winner["result"], "win");
+    // Le vainqueur attend en finale, sans statistiques.
+    assert_eq!(matches[2]["participants"].as_array().unwrap().len(), 1);
+    assert_eq!(matches[2]["participants"][0]["stats"], json!({}));
+
+    // Réimport sous un autre nom, en JSON puis en CSV : mêmes étapes, mêmes matchs.
+    for format in ["json", "csv"] {
+        let copy = format!("Copie {format}");
+        let file = if format == "json" {
+            let mut document = original.clone();
+            let mut one = tournament_named(&original, &name).clone();
+            one["name"] = json!(copy);
+            document["tournaments"] = json!([one]);
+            document.to_string()
+        } else {
+            let csv = export_file(&app, &s.admin, "csv").await;
+            let mut reader = csv::Reader::from_reader(csv.as_bytes());
+            let mut writer = csv::Writer::from_writer(Vec::new());
+            writer.write_record(reader.headers().unwrap()).unwrap();
+            for record in reader.records().map(Result::unwrap) {
+                if &record[1] == name.as_str() {
+                    let renamed: Vec<&str> = record
+                        .iter()
+                        .enumerate()
+                        .map(|(i, field)| if i == 1 { copy.as_str() } else { field })
+                        .collect();
+                    writer.write_record(renamed).unwrap();
+                }
+            }
+            String::from_utf8(writer.into_inner().unwrap()).unwrap()
+        };
+        let (status, report) = import_file(&app, &s.admin, format, file).await;
+        assert_eq!(status, StatusCode::OK, "{format}: {report}");
+        assert_eq!(report["created"], 1, "{report}");
+        let after =
+            serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+        assert_eq!(tournament_named(&after, &copy)["steps"], steps, "{format}");
+    }
+
+    // La copie est de vrais matchs : lisibles par l'API, liés entre eux, et qui se terminent.
+    let (_, list) = get(&app, "/tournaments", &s.admin).await;
+    let copy_id = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Copie json")
+        .map(id)
+        .unwrap();
+    let (_, copied) = get(&app, &format!("/tournaments/{copy_id}/steps"), &s.admin).await;
+    let step = id(&copied[0]);
+    let base = format!("/tournaments/{copy_id}/steps/{step}/matches");
+    let (status, imported) = get(&app, &base, &s.admin).await;
+    assert_eq!(status, StatusCode::OK);
+    let imported = imported.as_array().unwrap();
+    assert_eq!(imported.len(), 3);
+    assert_eq!(imported[0]["next_match_id"], imported[2]["id"]);
+    assert_eq!(imported[0]["status"], "finished");
+    assert_eq!(imported[0]["participants"][0]["points"], 4.5);
+    let (_, ranking) = get(
+        &app,
+        &format!("/tournaments/{copy_id}/steps/{step}/ranking"),
+        &s.admin,
+    )
+    .await;
+    assert_eq!(ranking[0]["participants"].as_array().unwrap().len(), 4);
+    let (status, done) = post(
+        &app,
+        &format!("{base}/{}/status", imported[1]["id"].as_str().unwrap()),
+        &s.admin,
+        json!({ "status": "finished" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "{done}: un seul participant a des résultats"
+    );
+}
+
+#[actix_web::test]
+async fn match_files_are_validated_before_any_write() {
+    let (app, s) = setup().await;
+    let (tid, _) = halfway(&app, &s).await;
+    let (_, tournament) = get(&app, &format!("/tournaments/{tid}"), &s.admin).await;
+    let name = tournament["name"].as_str().unwrap().to_string();
+    let original =
+        serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    let valid = tournament_named(&original, &name).clone();
+
+    let with_matches = |matches: Value| {
+        let mut one = valid.clone();
+        one["name"] = json!("Invalide");
+        one["steps"][0]["matches"] = matches;
+        json!({ "version": 1, "tournaments": [one] }).to_string()
+    };
+    let cases = [
+        (
+            "participant hors du tournoi",
+            json!([{ "group": 1, "participants": [{ "user": "inconnu" }] }]),
+            "n'est pas dans ce groupe",
+        ),
+        (
+            "statistique inconnue",
+            json!([{ "group": 1, "participants": [{ "user": "player0", "stats": { "deaths": 1 } }] }]),
+            "stats",
+        ),
+        ("groupe absent", json!([{ "group": 4 }]), "group"),
+        (
+            "boucle",
+            json!([{ "group": 1, "next": 1 }, { "group": 1, "next": 0 }]),
+            "boucle",
+        ),
+        (
+            "match terminé sans résultat",
+            json!([{ "group": 1, "status": "finished", "participants": [
+                { "user": "player0" }, { "user": "player1" },
+            ] }]),
+            "Ni statistiques ni rang",
+        ),
+        (
+            "clé inconnue",
+            json!([{ "group": 1, "winner": "player0" }]),
+            "invalide",
+        ),
+    ];
+    for (label, matches, expected) in cases {
+        let (status, error) = import_file(&app, &s.admin, "json", with_matches(matches)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {error}");
+        let message = error["errors"]["file"].as_str().unwrap();
+        assert!(message.contains(expected), "{label}: {message}");
+    }
+    // Rien n'a été écrit.
+    let (_, list) = get(&app, "/tournaments", &s.admin).await;
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["name"] != "Invalide")
+    );
+
+    // Les matchs ne se déclarent pas au niveau du tournoi.
+    let mut one = valid.clone();
+    one["name"] = json!("Hors étape");
+    one["matches"] = json!([{ "group": 1 }]);
+    let (status, error) = import_file(
+        &app,
+        &s.admin,
+        "json",
+        json!({ "version": 1, "tournaments": [one] }).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["errors"]["file"]
+            .as_str()
+            .unwrap()
+            .contains("steps[].matches")
+    );
+}
