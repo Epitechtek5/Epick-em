@@ -30,7 +30,7 @@ export async function pickAndImportFile<T>(
     format: GameFormat,
     bytes: Uint8Array,
   ) => Promise<T>,
-  translationRoot: 'games' | 'stats',
+  translationRoot: 'games' | 'stats' | 'teams',
 ): Promise<T | null> {
   const picked = await DocumentPicker.getDocumentAsync({
     multiple: false,
@@ -92,7 +92,7 @@ export async function saveExportFile(
   title: string,
   filename: string,
   exportFile: (token: string, format: GameFormat) => Promise<Uint8Array>,
-  translationRoot: 'games' | 'stats',
+  translationRoot: 'games' | 'stats' | 'teams',
 ) {
   if (share && !(await Sharing.isAvailableAsync()))
     throw new GameFileError(`${translationRoot}.errors.sharing`);

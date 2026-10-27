@@ -65,6 +65,7 @@ const routes = {
     </ThemeProvider>
   ),
   '(authenticated)/(tabs)/games': () => <Text>Games content</Text>,
+  '(authenticated)/(tabs)/teams': () => <Text>Teams content</Text>,
   '(authenticated)/games/[id]/index': () => <Text>Game details</Text>,
   '(authenticated)/games/create': CreateGameScreen,
   '(authenticated)/games/[id]/edit': EditGameScreen,
@@ -115,6 +116,8 @@ it.each([DefaultTheme, DarkTheme])(
       vbHeight: 24,
     });
     expect(screen.getByLabelText('Users')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Teams')).toBeOnTheScreen();
+    expect(screen.getAllByTestId('teams-tab-icon').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Settings')).toBeOnTheScreen();
     expect(screen.getAllByTestId('settings-tab-icon').length).toBeGreaterThan(
       0,

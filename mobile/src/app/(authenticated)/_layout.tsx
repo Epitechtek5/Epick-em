@@ -35,6 +35,50 @@ export default function AuthenticatedLayout() {
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="teams/create"
+        options={{ title: t('teams.create') }}
+      />
+      <Stack.Screen
+        name="teams/transfer"
+        options={{ title: t('teams.transfer') }}
+      />
+      <Stack.Screen
+        name="teams/[id]/index"
+        options={{ title: t('teams.details') }}
+      />
+      <Stack.Screen
+        name="teams/[id]/edit"
+        options={{ title: t('teams.edit') }}
+      />
+      <Stack.Screen
+        name="teams/[id]/members"
+        options={{ title: t('teams.members') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/teams/index"
+        options={{ title: t('teams.tournamentTeams') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/teams/create"
+        options={{ title: t('teams.create') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/teams/copy"
+        options={{ title: t('teams.copy') }}
+      />
+      <Stack.Screen
+        name="tournament-teams/[id]/index"
+        options={{ title: t('teams.details') }}
+      />
+      <Stack.Screen
+        name="tournament-teams/[id]/edit"
+        options={{ title: t('teams.edit') }}
+      />
+      <Stack.Screen
+        name="tournament-teams/[id]/members"
+        options={{ title: t('teams.members') }}
+      />
       <Stack.Screen name="user/[id]" options={{ title: t('user.title') }} />
       <Stack.Screen name="admin/[id]" options={{ title: t('admin.title') }} />
       <Stack.Screen
