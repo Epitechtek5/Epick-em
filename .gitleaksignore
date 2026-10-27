@@ -1,0 +1,2 @@
+# Synthetic JWT signing key in the export-cache integration test (not a credential).
+a49da9dbc664e0b7697fe1044bfb5c18b1b5ca04:backend/crates/api-public/tests/export_cache.rs:generic-api-key:35
