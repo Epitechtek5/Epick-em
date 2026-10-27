@@ -60,3 +60,11 @@ npm start -- --localhost
 Open the installed app manually and set its development server to `localhost:8081` if needed. Use the installed Windows SDK's full `adb.exe` path if it is not on PATH. The native compile is needed initially; subsequent source edits only need Metro.
 
 `10.0.2.2` maps to the emulator host (Windows), not a physical device or WSL directly. Windows `http://localhost:8080` must reach the Docker backend, as it does in the reported setup. Physical-device testing uses an accessible HTTPS API URL. The debug policy intentionally allows only emulator/loopback HTTP, so use ADB reverse for Metro rather than a cleartext LAN address.
+
+For an iOS simulator, use the existing root configuration with `EXPO_PUBLIC_API_URL=http://localhost:8080` when the backend runs on the same Mac. For an Android emulator, use `http://10.0.2.2:8080`. Restart Metro after changing this value. The existing release transport policy requires HTTPS; use an accessible HTTPS backend when testing a Release APK. Do not add another environment file or weaken the transport policy for account credentials.
+
+## Language and appearance preferences
+
+Settings provides Account, Appearance, Language and Session sections. Theme and language selections apply without restarting and persist independently of authentication. The first language comes from the device (`fr` uses French; unsupported languages use English), while the initial theme follows the system. To change copy, edit the matching keys in both bundled files under `src/i18n/locales/`; do not add language conditionals to screens or translate backend role values.
+
+Expo Localization is a native dependency and config plugin. Rebuild the native app after installing these changes; Fast Refresh alone cannot install the native module. The existing API URL configuration, backend connectivity and release build commands are unchanged.
