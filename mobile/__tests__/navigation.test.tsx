@@ -22,6 +22,13 @@ import {
   EditGameScreen,
 } from '../src/screens/GameEditorScreen';
 import GameTransferScreen from '../src/screens/GameTransferScreen';
+import StatsScreen from '../src/screens/StatsScreen';
+import StatTransferScreen from '../src/screens/StatTransferScreen';
+import GameStatsManagementScreen from '../src/screens/GameStatsManagementScreen';
+import {
+  CreateStatScreen,
+  EditStatScreen,
+} from '../src/screens/StatEditorScreen';
 import AdminUserScreen from '../src/screens/AdminUserScreen';
 import { useAuth } from '../src/features/auth/session';
 
@@ -62,6 +69,11 @@ const routes = {
   '(authenticated)/games/create': CreateGameScreen,
   '(authenticated)/games/[id]/edit': EditGameScreen,
   '(authenticated)/games/transfer': GameTransferScreen,
+  '(authenticated)/games/[id]/stats': GameStatsManagementScreen,
+  '(authenticated)/stats/index': StatsScreen,
+  '(authenticated)/stats/create': CreateStatScreen,
+  '(authenticated)/stats/[id]/edit': EditStatScreen,
+  '(authenticated)/stats/transfer': StatTransferScreen,
   '(authenticated)/user/[id]': () => <Text>User detail</Text>,
   '(authenticated)/_layout': AuthenticatedLayout,
   '(authenticated)/(tabs)/_layout': TabsLayout,
@@ -199,3 +211,24 @@ it('protects Games details and administration after session loss', async () => {
   await renderRouter(routes, { initialUrl: `/games/${user.id}` });
   expect(await screen.findByText('Login content')).toBeOnTheScreen();
 });
+
+it.each(['user', 'watcher'] as const)(
+  'blocks statistics administration deep links for %s',
+  async (role) => {
+    session(role);
+    await renderRouter(routes, { initialUrl: '/stats' });
+    expect(await screen.findByText('Games content')).toBeOnTheScreen();
+
+    for (const path of [
+      '/stats/create',
+      `/stats/${user.id}/edit`,
+      '/stats/transfer',
+      `/games/${user.id}/stats`,
+    ]) {
+      await act(async () => {
+        router.push(path);
+      });
+      expect(await screen.findByText('Games content')).toBeOnTheScreen();
+    }
+  },
+);

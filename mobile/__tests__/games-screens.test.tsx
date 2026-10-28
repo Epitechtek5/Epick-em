@@ -6,6 +6,7 @@ import {
   act,
 } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { colorScheme } from 'nativewind';
 import { router } from 'expo-router';
 import GamesScreen from '../src/screens/GamesScreen';
 import GameDetailsScreen from '../src/screens/GameDetailsScreen';
@@ -70,12 +71,74 @@ const session = {
 beforeEach(async () => {
   jest.clearAllMocks();
   await i18n.changeLanguage('en');
+  colorScheme.set('system');
   jest.mocked(useAuth).mockReturnValue(session);
   jest.mocked(api.listGames).mockResolvedValue([game]);
   jest.mocked(api.getGame).mockResolvedValue(game);
   jest.mocked(api.createGame).mockResolvedValue(game);
   jest.mocked(api.updateGame).mockResolvedValue(game);
 });
+it.each([
+  [
+    'en',
+    'light',
+    ['Create', 'Transfer', 'Stats'],
+    ['Create game', 'Import / Export', 'Statistics'],
+  ],
+  [
+    'en',
+    'dark',
+    ['Create', 'Transfer', 'Stats'],
+    ['Create game', 'Import / Export', 'Statistics'],
+  ],
+  [
+    'fr',
+    'light',
+    ['Créer', 'Transfert', 'Stats'],
+    ['Créer un jeu', 'Importer / Exporter', 'Statistiques'],
+  ],
+  [
+    'fr',
+    'dark',
+    ['Créer', 'Transfert', 'Stats'],
+    ['Créer un jeu', 'Importer / Exporter', 'Statistiques'],
+  ],
+] as const)(
+  'keeps compact Games actions in one flexible row in %s / %s',
+  async (language, theme, labels, accessibleNames) => {
+    await act(async () => i18n.changeLanguage(language));
+    colorScheme.set(theme);
+    await render(<GamesScreen />);
+
+    const actionRow = screen.getByTestId('games-admin-actions');
+    expect(actionRow.props.className).toContain('flex-row');
+    expect(actionRow.props.className).not.toContain('flex-wrap');
+    expect(actionRow.props.className).toContain('gap-2');
+
+    for (const [index, accessibleName] of accessibleNames.entries()) {
+      const button = screen.getByLabelText(accessibleName);
+      expect(button.props.className).toContain('flex-1');
+      expect(button.props.className).toContain('min-w-0');
+      expect(button.props.className).toContain('min-h-14');
+      expect(button.props.className).toContain('flex-col');
+      const label = screen.getByText(labels[index]);
+      expect(label.props.className).toContain('w-full');
+      expect(label.props.numberOfLines).toBe(1);
+      expect(label.props.adjustsFontSizeToFit).toBe(true);
+    }
+
+    await fireEvent.press(screen.getByLabelText(accessibleNames[0]));
+    expect(router.push).toHaveBeenLastCalledWith(
+      '/(authenticated)/games/create',
+    );
+    await fireEvent.press(screen.getByLabelText(accessibleNames[1]));
+    expect(router.push).toHaveBeenLastCalledWith(
+      '/(authenticated)/games/transfer',
+    );
+    await fireEvent.press(screen.getByLabelText(accessibleNames[2]));
+    expect(router.push).toHaveBeenLastCalledWith('/(authenticated)/stats');
+  },
+);
 it('lists games, opens UUID details, paginates and refreshes the current catalog', async () => {
   const page = Array.from({ length: 20 }, (_, index) => ({
     ...game,
