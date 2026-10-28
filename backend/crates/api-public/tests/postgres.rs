@@ -2,8 +2,8 @@
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, PgStore, Role, StatInput, StatType, StatUpdate, StoreError,
-    UserUpdate,
+    AuthStore, GameInput, GameUpdate, MemberImport, PgStore, Role, StatInput, StatType, StatUpdate,
+    StoreError, TeamImport, TeamInput, TeamRole, TeamUpdate, TournamentTeamInput, UserUpdate,
 };
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
@@ -540,4 +540,427 @@ async fn stats_are_upserted_by_key_and_links_are_replaced() {
     for id in [g1.id, g2.id] {
         store.delete_game(id).await.unwrap();
     }
+}
+
+async fn user(store: &PgStore, prefix: &str) -> Uuid {
+    store.create_user(&unique(prefix), "hash").await.unwrap().id
+}
+
+async fn game(store: &PgStore) -> Uuid {
+    store
+        .create_game(GameInput {
+            name: unique("Jeu"),
+            description: String::new(),
+            images: Vec::new(),
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+fn team_input(game_id: Uuid, name: &str, owner_id: Uuid) -> TeamInput {
+    TeamInput {
+        game_id,
+        name: name.to_string(),
+        tag: Some("KC".into()),
+        picture_url: Some("https://img.example/kc.png".into()),
+        owner_id,
+    }
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn teams_have_an_owner_member_and_unique_names_per_game() {
+    let store = store().await;
+    let (alice, bob) = (user(&store, "alice").await, user(&store, "bob").await);
+    let game_id = game(&store).await;
+    let name = unique("Karmine");
+
+    let team = store
+        .create_team(team_input(game_id, &name, alice))
+        .await
+        .unwrap();
+    assert_eq!((team.owner_id, team.tag.as_deref()), (alice, Some("KC")));
+    assert!(team.created_at.ends_with('Z') && team.created_at.len() == 27);
+    let members = store.list_team_members(team.id).await.unwrap().unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(
+        (members[0].user_id, members[0].role),
+        (alice, TeamRole::Owner)
+    );
+    assert!(members[0].left_at.is_none());
+
+    // Unique par jeu sans tenir compte de la casse, mais pas d'un jeu à l'autre.
+    assert!(matches!(
+        store
+            .create_team(team_input(game_id, &name.to_uppercase(), bob))
+            .await,
+        Err(StoreError::TeamNameTaken)
+    ));
+    let other = store
+        .create_team(team_input(game(&store).await, &name, bob))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .update_team(
+                other.id,
+                TeamUpdate {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                }
+            )
+            .await,
+        Ok(Some(_))
+    ));
+
+    // `Some(None)` efface une valeur facultative, `None` la garde.
+    let updated = store
+        .update_team(
+            team.id,
+            TeamUpdate {
+                tag: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.tag, None);
+    assert_eq!(updated.picture_url, team.picture_url);
+    assert_eq!(updated.name, name);
+    assert!(
+        store
+            .update_team(Uuid::new_v4(), TeamUpdate::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let listed = store.list_teams(Some(game_id), 10, 0).await.unwrap();
+    assert_eq!(listed.iter().map(|t| t.id).collect::<Vec<_>>(), [team.id]);
+
+    // Membres : doublon refusé, compte inconnu, départ puis retour.
+    let member = store
+        .add_team_member(team.id, bob, TeamRole::Member)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(member.role, TeamRole::Member);
+    assert!(matches!(
+        store
+            .add_team_member(team.id, bob, TeamRole::Substitute)
+            .await,
+        Err(StoreError::AlreadyTeamMember)
+    ));
+    assert!(
+        store
+            .add_team_member(team.id, Uuid::new_v4(), TeamRole::Member)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .add_team_member(Uuid::new_v4(), bob, TeamRole::Member)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let changed = store
+        .set_team_member_role(team.id, bob, TeamRole::Substitute)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.role, TeamRole::Substitute);
+    assert!(store.remove_team_member(team.id, bob).await.unwrap());
+    assert!(!store.remove_team_member(team.id, bob).await.unwrap());
+    assert!(
+        store
+            .set_team_member_role(team.id, bob, TeamRole::Member)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    store
+        .add_team_member(team.id, bob, TeamRole::Member)
+        .await
+        .unwrap()
+        .unwrap();
+    let members = store.list_team_members(team.id).await.unwrap().unwrap();
+    assert_eq!(members.len(), 3);
+    assert_eq!(members.iter().filter(|m| m.left_at.is_some()).count(), 1);
+
+    // Supprimer le jeu supprime ses équipes.
+    assert!(store.delete_game(game_id).await.unwrap());
+    assert!(store.find_team(team.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn tournament_teams_are_independent_copies() {
+    let store = store().await;
+    let (alice, bob, carol) = (
+        user(&store, "alice").await,
+        user(&store, "bob").await,
+        user(&store, "carol").await,
+    );
+    let game_id = game(&store).await;
+    let team = store
+        .create_team(team_input(game_id, &unique("Karmine"), alice))
+        .await
+        .unwrap();
+    let tournament = Uuid::new_v4();
+    let copy_input = |team_id: Option<Uuid>, members: Vec<(Uuid, TeamRole)>| TournamentTeamInput {
+        tournament_id: tournament,
+        team_id,
+        name: team.name.clone(),
+        tag: team.tag.clone(),
+        picture_url: team.picture_url.clone(),
+        owner_id: alice,
+        members,
+    };
+
+    let copy = store
+        .create_tournament_team(copy_input(
+            Some(team.id),
+            vec![(alice, TeamRole::Owner), (bob, TeamRole::Member)],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(copy.team_id, Some(team.id));
+    let members = store
+        .list_tournament_team_members(copy.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(members.len(), 2);
+
+    // Une équipe globale s'inscrit une fois par tournoi ; un joueur dans une seule équipe.
+    assert!(matches!(
+        store
+            .create_tournament_team(copy_input(Some(team.id), vec![(carol, TeamRole::Owner)]))
+            .await,
+        Err(StoreError::TeamAlreadyRegistered)
+    ));
+    assert!(matches!(
+        store
+            .create_tournament_team(copy_input(None, vec![(bob, TeamRole::Owner)]))
+            .await,
+        Err(StoreError::PlayerAlreadyRegistered)
+    ));
+    // L'échec n'a rien laissé : ni équipe, ni membre.
+    assert_eq!(
+        store
+            .list_tournament_teams(tournament, 10, 0)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let scratch = store
+        .create_tournament_team(copy_input(None, vec![(carol, TeamRole::Owner)]))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .add_tournament_team_member(scratch.id, bob, TeamRole::Member)
+            .await,
+        Err(StoreError::PlayerAlreadyRegistered)
+    ));
+    assert!(
+        store
+            .add_tournament_team_member(scratch.id, Uuid::new_v4(), TeamRole::Member)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .add_tournament_team_member(Uuid::new_v4(), bob, TeamRole::Member)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Même joueur, autre tournoi : permis.
+    let elsewhere = TournamentTeamInput {
+        tournament_id: Uuid::new_v4(),
+        ..copy_input(None, vec![(bob, TeamRole::Owner)])
+    };
+    store.create_tournament_team(elsewhere).await.unwrap();
+
+    // Aucune propagation, dans un sens comme dans l'autre.
+    store
+        .update_tournament_team(
+            copy.id,
+            TeamUpdate {
+                name: Some(unique("Copie")),
+                picture_url: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store.find_team(team.id).await.unwrap().unwrap().name,
+        team.name
+    );
+    store
+        .update_team(
+            team.id,
+            TeamUpdate {
+                tag: Some(Some("NEW".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let copy_now = store.find_tournament_team(copy.id).await.unwrap().unwrap();
+    assert_eq!(copy_now.tag.as_deref(), Some("KC"));
+    assert_eq!(copy_now.picture_url, None);
+
+    // Supprimer l'équipe globale garde la copie et ses membres.
+    assert!(store.delete_team(team.id).await.unwrap());
+    let orphan = store.find_tournament_team(copy.id).await.unwrap().unwrap();
+    assert_eq!(orphan.team_id, None);
+    assert_eq!(
+        store
+            .list_tournament_team_members(copy.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let role = store
+        .set_tournament_team_member_role(copy.id, bob, TeamRole::Substitute)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(role.role, TeamRole::Substitute);
+    assert!(
+        store
+            .remove_tournament_team_member(copy.id, bob)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .remove_tournament_team_member(copy.id, bob)
+            .await
+            .unwrap()
+    );
+    assert!(store.delete_tournament_team(copy.id).await.unwrap());
+    assert!(
+        store
+            .list_tournament_team_members(copy.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn teams_are_upserted_with_their_members_in_one_transaction() {
+    let store = store().await;
+    let (alice, bob, carol) = (
+        user(&store, "alice").await,
+        user(&store, "bob").await,
+        user(&store, "carol").await,
+    );
+    let game_id = game(&store).await;
+    let name = unique("Karmine");
+    let member = |user_id, role, joined: Option<&str>, left: Option<&str>| MemberImport {
+        user_id,
+        role,
+        joined_at: joined.map(str::to_string),
+        left_at: left.map(str::to_string),
+    };
+    let input = |name: &str, owner, members| TeamImport {
+        game_id,
+        name: name.to_string(),
+        tag: Some("KC".into()),
+        picture_url: None,
+        owner_id: owner,
+        members,
+    };
+
+    let saved = store
+        .import_teams(vec![input(
+            &name,
+            alice,
+            vec![
+                member(
+                    alice,
+                    TeamRole::Owner,
+                    Some("2026-01-02T03:04:05.123456Z"),
+                    None,
+                ),
+                member(
+                    bob,
+                    TeamRole::Substitute,
+                    Some("2026-01-03T00:00:00.000000Z"),
+                    Some("2026-02-03T00:00:00.000000Z"),
+                ),
+            ],
+        )])
+        .await
+        .unwrap();
+    assert!(saved[0].1);
+    let team = saved[0].0.clone();
+    let members = store.list_team_members(team.id).await.unwrap().unwrap();
+    assert_eq!(members[0].joined_at, "2026-01-02T03:04:05.123456Z");
+    assert_eq!(
+        members[1].left_at.as_deref(),
+        Some("2026-02-03T00:00:00.000000Z")
+    );
+
+    // Même équipe (nom en majuscules) : mise à jour, membres remplacés, identifiant conservé.
+    let saved = store
+        .import_teams(vec![input(
+            &name.to_uppercase(),
+            carol,
+            vec![member(carol, TeamRole::Owner, None, None)],
+        )])
+        .await
+        .unwrap();
+    assert!(!saved[0].1);
+    assert_eq!(saved[0].0.id, team.id);
+    assert_eq!(saved[0].0.owner_id, carol);
+    assert_eq!(saved[0].0.name, name.to_uppercase());
+    let members = store.list_team_members(team.id).await.unwrap().unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].user_id, carol);
+
+    // Un lot qui échoue (deux propriétaires actifs) n'écrit rien, pas même ses équipes valides.
+    let other = unique("Autre");
+    let failed = store
+        .import_teams(vec![
+            input(
+                &other,
+                alice,
+                vec![member(alice, TeamRole::Owner, None, None)],
+            ),
+            input(
+                &unique("Cassée"),
+                alice,
+                vec![
+                    member(alice, TeamRole::Owner, None, None),
+                    member(bob, TeamRole::Owner, None, None),
+                ],
+            ),
+        ])
+        .await;
+    assert!(failed.is_err());
+    let names: Vec<String> = store
+        .list_teams(Some(game_id), 10, 0)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, [name.to_uppercase()]);
 }
