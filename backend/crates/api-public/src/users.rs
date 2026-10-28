@@ -212,7 +212,7 @@ async fn delete_me(
 /// d'administration on relit le compte en base, hors cache (un `UPDATE` direct, comme la
 /// désignation du premier administrateur, ne l'invalide pas), afin qu'un administrateur
 /// rétrogradé ou supprimé perde ses droits tout de suite.
-async fn require_admin(state: &AppState, claims: &Claims) -> Result<(), ApiError> {
+pub(crate) async fn require_admin(state: &AppState, claims: &Claims) -> Result<(), ApiError> {
     let user = state
         .store
         .find_user_by_id(claims.sub)
