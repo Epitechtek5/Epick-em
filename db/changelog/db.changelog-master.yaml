@@ -8,3 +8,9 @@ databaseChangeLog:
       file: changelog/0003-add-user-role.yaml
   - include:
       file: changelog/0004-allow-watcher-role.yaml
+  - include:
+      file: changelog/0005-create-games.yaml
+  - include:
+      file: changelog/0006-seed-games.yaml
+  - include:
+      file: changelog/0007-create-stats.yaml

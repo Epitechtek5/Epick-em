@@ -1,7 +1,10 @@
 //! `PgStore` contre un vrai PostgreSQL migré (image `db/`), ignoré par défaut :
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
-use api_public::store::{AuthStore, PgStore, Role, StoreError, UserUpdate};
+use api_public::store::{
+    AuthStore, GameInput, GameUpdate, PgStore, Role, StatInput, StatType, StatUpdate, StoreError,
+    UserUpdate,
+};
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
 use std::time::Duration;
@@ -259,4 +262,282 @@ async fn the_watcher_role_is_accepted_by_the_database() {
             .iter()
             .any(|p| p.id == user.id && p.role == Role::Watcher)
     );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn games_are_unique_whatever_the_case_and_seeded() {
+    let store = store().await;
+    let name = unique("Game");
+
+    let created = store
+        .create_game(GameInput {
+            name: name.clone(),
+            description: "desc".into(),
+            images: vec!["https://example.com/a.png".into()],
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.images, ["https://example.com/a.png"]);
+    assert!(matches!(
+        store
+            .create_game(GameInput {
+                name: name.to_uppercase(),
+                description: String::new(),
+                images: Vec::new(),
+            })
+            .await,
+        Err(StoreError::GameNameTaken)
+    ));
+
+    let updated = store
+        .update_game(
+            created.id,
+            GameUpdate {
+                description: Some("autre".into()),
+                images: Some(Vec::new()),
+                ..GameUpdate::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.name, name);
+    assert_eq!(updated.description, "autre");
+    assert!(updated.images.is_empty());
+    assert_eq!(store.find_game(created.id).await.unwrap(), Some(updated));
+
+    // Les jeux initiaux de la migration 0006 sont présents.
+    let names: Vec<_> = store
+        .list_games(100, 0)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.name)
+        .collect();
+    for seeded in ["Valorant", "Dota 2", "Rocket League"] {
+        assert!(names.iter().any(|n| n == seeded), "{seeded}");
+    }
+
+    assert!(store.delete_game(created.id).await.unwrap());
+    assert!(!store.delete_game(created.id).await.unwrap());
+    assert!(store.find_game(created.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn games_are_upserted_by_name_in_one_transaction() {
+    let store = store().await;
+    let existing = unique("Existing");
+    let fresh = unique("Fresh");
+    let input = |name: &str, description: &str| GameInput {
+        name: name.to_string(),
+        description: description.to_string(),
+        images: Vec::new(),
+    };
+    let original = store.create_game(input(&existing, "avant")).await.unwrap();
+
+    let saved = store
+        .upsert_games(vec![
+            input(&existing.to_uppercase(), "après"),
+            input(&fresh, "neuf"),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(saved.len(), 2);
+    assert_eq!((saved[0].0.id, saved[0].1), (original.id, false));
+    assert_eq!(saved[0].0.description, "après");
+    assert!(saved[1].1);
+    assert_eq!(saved[1].0.name, fresh);
+
+    assert!(store.delete_game(original.id).await.unwrap());
+    assert!(store.delete_game(saved[1].0.id).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn stats_have_unique_keys_and_are_linked_to_games() {
+    let store = store().await;
+    let key = unique("kills").replace('-', "_");
+    let input = |key: &str, kind| StatInput {
+        name: "Kills".into(),
+        key: key.into(),
+        kind,
+    };
+
+    let stat = store
+        .create_stat(input(&key, StatType::Flat))
+        .await
+        .unwrap();
+    assert_eq!(
+        (stat.key.as_str(), stat.kind),
+        (key.as_str(), StatType::Flat)
+    );
+    assert!(matches!(
+        store.create_stat(input(&key, StatType::Percent)).await,
+        Err(StoreError::StatKeyTaken)
+    ));
+    let updated = store
+        .update_stat(
+            stat.id,
+            StatUpdate {
+                kind: Some(StatType::Percent),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (updated.name.as_str(), updated.kind),
+        ("Kills", StatType::Percent)
+    );
+    assert_eq!(store.find_stat(stat.id).await.unwrap().unwrap(), updated);
+
+    let game = store
+        .create_game(GameInput {
+            name: unique("Jeu"),
+            description: String::new(),
+            images: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert!(store.link_stat(game.id, stat.id).await.unwrap());
+    assert!(
+        store.link_stat(game.id, stat.id).await.unwrap(),
+        "idempotent"
+    );
+    assert!(!store.link_stat(Uuid::new_v4(), stat.id).await.unwrap());
+    assert!(!store.link_stat(game.id, Uuid::new_v4()).await.unwrap());
+    assert_eq!(
+        store.list_game_stats(game.id).await.unwrap().unwrap(),
+        vec![updated.clone()]
+    );
+    assert!(
+        store
+            .list_game_stats(Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // La suppression du jeu emporte la liaison, pas la statistique.
+    assert!(store.delete_game(game.id).await.unwrap());
+    assert!(store.find_stat(stat.id).await.unwrap().is_some());
+    let other = store
+        .create_game(GameInput {
+            name: unique("Jeu"),
+            description: String::new(),
+            images: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert!(store.link_stat(other.id, stat.id).await.unwrap());
+    assert!(store.unlink_stat(other.id, stat.id).await.unwrap());
+    assert!(!store.unlink_stat(other.id, stat.id).await.unwrap());
+    assert!(store.link_stat(other.id, stat.id).await.unwrap());
+
+    assert!(store.delete_stat(stat.id).await.unwrap());
+    assert!(!store.delete_stat(stat.id).await.unwrap());
+    assert!(
+        store
+            .list_game_stats(other.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+    store.delete_game(other.id).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn stats_are_upserted_by_key_and_links_are_replaced() {
+    let store = store().await;
+    let (key_a, key_b) = (unique("a").replace('-', "_"), unique("b").replace('-', "_"));
+    let input = |name: &str, key: &str, kind| StatInput {
+        name: name.into(),
+        key: key.into(),
+        kind,
+    };
+    let game = |name: String| GameInput {
+        name,
+        description: String::new(),
+        images: Vec::new(),
+    };
+    let (g1, g2) = (
+        store.create_game(game(unique("Jeu"))).await.unwrap(),
+        store.create_game(game(unique("Jeu"))).await.unwrap(),
+    );
+
+    let saved = store
+        .upsert_stats(vec![
+            input("A", &key_a, StatType::Flat),
+            input("B", &key_b, StatType::Flat),
+        ])
+        .await
+        .unwrap();
+    assert!(saved.iter().all(|(_, created)| *created));
+    let (a, b) = (saved[0].0.clone(), saved[1].0.clone());
+
+    let again = store
+        .upsert_stats(vec![input("A2", &key_a, StatType::Percent)])
+        .await
+        .unwrap();
+    assert!(!again[0].1);
+    assert_eq!((again[0].0.id, again[0].0.name.as_str()), (a.id, "A2"));
+    assert_eq!(again[0].0.kind, StatType::Percent);
+
+    assert!(store.set_game_stats(g1.id, vec![a.id, b.id]).await.unwrap());
+    assert!(store.set_game_stats(g1.id, vec![b.id]).await.unwrap());
+    let linked = store.list_game_stats(g1.id).await.unwrap().unwrap();
+    assert_eq!(linked.iter().map(|s| s.id).collect::<Vec<_>>(), [b.id]);
+    // Une statistique ou un jeu inconnu laisse les liaisons intactes.
+    assert!(
+        !store
+            .set_game_stats(g1.id, vec![a.id, Uuid::new_v4()])
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_game_stats(Uuid::new_v4(), vec![a.id])
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.list_game_stats(g1.id).await.unwrap().unwrap().len(),
+        1
+    );
+
+    assert!(store.set_stat_games(b.id, vec![g2.id]).await.unwrap());
+    assert!(
+        store
+            .list_game_stats(g1.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.list_game_stats(g2.id).await.unwrap().unwrap().len(),
+        1
+    );
+    assert!(
+        !store
+            .set_stat_games(b.id, vec![g1.id, Uuid::new_v4()])
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.list_game_stats(g2.id).await.unwrap().unwrap().len(),
+        1
+    );
+
+    for id in [a.id, b.id] {
+        store.delete_stat(id).await.unwrap();
+    }
+    for id in [g1.id, g2.id] {
+        store.delete_game(id).await.unwrap();
+    }
 }
