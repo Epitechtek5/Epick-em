@@ -57,7 +57,7 @@ pub fn routes(cfg: &mut ServiceConfig) {
 }
 
 /// Distingue un champ absent (`None`) d'un champ à `null` (`Some(None)`).
-fn nullable<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn nullable<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
     D: Deserializer<'de>,

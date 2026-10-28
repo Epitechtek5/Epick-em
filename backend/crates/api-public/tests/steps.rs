@@ -1018,7 +1018,7 @@ async fn step_files_are_validated_before_any_write() {
             "n'est pas qualifié",
         ),
         (
-            "matchs non pris en charge",
+            "matchs d'une étape non lancée",
             vec![step(json!({ "matches": [{}] }))],
             "matchs",
         ),
@@ -1049,4 +1049,29 @@ async fn step_files_are_validated_before_any_write() {
     // Rien n'a été écrit.
     let (_, list) = get(&app, "/tournaments", &s.admin).await;
     assert_eq!(list, json!([]));
+}
+
+#[actix_web::test]
+async fn invalid_files_with_nested_data_are_refused_in_both_formats() {
+    let (app, s) = setup().await;
+    let (_tid, _) = {
+        let (a, b, _) = running(&app, &s).await;
+        (a, b)
+    };
+    let as_json = export_file(&app, &s.admin, "json").await;
+    let as_csv = export_file(&app, &s.admin, "csv").await;
+    let header = as_csv.lines().next().unwrap().to_string();
+
+    let bad = [
+        ("json", "pas du json".to_string()),
+        ("json", as_csv.clone()),
+        ("csv", as_json.clone()),
+        ("csv", format!("{header}\nVide\n")),
+    ];
+    for (format, file) in bad {
+        let (status, _) = import_file(&app, &s.admin, format, file.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{format}: {file}");
+    }
+    assert_eq!(export_file(&app, &s.admin, "json").await, as_json);
+    assert_eq!(export_file(&app, &s.admin, "csv").await, as_csv);
 }

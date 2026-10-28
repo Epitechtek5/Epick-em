@@ -1,0 +1,150 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0012-create-matches
+      author: epickem
+      changes:
+        - createTable:
+            tableName: match
+            remarks: Match d'un jeu, dans un groupe d'étape ou hors tournoi
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: game_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: match_game_fk
+                    references: games(id)
+                    deleteCascade: true
+              - column:
+                  name: step_id
+                  type: uuid
+                  remarks: Étape du match ; null pour un match hors tournoi
+                  constraints:
+                    foreignKeyName: match_step_fk
+                    references: step(id)
+                    deleteCascade: true
+              - column:
+                  name: group_id
+                  type: uuid
+                  remarks: Groupe de l'étape, qui doit être celui de step_id
+              - column:
+                  name: round
+                  type: integer
+                  remarks: N° de manche (pool), de ronde (swiss) ou de tour (élimination)
+              - column:
+                  name: bracket
+                  type: varchar(16)
+                  remarks: winners, losers ou grand_final (double élimination)
+              - column:
+                  name: next_match_id
+                  type: uuid
+                  remarks: Match où va le vainqueur en élimination
+              - column:
+                  name: scheduled_at
+                  type: timestamptz
+              - column:
+                  name: started_at
+                  type: timestamptz
+              - column:
+                  name: ended_at
+                  type: timestamptz
+              - column:
+                  name: status
+                  type: varchar(16)
+                  remarks: scheduled, ongoing, finished ou cancelled
+                  defaultValue: scheduled
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE match
+              ADD CONSTRAINT match_group_fk FOREIGN KEY (group_id, step_id)
+                  REFERENCES step_group (id, step_id) ON DELETE CASCADE,
+              ADD CONSTRAINT match_next_match_fk FOREIGN KEY (next_match_id)
+                  REFERENCES match (id) ON DELETE SET NULL,
+              ADD CONSTRAINT match_group_step_check CHECK (group_id IS NULL OR step_id IS NOT NULL),
+              ADD CONSTRAINT match_round_check CHECK (round IS NULL OR round > 0),
+              ADD CONSTRAINT match_bracket_check CHECK (bracket IS NULL OR bracket IN ('winners', 'losers', 'grand_final')),
+              ADD CONSTRAINT match_bracket_step_check CHECK (bracket IS NULL OR step_id IS NOT NULL),
+              ADD CONSTRAINT match_next_match_check CHECK (next_match_id IS NULL OR next_match_id <> id),
+              ADD CONSTRAINT match_status_check CHECK (status IN ('scheduled', 'ongoing', 'finished', 'cancelled')),
+              ADD CONSTRAINT match_ended_after_started_check CHECK (started_at IS NULL OR ended_at IS NULL OR ended_at >= started_at);
+              CREATE INDEX match_game_idx ON match (game_id);
+              CREATE INDEX match_step_idx ON match (step_id);
+              CREATE INDEX match_group_idx ON match (group_id);
+              CREATE INDEX match_next_match_idx ON match (next_match_id)
+        - createTable:
+            tableName: match_participant
+            remarks: Participant d'un match, avec ses statistiques (JSON), ses points et son résultat
+            columns:
+              - column:
+                  name: match_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: match_participant_match_fk
+                    references: match(id)
+                    deleteCascade: true
+              - column:
+                  name: participant_id
+                  type: uuid
+                  remarks: Inscrit au tournoi (tournament_participant.id)
+                  constraints:
+                    nullable: false
+                    foreignKeyName: match_participant_participant_fk
+                    references: tournament_participant(id)
+                    deleteCascade: true
+              - column:
+                  name: stats
+                  type: jsonb
+                  remarks: 'Valeurs par clé de statistique (stat.key), ex. {"placement": 2, "kills": 7} ; par joueur pour une équipe : {"total": {...}, "players": {"<user_id>": {...}}}'
+                  defaultValue: "{}"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: points
+                  type: numeric
+                  remarks: Calculé à partir de stats et du barème du tournoi (scoring_rule)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: rank
+                  type: integer
+                  remarks: Place dans le match
+              - column:
+                  name: result
+                  type: varchar(8)
+                  remarks: win, loss ou draw
+        - sql:
+            sql: >-
+              ALTER TABLE match_participant
+              ADD CONSTRAINT match_participant_pkey PRIMARY KEY (match_id, participant_id),
+              ADD CONSTRAINT match_participant_stats_check CHECK (jsonb_typeof(stats) = 'object'),
+              ADD CONSTRAINT match_participant_rank_check CHECK (rank IS NULL OR rank > 0),
+              ADD CONSTRAINT match_participant_result_check CHECK (result IS NULL OR result IN ('win', 'loss', 'draw'));
+              CREATE INDEX match_participant_participant_idx ON match_participant (participant_id)
+      rollback:
+        - dropTable:
+            tableName: match_participant
+        - dropTable:
+            tableName: match
