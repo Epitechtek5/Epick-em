@@ -9,6 +9,7 @@ import { deleteGame, getGame } from '@/features/games/api';
 import { gameErrorKey } from '@/features/games/errors';
 import { useGameResource } from '@/features/games/use-game-resource';
 import { GameImage } from '@/components/games/game-image';
+import { GameStats } from '@/components/stats/game-stats';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { Icon } from '@/components/ui/icon';
@@ -92,6 +93,7 @@ export default function GameDetailsScreen() {
               ))}
             </View>
           ) : null}
+          <GameStats gameId={game.id} canManage={canManage} />
           {deleteError ? <FormMessage>{t(deleteError)}</FormMessage> : null}
           {canManage ? (
             <View className="gap-3 border-t border-border pt-5">

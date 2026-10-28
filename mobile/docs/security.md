@@ -51,6 +51,7 @@ Run `node scripts/audit-security.mjs` from `mobile/`. The security job runs the 
 
 The only accepted advisory/package pairs are:
 
+- `GHSA-gcqx-w48m-w2h4` on `deepmerge@4.3.1`, affected versions `>=4.2.0 <=4.3.1` (low severity). It is introduced transitively by Expo (`@expo/config`) and Jest (`jest-config`). At review time, upstream had not published a patched version and compatible Expo/Jest updates did not remove it. This exception is temporary through **2026-11-28 UTC** and fails closed starting **2026-11-29 UTC**. It records the upstream blocker; it does not remediate the vulnerability or mean either dependency tree has zero findings. Reassess before the deadline and obtain any organization-required security approval before relying on the exception.
 - `GHSA-vfj7-8cjw-p6xm` on `braces`.
 - `GHSA-86w9-cpqp-85rv` on `node-forge`.
 
