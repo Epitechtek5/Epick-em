@@ -23,7 +23,15 @@ export function checkImportSize(size: number) {
     throw new GameFileError('games.validation.fileSize');
 }
 
-export async function pickAndImportGames(token: string) {
+export async function pickAndImportFile<T>(
+  token: string,
+  importFile: (
+    token: string,
+    format: GameFormat,
+    bytes: Uint8Array,
+  ) => Promise<T>,
+  translationRoot: 'games' | 'stats' | 'teams',
+): Promise<T | null> {
   const picked = await DocumentPicker.getDocumentAsync({
     multiple: false,
     copyToCacheDirectory: true,
@@ -59,26 +67,37 @@ export async function pickAndImportGames(token: string) {
       throw new GameFileError('games.validation.fileContent');
     }
   } catch (caught) {
-    if (caught instanceof GameFileError) throw caught;
-    throw new GameFileError('games.errors.readFile');
+    if (caught instanceof GameFileError) {
+      throw new GameFileError(
+        caught.key.replace('games.', `${translationRoot}.`),
+      );
+    }
+    throw new GameFileError(`${translationRoot}.errors.readFile`);
   } finally {
     // DocumentPicker supplied a private cache copy, never the original document.
     if (file.exists) file.delete();
   }
-  // The backend validates document version, CSV quoting, field constraints and NoStats.
-  return importGames(token, format, bytes);
+  // The backend validates document version, CSV quoting and domain constraints.
+  return importFile(token, format, bytes);
 }
 
-export async function saveGamesExport(
+export function pickAndImportGames(token: string) {
+  return pickAndImportFile(token, importGames, 'games');
+}
+
+export async function saveExportFile(
   token: string,
   format: GameFormat,
   share: boolean,
   title: string,
+  filename: string,
+  exportFile: (token: string, format: GameFormat) => Promise<Uint8Array>,
+  translationRoot: 'games' | 'stats' | 'teams',
 ) {
   if (share && !(await Sharing.isAvailableAsync()))
-    throw new GameFileError('games.errors.sharing');
-  const bytes = await exportGames(token, format);
-  const name = `games-${Date.now()}.${format}`;
+    throw new GameFileError(`${translationRoot}.errors.sharing`);
+  const bytes = await exportFile(token, format);
+  const name = `${filename}.${format}`;
   if (!share) {
     // Native directory selection gives the app scoped access without broad storage permissions.
     const directory = await Directory.pickDirectoryAsync();
@@ -87,7 +106,7 @@ export async function saveGamesExport(
       await destination.write(bytes);
     } catch {
       destination.delete();
-      throw new GameFileError('games.errors.saveFile');
+      throw new GameFileError(`${translationRoot}.errors.saveFile`);
     }
     return;
   }
@@ -105,9 +124,26 @@ export async function saveGamesExport(
     });
   } catch {
     if (file.exists) file.delete();
-    throw new GameFileError('games.errors.sharing');
+    throw new GameFileError(`${translationRoot}.errors.sharing`);
   }
   // A receiving app may read after handoff; let the OS manage this cache file's lifetime.
+}
+
+export function saveGamesExport(
+  token: string,
+  format: GameFormat,
+  share: boolean,
+  title: string,
+) {
+  return saveExportFile(
+    token,
+    format,
+    share,
+    title,
+    `games-${Date.now()}`,
+    exportGames,
+    'games',
+  );
 }
 
 export function fileErrorKey(error: unknown): string | null {

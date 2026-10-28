@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react-native';
-import LoginScreen from '../src/screens/LoginScreen';
+import LoginScreen from '../src/screens/auth/LoginScreen';
 import { useAuth } from '../src/features/auth/session';
 import { ApiError } from '../src/lib/api';
 jest.mock('../src/features/auth/session', () => ({ useAuth: jest.fn() }));

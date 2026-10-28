@@ -35,6 +35,50 @@ export default function AuthenticatedLayout() {
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="teams/create"
+        options={{ title: t('teams.create') }}
+      />
+      <Stack.Screen
+        name="teams/transfer"
+        options={{ title: t('teams.transfer') }}
+      />
+      <Stack.Screen
+        name="teams/[id]/index"
+        options={{ title: t('teams.details') }}
+      />
+      <Stack.Screen
+        name="teams/[id]/edit"
+        options={{ title: t('teams.edit') }}
+      />
+      <Stack.Screen
+        name="teams/[id]/members"
+        options={{ title: t('teams.members') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/teams/index"
+        options={{ title: t('teams.tournamentTeams') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/teams/create"
+        options={{ title: t('teams.create') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/teams/copy"
+        options={{ title: t('teams.copy') }}
+      />
+      <Stack.Screen
+        name="tournament-teams/[id]/index"
+        options={{ title: t('teams.details') }}
+      />
+      <Stack.Screen
+        name="tournament-teams/[id]/edit"
+        options={{ title: t('teams.edit') }}
+      />
+      <Stack.Screen
+        name="tournament-teams/[id]/members"
+        options={{ title: t('teams.members') }}
+      />
       <Stack.Screen name="user/[id]" options={{ title: t('user.title') }} />
       <Stack.Screen name="admin/[id]" options={{ title: t('admin.title') }} />
       <Stack.Screen
@@ -52,6 +96,23 @@ export default function AuthenticatedLayout() {
       <Stack.Screen
         name="games/transfer"
         options={{ title: t('games.transfer') }}
+      />
+      <Stack.Screen
+        name="games/[id]/stats"
+        options={{ title: t('stats.manageGame') }}
+      />
+      <Stack.Screen name="stats/index" options={{ title: t('stats.title') }} />
+      <Stack.Screen
+        name="stats/create"
+        options={{ title: t('stats.create') }}
+      />
+      <Stack.Screen
+        name="stats/[id]/edit"
+        options={{ title: t('stats.edit') }}
+      />
+      <Stack.Screen
+        name="stats/transfer"
+        options={{ title: t('stats.transfer') }}
       />
     </Stack>
   );

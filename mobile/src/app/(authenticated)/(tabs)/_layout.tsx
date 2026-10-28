@@ -3,6 +3,7 @@ import { TabIcon } from '@/components/ui/tab-icon';
 import { colors as themeColors } from '@/theme/colors';
 import Settings01Icon from '@hugeicons/core-free-icons/Settings01Icon';
 import UserGroupIcon from '@hugeicons/core-free-icons/UserGroupIcon';
+import TeamWorkIcon from '@hugeicons/core-free-icons/TeamWorkIcon';
 import GameController03Icon from '@hugeicons/core-free-icons/GameController03Icon';
 import { useReducedMotionPreference } from '@/lib/motion';
 import { useTheme } from '@react-navigation/native';
@@ -47,6 +48,21 @@ export default function TabsLayout() {
               size={size}
               focused={focused}
               testID="games-tab-icon"
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="teams"
+        options={{
+          title: t('teams.title'),
+          tabBarAccessibilityLabel: t('teams.title'),
+          tabBarIcon: ({ focused, size }) => (
+            <TabIcon
+              icon={TeamWorkIcon}
+              size={size}
+              focused={focused}
+              testID="teams-tab-icon"
             />
           ),
         }}

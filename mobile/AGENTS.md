@@ -44,7 +44,9 @@ All code is reviewed by humans. Optimize for clarity, maintainability and correc
 
 - Use Expo Router as the single navigation system.
 - Keep routes and route layouts in `src/app/`.
+- Place screen implementations in the matching `src/screens/<domain>/` directory (`auth`, `account`, `games`, `stats`, `teams` or `users`). Keep route files in `src/app/` thin and declarative.
 - Keep business logic, API clients, authentication services, validation and reusable UI outside `src/app/`.
+- Preserve the separation between screen presentation, reusable UI in `src/components/`, domain code in `src/features/`, cross-cutting utilities in `src/lib/`, tokens in `src/theme/` and translations in `src/i18n/`.
 - Never create a second independent navigation container.
 - Protect authenticated routes through a consistent session state.
 - Keep public authentication routes accessible to unauthenticated users.
@@ -73,13 +75,17 @@ All code is reviewed by humans. Optimize for clarity, maintainability and correc
 ## 6. Dependency security
 
 - Check whether an existing dependency or native API already satisfies the requirement.
+- Inspect the existing dependency tree before adding a package.
 - Add packages only when strictly necessary.
 - Use `npx expo install` for Expo and React Native dependencies to maintain SDK compatibility.
 - Check package versions, compatibility, maintenance and known security vulnerabilities before installation.
+- Review direct and transitive advisories before adopting dependencies; run the strict full-tree and production security audits after dependency changes.
 - Never knowingly introduce vulnerable dependencies.
+- Prefer upstream security fixes over dependency overrides. Do not silently accept advisories or add arbitrary exceptions.
 - Update `package.json` and `package-lock.json` together.
 - Preserve reproducible installations with `npm ci`.
 - Do not use `--force`, `--legacy-peer-deps` or broad dependency upgrades to bypass conflicts.
+- Never downgrade Expo or accept an unsupported dependency combination to make an audit pass.
 - Never disable security audits, weaken security policies or add vulnerability exceptions to make CI pass.
 - If a secure and compatible dependency cannot be found, report the blocker rather than silently accepting the risk.
 
@@ -148,3 +154,46 @@ Before completing a task:
 7. Do not claim end-to-end success unless the relevant application flow was actually tested.
 
 Correctness, security, human readability and maintainability take precedence over implementation speed.
+
+## 11. Minimal changes and reviewable diffs
+
+Keep every change as small, focused and easy to review as possible.
+
+- Modify only the files strictly necessary to fulfill the request.
+- Do not refactor, rename, move or reorganize unrelated code.
+- Do not reformat entire files when only a small section needs modification.
+- Do not introduce new components, hooks, services or utility files when existing structures are sufficient.
+- Prefer extending an existing, well-suited component over introducing unnecessary abstractions.
+- Avoid creating multiple files for logic that is simple and cohesive.
+- Do not duplicate existing functionality.
+- Do not add speculative features, defensive abstractions or unnecessary fallback mechanisms.
+- Minimize dependencies, boilerplate, indirection and unnecessary layers.
+- Keep changes proportional to the task: a small bug fix should produce a small diff.
+- Never sacrifice clarity or correctness merely to reduce the line count.
+
+Before editing, identify the smallest set of files required.
+
+After editing, review `git diff` and remove unrelated changes, unnecessary code and excessive formatting churn.
+
+**A large diff must be justified by actual functional requirements, not by personal coding preferences.**
+
+## 12. Human-readable source code
+
+Code must look and read like carefully written, professionally reviewed human code.
+
+- Use consistent indentation and appropriate vertical whitespace.
+- Separate logical sections with blank lines.
+- Keep JSX structures visually clear and easy to scan.
+- Prefer straightforward functions with descriptive names.
+- Avoid excessively long files and components.
+- Avoid splitting simple logic into unnecessary micro-functions.
+- Avoid compressed one-liners and overly clever expressions.
+- Avoid deeply nested ternaries, callbacks and conditional rendering.
+- Prefer explicit, understandable control flow over abstraction-heavy solutions.
+- Keep imports organized and formatting consistent with nearby code.
+- Match the existing project's conventions instead of imposing new stylistic preferences.
+- Avoid excessive comments, repetitive documentation and verbose boilerplate.
+
+Code should be concise because it is well designed, not because it is compressed.
+
+**The goal is the smallest maintainable change that fully satisfies the task.**

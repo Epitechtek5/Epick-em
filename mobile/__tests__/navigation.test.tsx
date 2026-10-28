@@ -1,6 +1,6 @@
 import { colors } from '../src/theme/colors';
 import { useSyncExternalStore } from 'react';
-import ProfileScreen from '../src/screens/ProfileScreen';
+import ProfileScreen from '../src/screens/account/ProfileScreen';
 import { PreferencesProvider } from '../src/features/preferences/provider';
 import {
   renderRouter,
@@ -20,9 +20,16 @@ import TabsLayout from '../src/app/(authenticated)/(tabs)/_layout';
 import {
   CreateGameScreen,
   EditGameScreen,
-} from '../src/screens/GameEditorScreen';
-import GameTransferScreen from '../src/screens/GameTransferScreen';
-import AdminUserScreen from '../src/screens/AdminUserScreen';
+} from '../src/screens/games/GameEditorScreen';
+import GameTransferScreen from '../src/screens/games/GameTransferScreen';
+import StatsScreen from '../src/screens/stats/StatsScreen';
+import StatTransferScreen from '../src/screens/stats/StatTransferScreen';
+import GameStatsManagementScreen from '../src/screens/games/GameStatsManagementScreen';
+import {
+  CreateStatScreen,
+  EditStatScreen,
+} from '../src/screens/stats/StatEditorScreen';
+import AdminUserScreen from '../src/screens/users/AdminUserScreen';
 import { useAuth } from '../src/features/auth/session';
 
 jest.mock('../src/features/games/files', () => ({
@@ -58,10 +65,16 @@ const routes = {
     </ThemeProvider>
   ),
   '(authenticated)/(tabs)/games': () => <Text>Games content</Text>,
+  '(authenticated)/(tabs)/teams': () => <Text>Teams content</Text>,
   '(authenticated)/games/[id]/index': () => <Text>Game details</Text>,
   '(authenticated)/games/create': CreateGameScreen,
   '(authenticated)/games/[id]/edit': EditGameScreen,
   '(authenticated)/games/transfer': GameTransferScreen,
+  '(authenticated)/games/[id]/stats': GameStatsManagementScreen,
+  '(authenticated)/stats/index': StatsScreen,
+  '(authenticated)/stats/create': CreateStatScreen,
+  '(authenticated)/stats/[id]/edit': EditStatScreen,
+  '(authenticated)/stats/transfer': StatTransferScreen,
   '(authenticated)/user/[id]': () => <Text>User detail</Text>,
   '(authenticated)/_layout': AuthenticatedLayout,
   '(authenticated)/(tabs)/_layout': TabsLayout,
@@ -103,6 +116,8 @@ it.each([DefaultTheme, DarkTheme])(
       vbHeight: 24,
     });
     expect(screen.getByLabelText('Users')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Teams')).toBeOnTheScreen();
+    expect(screen.getAllByTestId('teams-tab-icon').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Settings')).toBeOnTheScreen();
     expect(screen.getAllByTestId('settings-tab-icon').length).toBeGreaterThan(
       0,
@@ -199,3 +214,24 @@ it('protects Games details and administration after session loss', async () => {
   await renderRouter(routes, { initialUrl: `/games/${user.id}` });
   expect(await screen.findByText('Login content')).toBeOnTheScreen();
 });
+
+it.each(['user', 'watcher'] as const)(
+  'blocks statistics administration deep links for %s',
+  async (role) => {
+    session(role);
+    await renderRouter(routes, { initialUrl: '/stats' });
+    expect(await screen.findByText('Games content')).toBeOnTheScreen();
+
+    for (const path of [
+      '/stats/create',
+      `/stats/${user.id}/edit`,
+      '/stats/transfer',
+      `/games/${user.id}/stats`,
+    ]) {
+      await act(async () => {
+        router.push(path);
+      });
+      expect(await screen.findByText('Games content')).toBeOnTheScreen();
+    }
+  },
+);
