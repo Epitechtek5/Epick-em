@@ -34,6 +34,10 @@ pub enum ApiError {
     Conflict,
     /// Nom de jeu déjà pris.
     GameNameTaken,
+    /// Clé de statistique déjà prise.
+    StatKeyTaken,
+    /// Statistique utilisée par un tournoi en cours.
+    StatInUse,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -66,6 +70,16 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "game_name_taken",
                 "Ce nom de jeu est déjà pris",
+            ),
+            ApiError::StatKeyTaken => (
+                StatusCode::CONFLICT,
+                "stat_key_taken",
+                "Cette clé de statistique est déjà prise",
+            ),
+            ApiError::StatInUse => (
+                StatusCode::CONFLICT,
+                "stat_in_use",
+                "Cette statistique est utilisée par un tournoi en cours",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

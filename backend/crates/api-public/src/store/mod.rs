@@ -6,10 +6,12 @@
 mod games;
 mod memory;
 mod postgres;
+mod stats;
 
 pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
+pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -92,6 +94,10 @@ pub enum StoreError {
     UsernameTaken,
     /// Le nom de jeu existe déjà (sans tenir compte de la casse).
     GameNameTaken,
+    /// La clé de statistique existe déjà.
+    StatKeyTaken,
+    /// La statistique est utilisée par le barème d'un tournoi en cours.
+    StatInUse,
     Other(String),
 }
 
@@ -100,6 +106,8 @@ impl fmt::Display for StoreError {
         match self {
             StoreError::UsernameTaken => f.write_str("nom d'utilisateur déjà pris"),
             StoreError::GameNameTaken => f.write_str("nom de jeu déjà pris"),
+            StoreError::StatKeyTaken => f.write_str("clé de statistique déjà prise"),
+            StoreError::StatInUse => f.write_str("statistique utilisée par un tournoi en cours"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -188,4 +196,43 @@ pub trait AuthStore: Send + Sync {
     /// seule opération : en cas d'erreur, aucun n'est modifié. Chaque jeu est renvoyé avec
     /// `true` s'il vient d'être créé. Les noms de `games` sont distincts.
     async fn upsert_games(&self, games: Vec<GameInput>) -> Result<Vec<(Game, bool)>, StoreError>;
+
+    /// Statistiques par ordre de nom, `limit` à partir de `offset`.
+    async fn list_stats(&self, limit: i64, offset: i64) -> Result<Vec<Stat>, StoreError>;
+
+    async fn find_stat(&self, id: Uuid) -> Result<Option<Stat>, StoreError>;
+
+    /// Crée la statistique ; [`StoreError::StatKeyTaken`] si la clé est déjà utilisée.
+    async fn create_stat(&self, stat: StatInput) -> Result<Stat, StoreError>;
+
+    /// Applique `update` ; `None` si la statistique n'existe pas, [`StoreError::StatKeyTaken`]
+    /// si la nouvelle clé est déjà utilisée.
+    async fn update_stat(&self, id: Uuid, update: StatUpdate) -> Result<Option<Stat>, StoreError>;
+
+    /// Supprime la statistique (et ses liaisons avec les jeux) ; `false` si elle n'existait pas,
+    /// [`StoreError::StatInUse`] si le barème d'un tournoi `ongoing` s'en sert.
+    async fn delete_stat(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Statistiques liées au jeu, par ordre de nom ; `None` si le jeu n'existe pas.
+    async fn list_game_stats(&self, game_id: Uuid) -> Result<Option<Vec<Stat>>, StoreError>;
+
+    /// Lie la statistique au jeu (sans effet si elle l'est déjà) ; `false` si le jeu ou la
+    /// statistique n'existe pas.
+    async fn link_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Délie la statistique du jeu ; `false` si elle n'y était pas liée.
+    async fn unlink_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par clé) les statistiques données, en une seule opération : en cas
+    /// d'erreur, aucune n'est modifiée. Chacune est renvoyée avec `true` si elle vient d'être
+    /// créée. Les clés de `stats` sont distinctes.
+    async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError>;
+
+    /// Remplace les statistiques liées au jeu par `stat_ids`, en une seule opération. `false`
+    /// si le jeu ou l'une des statistiques n'existe pas (rien n'est alors modifié).
+    async fn set_game_stats(&self, game_id: Uuid, stat_ids: Vec<Uuid>) -> Result<bool, StoreError>;
+
+    /// Remplace les jeux liés à la statistique par `game_ids`, en une seule opération. `false`
+    /// si la statistique ou l'un des jeux n'existe pas (rien n'est alors modifié).
+    async fn set_stat_games(&self, stat_id: Uuid, game_ids: Vec<Uuid>) -> Result<bool, StoreError>;
 }
