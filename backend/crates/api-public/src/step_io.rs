@@ -13,12 +13,14 @@
 //!
 //! Règle de composition : les matchs d'une étape sont des valeurs opaques pour ce niveau. Il ne
 //! connaît ni leur contenu ni leur structure : leur validation, leur lecture et leur écriture sont
-//! déléguées à un [`StepMatches`], et il se contente de les embarquer dans l'étape.
+//! déléguées à un [`StepMatches`] (par défaut [`StoreMatches`], voir [`crate::match_io`]), et il
+//! se contente de les embarquer dans l'étape en leur donnant de quoi désigner les inscrits.
 //!
 //! Importer remplace toutes les étapes du tournoi. Une étape lancée est reconstituée par les
 //! mêmes opérations que sur l'API (création, lancement, points, clôture), si bien qu'un fichier
 //! exporté se réimporte sans perte (hors horodatages).
 
+use crate::match_io::StoreMatches;
 use crate::steps::{check, tiebreak_value};
 use crate::store::{
     AuthStore, MatchType, StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome,
@@ -36,34 +38,113 @@ use uuid::Uuid;
 /// Nombre maximal de problèmes détaillés dans un message d'erreur.
 const MAX_REPORTED_ERRORS: usize = 10;
 
+/// Comment le fichier désigne un inscrit : par son nom d'utilisateur (`user`) ou par le rang de
+/// son équipe inscrite seule (`team`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Who {
+    /// Nom d'utilisateur en minuscules.
+    User(String),
+    /// Rang (à partir de 0) dans `teams`.
+    Team(usize),
+}
+
+impl std::fmt::Display for Who {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Who::User(name) => write!(f, "« {name} »"),
+            Who::Team(rank) => write!(f, "l'équipe {rank}"),
+        }
+    }
+}
+
+/// Désigne un inscrit à partir des clés `user` et `team` d'un élément du fichier.
+pub fn designate(user: Option<&str>, team: Option<usize>) -> Result<Who, String> {
+    match (user, team) {
+        (Some(name), None) if !name.trim().is_empty() => Ok(Who::User(name.trim().to_lowercase())),
+        (None, Some(rank)) => Ok(Who::Team(rank)),
+        _ => Err("un participant désigne un `user` ou une `team`, pas les deux".to_string()),
+    }
+}
+
+/// Désignation d'un inscrit dans un fichier exporté (`user` en casse d'origine ou `team`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Designation {
+    pub user: Option<String>,
+    pub team: Option<usize>,
+}
+
+/// Ce que le fichier déclare d'une étape, pour valider ses matchs : leurs participants sont ceux
+/// de ses groupes.
+#[derive(Debug, Clone)]
+pub struct StepScope {
+    pub status: StepStatus,
+    pub format: StepFormat,
+    pub match_type: MatchType,
+    pub group_size: i32,
+    /// Participants de chaque groupe, par rang de groupe.
+    pub groups: HashMap<i32, HashSet<Who>>,
+}
+
 /// Import et export des matchs d'une étape.
 #[async_trait]
 pub trait StepMatches: Send + Sync {
     /// Matchs de l'étape, tels qu'ils s'embarquent dans le fichier, dans un ordre stable.
-    async fn export(&self, step_id: Uuid) -> Result<Vec<Value>, StoreError>;
+    /// `designations` désigne chaque inscrit du tournoi.
+    async fn export(
+        &self,
+        step_id: Uuid,
+        designations: &HashMap<Uuid, Designation>,
+    ) -> Result<Vec<Value>, StoreError>;
 
-    /// Message d'erreur si `items` est invalide pour une étape d'un tournoi de ce jeu. Appelée
+    /// Message d'erreur si `items` est invalide pour cette étape d'un tournoi de ce jeu. Appelée
     /// avant toute écriture.
-    async fn validate(&self, game_id: Uuid, items: &[Value]) -> Result<Option<String>, StoreError>;
+    async fn validate(
+        &self,
+        game_id: Uuid,
+        scope: &StepScope,
+        items: &[Value],
+    ) -> Result<Option<String>, StoreError>;
 
-    /// Remplace les matchs de l'étape par `items`, déjà validés.
-    async fn import(&self, step_id: Uuid, items: Vec<Value>) -> Result<(), StoreError>;
+    /// Remplace les matchs de l'étape (déjà lancée, ses groupes existent) par `items`, déjà
+    /// validés. `participants` donne l'identifiant de chaque inscrit du tournoi.
+    async fn import(
+        &self,
+        step_id: Uuid,
+        game_id: Uuid,
+        participants: &HashMap<Who, Uuid>,
+        items: Vec<Value>,
+    ) -> Result<(), StoreError>;
 }
 
-/// Tant que les matchs ne sont pas branchés : rien à exporter, rien d'accepté.
+/// Quand les matchs ne sont pas branchés : rien à exporter, rien d'accepté.
 pub struct NoMatches;
 
 #[async_trait]
 impl StepMatches for NoMatches {
-    async fn export(&self, _: Uuid) -> Result<Vec<Value>, StoreError> {
+    async fn export(
+        &self,
+        _: Uuid,
+        _: &HashMap<Uuid, Designation>,
+    ) -> Result<Vec<Value>, StoreError> {
         Ok(Vec::new())
     }
 
-    async fn validate(&self, _: Uuid, items: &[Value]) -> Result<Option<String>, StoreError> {
-        Ok((!items.is_empty()).then(|| "les matchs ne sont pas encore pris en charge".to_string()))
+    async fn validate(
+        &self,
+        _: Uuid,
+        _: &StepScope,
+        items: &[Value],
+    ) -> Result<Option<String>, StoreError> {
+        Ok((!items.is_empty()).then(|| "les matchs ne sont pas pris en charge".to_string()))
     }
 
-    async fn import(&self, _: Uuid, _: Vec<Value>) -> Result<(), StoreError> {
+    async fn import(
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: &HashMap<Who, Uuid>,
+        _: Vec<Value>,
+    ) -> Result<(), StoreError> {
         Ok(())
     }
 }
@@ -77,12 +158,13 @@ pub struct StoreSteps {
 impl StoreSteps {
     pub fn new(store: Arc<dyn AuthStore>) -> Self {
         StoreSteps {
+            matches: Arc::new(StoreMatches(store.clone())),
             store,
-            matches: Arc::new(NoMatches),
         }
     }
 
-    /// Branche le sous-niveau qui importe et exporte les matchs des étapes.
+    /// Branche le sous-niveau qui importe et exporte les matchs des étapes (par défaut
+    /// [`StoreMatches`], celui de la base).
     pub fn with_matches(mut self, matches: Arc<dyn StepMatches>) -> Self {
         self.matches = matches;
         self
@@ -144,31 +226,9 @@ pub(crate) struct StepParticipantItem {
     status: Option<StepParticipantStatus>,
 }
 
-/// Façon de désigner un inscrit du tournoi, comparable entre fichiers et base.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Who {
-    User(String),
-    Team(usize),
-}
-
-impl std::fmt::Display for Who {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Who::User(name) => write!(f, "« {name} »"),
-            Who::Team(rank) => write!(f, "l'équipe {rank}"),
-        }
-    }
-}
-
 impl StepParticipantItem {
     fn who(&self) -> Result<Who, String> {
-        match (&self.user, self.team) {
-            (Some(name), None) if !name.trim().is_empty() => {
-                Ok(Who::User(name.trim().to_lowercase()))
-            }
-            (None, Some(rank)) => Ok(Who::Team(rank)),
-            _ => Err("un participant désigne un `user` ou une `team`, pas les deux".to_string()),
-        }
+        designate(self.user.as_deref(), self.team)
     }
 }
 
@@ -363,6 +423,22 @@ impl TournamentChild for StoreSteps {
             who_is.insert(id, who);
         }
         let usernames = self.usernames(tournament_id).await?;
+        let designations: HashMap<Uuid, Designation> = who_is
+            .iter()
+            .map(|(id, who)| {
+                let designation = match who {
+                    Who::User(_) => Designation {
+                        user: usernames.get(id).cloned(),
+                        team: None,
+                    },
+                    Who::Team(rank) => Designation {
+                        user: None,
+                        team: Some(*rank),
+                    },
+                };
+                (*id, designation)
+            })
+            .collect();
         let mut exported = Vec::new();
         for step in self.store.list_steps(tournament_id).await? {
             let groups = self.store.list_step_groups(step.id).await?;
@@ -401,7 +477,7 @@ impl TournamentChild for StoreSteps {
                     participants,
                 });
             }
-            let matches = self.matches.export(step.id).await?;
+            let matches = self.matches.export(step.id, &designations).await?;
             let item = StepItem {
                 position: step.position,
                 format: step.format,
@@ -488,7 +564,29 @@ impl TournamentChild for StoreSteps {
                     }
                 }
             }
-            if let Some(problem) = self.matches.validate(game_id, &step.matches).await? {
+            let scope = StepScope {
+                status,
+                format: step.format,
+                match_type: step.match_type,
+                group_size: step.group_size,
+                groups: step
+                    .groups
+                    .iter()
+                    .map(|group| {
+                        let members = group
+                            .participants
+                            .iter()
+                            .filter_map(|p| p.who().ok())
+                            .collect();
+                        (group.index, members)
+                    })
+                    .collect(),
+            };
+            if let Some(problem) = self
+                .matches
+                .validate(game_id, &scope, &step.matches)
+                .await?
+            {
                 reasons.push(format!("matches : {problem}"));
             }
             if !reasons.is_empty() {
@@ -508,6 +606,12 @@ impl TournamentChild for StoreSteps {
         let mut steps = parse(&items).map_err(StoreError::Other)?;
         steps.sort_by_key(|step| step.position);
         let participants = self.participants_by(tournament_id, team_ids).await?;
+        let game_id = self
+            .store
+            .find_tournament(tournament_id)
+            .await?
+            .ok_or_else(|| other(format!("tournoi {tournament_id} introuvable")))?
+            .game_id;
         // Les étapes sont remplacées : on retire les anciennes avant d'écrire les nouvelles.
         for old in self.store.list_steps(tournament_id).await? {
             self.store.delete_step(old.id).await?;
@@ -571,7 +675,9 @@ impl TournamentChild for StoreSteps {
                         .await?;
                 }
             }
-            self.matches.import(created.id, step.matches).await?;
+            self.matches
+                .import(created.id, game_id, &participants, step.matches)
+                .await?;
             ids.push(created.id);
         }
         Ok(ids)

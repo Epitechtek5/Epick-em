@@ -1080,3 +1080,66 @@ async fn an_invalid_import_changes_nothing() {
     let (_, after) = export(&app, "/teams/export", &s.admin).await;
     assert_eq!(after, before);
 }
+
+#[actix_web::test]
+async fn team_files_in_json_and_csv_give_the_same_teams() {
+    let (app, s) = setup().await;
+    seed(&app, &s).await;
+    let (_, as_json) = export(&app, "/teams/export?format=json", &s.admin).await;
+    let (_, as_csv) = export(&app, "/teams/export?format=csv", &s.admin).await;
+    let parsed: Value = serde_json::from_str(&as_json).unwrap();
+    assert_eq!(parsed["version"], 1);
+    assert_eq!(parsed["teams"].as_array().unwrap().len(), 2);
+    assert!(as_csv.lines().count() >= 3, "{as_csv}");
+
+    // Chaque fichier, importé après avoir vidé les équipes, redonne l'autre format à l'identique.
+    for (format, file) in [("json", &as_json), ("csv", &as_csv)] {
+        delete_all_teams(&app, &s.admin).await;
+        let (status, report) = send_raw(
+            &app,
+            &format!("/teams/import?format={format}"),
+            &s.admin,
+            file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{format}: {report}");
+        assert_eq!(report, json!({ "created": 2, "updated": 0 }), "{format}");
+        let (_, json_again) = export(&app, "/teams/export?format=json", &s.admin).await;
+        let (_, csv_again) = export(&app, "/teams/export?format=csv", &s.admin).await;
+        assert_eq!(json_again, as_json, "{format}");
+        assert_eq!(csv_again, as_csv, "{format}");
+    }
+}
+
+#[actix_web::test]
+async fn invalid_team_files_are_refused_in_both_formats() {
+    let (app, s) = setup().await;
+    seed(&app, &s).await;
+    let (_, before) = export(&app, "/teams/export?format=json", &s.admin).await;
+    let (_, as_json) = export(&app, "/teams/export?format=json", &s.admin).await;
+    let (_, as_csv) = export(&app, "/teams/export?format=csv", &s.admin).await;
+    let header = as_csv.lines().next().unwrap().to_string();
+
+    let bad = [
+        ("json", "pas du json".to_string()),
+        ("json", as_csv.clone()),
+        ("csv", as_json.clone()),
+        ("csv", String::new()),
+        ("csv", "game,name\nValorant,x\n".to_string()),
+        // Une ligne qui n'a pas le bon nombre de colonnes.
+        ("csv", format!("{header}\nValorant\n")),
+    ];
+    for (format, file) in bad {
+        let (status, error) = send_raw(
+            &app,
+            &format!("/teams/import?format={format}"),
+            &s.admin,
+            &file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{format}: {file}");
+        assert!(error["errors"]["file"].is_string(), "{error}");
+    }
+    let (_, after) = export(&app, "/teams/export?format=json", &s.admin).await;
+    assert_eq!(after, before);
+}

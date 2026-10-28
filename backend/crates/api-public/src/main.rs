@@ -25,9 +25,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let auth_config = AuthConfig::from_env()?;
     let db = infra::connect(&config).await?;
 
+    let cache = db.cache().clone();
     let store = Arc::new(PgStore::new(db));
     let state = AppState::new(store, auth_config)
-        .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?;
+        .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
+        .with_cache(cache);
 
     let server = HttpServer::new(move || app(state.clone())).bind(format!("0.0.0.0:{port}"))?;
     println!(
