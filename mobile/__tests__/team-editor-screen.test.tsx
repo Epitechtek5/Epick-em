@@ -8,7 +8,7 @@ import {
 import { router } from 'expo-router';
 import { useAuth } from '../src/features/auth/session';
 import * as gamesApi from '../src/features/games/api';
-import { CreateTeamScreen } from '../src/screens/TeamEditorScreen';
+import { CreateTeamScreen } from '../src/screens/teams/TeamEditorScreen';
 import * as teamsApi from '../src/features/teams/api';
 import { ApiError } from '../src/lib/api';
 import i18n from '../src/i18n';

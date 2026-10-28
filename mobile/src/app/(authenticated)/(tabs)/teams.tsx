@@ -1,1 +1,1 @@
-export { default } from '@/screens/TeamsScreen';
+export { default } from '@/screens/teams/TeamsScreen';

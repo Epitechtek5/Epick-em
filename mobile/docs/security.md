@@ -1,6 +1,17 @@
 # Dependency security
 
-## Audit snapshot: 2026-10-20
+## Current audit snapshot: 2026-10-28
+
+The strict audit is **blocked by one unresolved upstream advisory**. The full tree reports 15 affected packages and the production tree reports 13; every entry propagates the same low-severity `deepmerge` advisory. Both audit commands exit with status 1, and the CI security job must remain failing until a compatible upstream fix is available.
+
+| Tree              | Low | Moderate | High | Critical |
+| ----------------- | --: | -------: | ---: | -------: |
+| Full tree         |  15 |        0 |    0 |        0 |
+| `--omit=dev` tree |  13 |        0 |    0 |        0 |
+
+The counts represent affected packages, not distinct advisories. The audit script reports the package, GHSA, severity, affected range and remediation information, and runs both tree scans before failing. Reproduce the current result with `node scripts/audit-security.mjs` from `mobile/`.
+
+### Historical snapshot: 2026-10-20
 
 The zero moderate/high/critical target is **not met**. Full and production audits both exit with status 1. Only the exact temporary exceptions below are accepted by CI; unexpected findings and audit failures fail CI, and neither Expo nor React Native was downgraded. `npm audit fix --force` was not used.
 
@@ -13,6 +24,10 @@ The zero moderate/high/critical target is **not met**. Full and production audit
 The final counts reflect two distinct high-severity advisories propagated through dependent packages. Adding the requested Jest stack adds propagation through Jest/Metro dependencies, increasing the number of flagged packages without adding another distinct high advisory. npm counts affected dependency packages, not independent exploitable application flaws. Generated audit reports and dependency-path logs are intentionally not tracked in Git. Reproduce current findings with the security audit script; the counts above are historical snapshots, not permanent assurances.
 
 ## Unresolved upstream blockers
+
+| Dependency and path                                                             | Advisory and affected range                                                                      | Exposure and blocker                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expo → @expo/config → deepmerge@4.3.1`; `jest → jest-config → deepmerge@4.3.1` | [GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4), `>=4.2.0 <=4.3.1`, low | The advisory describes prototype poisoning in `mergeObject`; it lists no patched release. npm currently publishes `deepmerge@4.3.1` as latest and `deepmerge@4.3.2` is unavailable. Expo SDK 58's `@expo/config@58.0.8` and Jest 30's `jest-config@30.5.2` both require `deepmerge ^4.3.1`. The source call sites merge local app configuration, plugin properties and Jest options, rather than mobile-user API data. However, npm reports the package in both full and production trees, so this is not a clean production audit. npm's proposed Expo 51 downgrade does not patch `deepmerge` and violates the SDK 58 baseline. No override or exception is safe to claim as remediation. |
 
 | Dependency and path                                                                               | Advisory and affected range                                                                                | Exposure and blocker                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,11 +58,11 @@ No application secrets are configured. The Docker context excludes credentials a
 
 ## CI/CD review confirmation
 
-The review re-queried npm and the two GitHub advisories on 2026-10-20. The published latest versions remain braces 3.0.3 and node-forge 1.4.0, and both advisories still list no patched release. No dependency downgrade, ignored audit execution failure, or branch-protection exception was introduced. CI accepts only the exact temporary advisory/package pairs documented below. Fresh audit evidence and exit statuses appear in the implementation report. The PR paths-filter permission is read-only and scoped to change detection; it does not weaken the security gate.
+The review re-queried npm and the GitHub advisory on 2026-10-28. The advisory still lists no patched `deepmerge` release. No dependency downgrade, ignored audit execution failure, or branch-protection exception was introduced. CI accepts only the exact temporary advisory/package pairs documented below; `deepmerge` remains unexpected. The PR paths-filter permission is read-only and scoped to change detection; it does not weaken the security gate.
 
 ## Temporary CI exceptions
 
-Run `node scripts/audit-security.mjs` from `mobile/`. The security job runs the deterministic tests with `node --test scripts/audit-security.test.mjs` before invoking the gate. Tests use only the small synthetic npm audit v2 reports in `scripts/__fixtures__/audit-full.json` and `audit-production.json`, including propagated dependency entries and matching metadata counts. Each test reads a fresh copy; neither tests nor fixtures require generated reports, a `docs/evidence/` directory, installed dependencies, or network access. These fixtures model policy behavior, not the current dependency inventory. The gate executes `npm audit --json` and `npm audit --omit=dev --json` sequentially, with a two-minute timeout per command. It stops immediately on a failure.
+Run `node scripts/audit-security.mjs` from `mobile/`. The security job runs the deterministic tests with `node --test scripts/audit-security.test.mjs` before invoking the gate. Tests use only the small synthetic npm audit v2 reports in `scripts/__fixtures__/audit-full.json` and `audit-production.json`, including propagated dependency entries and matching metadata counts. Each test reads a fresh copy; neither tests nor fixtures require generated reports, a `docs/evidence/` directory, installed dependencies, or network access. These fixtures model policy behavior, not the current dependency inventory. The gate executes `npm audit --json` and `npm audit --omit=dev --json` sequentially, with a two-minute timeout per command. It attempts both scans, reports each result and fails after collecting the findings.
 
 The only accepted advisory/package pairs are:
 

@@ -6,13 +6,13 @@ import {
 } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import { router } from 'expo-router';
-import GameDetailsScreen from '../src/screens/GameDetailsScreen';
-import StatsScreen from '../src/screens/StatsScreen';
-import GameStatsManagementScreen from '../src/screens/GameStatsManagementScreen';
+import GameDetailsScreen from '../src/screens/games/GameDetailsScreen';
+import StatsScreen from '../src/screens/stats/StatsScreen';
+import GameStatsManagementScreen from '../src/screens/games/GameStatsManagementScreen';
 import {
   CreateStatScreen,
   EditStatScreen,
-} from '../src/screens/StatEditorScreen';
+} from '../src/screens/stats/StatEditorScreen';
 import { useAuth } from '../src/features/auth/session';
 import * as gameApi from '../src/features/games/api';
 import * as statsApi from '../src/features/stats/api';

@@ -2,6 +2,8 @@
 
 The application uses Expo SDK 58, React Native 0.88, React 19.3 and TypeScript 6. Expo Router owns the entry point (`expo-router/entry`) and discovers routes in `src/app/`.
 
+Route modules stay in `src/app/` and export screens from `src/screens/`. Screens are grouped by domain: `auth/`, `account/`, `games/`, `stats/`, `teams/` and `users/`. Shared presentation belongs in `src/components/`; API access, types and domain behavior belong in `src/features/`. Cross-cutting utilities, theme tokens and translations remain in `src/lib/`, `src/theme/` and `src/i18n/`. Keep route identifiers and navigation in Expo Router; screen moves do not change route paths.
+
 Public routes are `/login` and `/register`. The root redirects an authenticated session to the Settings tab. The `(authenticated)` layout waits for restoration and redirects missing sessions to Login. Expo Router owns the root Stack, authenticated Stack and Tabs; there is no independent navigator or navigation container. Settings and Users tabs expose account details and pagination; UUID detail and administrator routes are stack screens.
 
 `src/features/auth/client.ts` owns token storage, restoration, refresh and logout. `session.tsx` supplies React state and current profile lookup. `src/lib/api.ts` centralizes HTTP status handling and empty 204 responses. Account API functions use the session request handler, including Bearer headers, expiry checks and bounded retries. Reusable forms and screens live outside `src/app/`.

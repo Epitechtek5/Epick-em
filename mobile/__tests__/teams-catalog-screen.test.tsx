@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react-native';
 import { colorScheme } from 'nativewind';
 import { router } from 'expo-router';
-import TeamsScreen from '../src/screens/TeamsScreen';
+import TeamsScreen from '../src/screens/teams/TeamsScreen';
 import { useAuth } from '../src/features/auth/session';
 import * as gameApi from '../src/features/games/api';
 import * as teamApi from '../src/features/teams/api';

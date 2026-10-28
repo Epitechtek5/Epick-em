@@ -1,1 +1,1 @@
-export { TeamMembersScreen as default } from '@/screens/TeamMembersScreen';
+export { TeamMembersScreen as default } from '@/screens/teams/TeamMembersScreen';

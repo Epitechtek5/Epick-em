@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, act } from '@testing-library/react-native';
-import RegisterScreen from '../src/screens/RegisterScreen';
+import RegisterScreen from '../src/screens/auth/RegisterScreen';
 import { useAuth } from '../src/features/auth/session';
 import { register } from '../src/features/auth/register';
 import i18n from '../src/i18n';

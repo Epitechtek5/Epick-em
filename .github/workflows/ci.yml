@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   changes:
+    name: Detect Changed Components
     permissions:
       contents: read
       pull-requests: read
@@ -25,8 +26,10 @@ jobs:
       mobile: ${{ steps.filter.outputs.mobile }}
       deploy: ${{ steps.filter.outputs.deploy }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Classify changed components
+        uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
@@ -52,35 +55,42 @@ jobs:
 
   # Scan the entire history on every run to enforce ADR-007.
   gitleaks:
+    name: Scan Git History for Secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out full Git history
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Scan for secrets
         run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --no-banner --redact -v
 
   backend:
+    name: Backend — Build & Tests
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     uses: ./.github/workflows/backend.yml
 
   db:
+    name: Database — Migration Checks
     needs: changes
     if: needs.changes.outputs.db == 'true'
     uses: ./.github/workflows/db.yml
 
   web:
+    name: Web — Build & Tests
     needs: changes
     if: needs.changes.outputs.web == 'true'
     uses: ./.github/workflows/web.yml
 
   mobile:
+    name: Mobile — Code Quality, Tests & Security
     needs: changes
     if: needs.changes.outputs.mobile == 'true'
     uses: ./.github/workflows/mobile.yml
 
   deploy:
+    name: Deployment — Configuration Checks
     needs: changes
     if: needs.changes.outputs.deploy == 'true'
     uses: ./.github/workflows/deploy.yml
@@ -91,32 +101,7 @@ jobs:
     needs: [changes, gitleaks, backend, db, web, mobile, deploy]
     runs-on: ubuntu-latest
     steps:
-      # Reject failed, cancelled, missing, or unexpectedly skipped component checks.
-      - name: Verify every job result
+      - name: Validate required component checks
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: |
-          result() { jq -r --arg j "$1" '.[$j].result' <<<"$NEEDS"; }
-          ok=true
-
-          for job in changes gitleaks; do
-            r=$(result "$job")
-            echo "$job : $r"
-            [ "$r" = success ] || { echo "::error::$job must succeed (result: $r)"; ok=false; }
-          done
-
-          for job in backend db web mobile deploy; do
-            r=$(result "$job")
-            changed=$(jq -r --arg j "$job" '.changes.outputs[$j]' <<<"$NEEDS")
-            echo "$job : $r (changed: $changed)"
-            if [ "$changed" = true ]; then
-              [ "$r" = success ] || { echo "::error::$job changed and must succeed (result: $r)"; ok=false; }
-            elif [ "$changed" = false ]; then
-              [ "$r" = skipped ] || { echo "::error::$job unchanged, unexpected result: $r"; ok=false; }
-            else
-              echo "::error::$job has an invalid change-filter output: $changed"
-              ok=false
-            fi
-          done
-
-          $ok
+        run: python3 scripts/ci/validate_required_checks.py

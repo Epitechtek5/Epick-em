@@ -1,1 +1,1 @@
-export { default } from '@/screens/TeamTransferScreen';
+export { default } from '@/screens/teams/TeamTransferScreen';

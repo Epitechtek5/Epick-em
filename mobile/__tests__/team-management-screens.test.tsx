@@ -9,8 +9,8 @@ import { useAuth } from '../src/features/auth/session';
 import * as gameApi from '../src/features/games/api';
 import * as teamApi from '../src/features/teams/api';
 import * as userApi from '../src/features/users/api';
-import { TeamDetailsScreen } from '../src/screens/TeamDetailsScreen';
-import { TeamMembersScreen } from '../src/screens/TeamMembersScreen';
+import { TeamDetailsScreen } from '../src/screens/teams/TeamDetailsScreen';
+import { TeamMembersScreen } from '../src/screens/teams/TeamMembersScreen';
 import i18n from '../src/i18n';
 
 jest.mock('react-native-safe-area-context', () => ({

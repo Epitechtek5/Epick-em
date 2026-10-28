@@ -1,1 +1,1 @@
-export { EditGameScreen as default } from '@/screens/GameEditorScreen';
+export { EditGameScreen as default } from '@/screens/games/GameEditorScreen';

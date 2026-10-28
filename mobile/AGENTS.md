@@ -44,7 +44,9 @@ All code is reviewed by humans. Optimize for clarity, maintainability and correc
 
 - Use Expo Router as the single navigation system.
 - Keep routes and route layouts in `src/app/`.
+- Place screen implementations in the matching `src/screens/<domain>/` directory (`auth`, `account`, `games`, `stats`, `teams` or `users`). Keep route files in `src/app/` thin and declarative.
 - Keep business logic, API clients, authentication services, validation and reusable UI outside `src/app/`.
+- Preserve the separation between screen presentation, reusable UI in `src/components/`, domain code in `src/features/`, cross-cutting utilities in `src/lib/`, tokens in `src/theme/` and translations in `src/i18n/`.
 - Never create a second independent navigation container.
 - Protect authenticated routes through a consistent session state.
 - Keep public authentication routes accessible to unauthenticated users.
@@ -73,13 +75,17 @@ All code is reviewed by humans. Optimize for clarity, maintainability and correc
 ## 6. Dependency security
 
 - Check whether an existing dependency or native API already satisfies the requirement.
+- Inspect the existing dependency tree before adding a package.
 - Add packages only when strictly necessary.
 - Use `npx expo install` for Expo and React Native dependencies to maintain SDK compatibility.
 - Check package versions, compatibility, maintenance and known security vulnerabilities before installation.
+- Review direct and transitive advisories before adopting dependencies; run the strict full-tree and production security audits after dependency changes.
 - Never knowingly introduce vulnerable dependencies.
+- Prefer upstream security fixes over dependency overrides. Do not silently accept advisories or add arbitrary exceptions.
 - Update `package.json` and `package-lock.json` together.
 - Preserve reproducible installations with `npm ci`.
 - Do not use `--force`, `--legacy-peer-deps` or broad dependency upgrades to bypass conflicts.
+- Never downgrade Expo or accept an unsupported dependency combination to make an audit pass.
 - Never disable security audits, weaken security policies or add vulnerability exceptions to make CI pass.
 - If a secure and compatible dependency cannot be found, report the blocker rather than silently accepting the risk.
 
@@ -190,4 +196,4 @@ Code must look and read like carefully written, professionally reviewed human co
 
 Code should be concise because it is well designed, not because it is compressed.
 
-**The goal is the smallest maintainable
+**The goal is the smallest maintainable change that fully satisfies the task.**

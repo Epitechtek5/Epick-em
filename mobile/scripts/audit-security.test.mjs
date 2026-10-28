@@ -18,7 +18,7 @@ test('accepts only the known advisories, including propagated dependencies in bo
   }
 });
 
-for (const severity of ['moderate', 'high', 'critical']) {
+for (const severity of ['low', 'moderate', 'high', 'critical']) {
   test(`rejects a new ${severity} advisory on an allowed package`, () => {
     const report = fixture();
     report.vulnerabilities.braces.via.push({
@@ -110,26 +110,100 @@ test('rejects spawn failures, timeouts, signals and unexpected exit codes', () =
   );
 });
 
-test('runs both exact audit commands and fails if the production audit cannot complete', () => {
+test('runs both exact audit commands even when the full-tree audit finds an advisory', () => {
   const calls = [];
+  const messages = [];
   assert.throws(
     () =>
       runAudits(
         (command, args, options) => {
           calls.push([command, args]);
           assert.equal(options.timeout, 120_000);
-          return calls.length === 1
-            ? result(fixture())
-            : { status: null, signal: 'SIGTERM' };
+          const report = fixture();
+          if (calls.length === 1) {
+            report.vulnerabilities.deepmerge = {
+              name: 'deepmerge',
+              severity: 'low',
+              via: [
+                {
+                  name: 'deepmerge',
+                  dependency: 'deepmerge',
+                  severity: 'low',
+                  url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz',
+                  range: '>=4.2.0 <=4.3.1',
+                  title: 'Synthetic low severity advisory',
+                },
+              ],
+              effects: [],
+              range: '>=4.2.0',
+              nodes: ['node_modules/deepmerge'],
+              fixAvailable: {
+                name: 'expo',
+                version: '51.0.39',
+                isSemVerMajor: true,
+              },
+            };
+            report.metadata.vulnerabilities.low++;
+            report.metadata.vulnerabilities.total++;
+            return result(report);
+          }
+          return { status: null, signal: 'SIGTERM' };
         },
-        () => {},
+        (message) => messages.push(message),
       ),
-    /execution failed/,
+    /Production tree: Audit execution failed/,
   );
   assert.deepEqual(calls, [
     ['npm', ['audit', '--json']],
     ['npm', ['audit', '--omit=dev', '--json']],
   ]);
+  assert.ok(
+    messages.some((message) =>
+      message.includes(
+        'deepmerge: GHSA-xxxx-yyyy-zzzz | low | affected >=4.2.0 <=4.3.1',
+      ),
+    ),
+  );
+  assert.ok(messages.some((message) => message.startsWith('Production tree:')));
+});
+
+test('reports advisory scope and rejects an unrelated major-version suggestion as a fix', () => {
+  const report = fixture();
+  report.vulnerabilities.deepmerge = {
+    name: 'deepmerge',
+    severity: 'low',
+    via: [
+      {
+        name: 'deepmerge',
+        dependency: 'deepmerge',
+        severity: 'low',
+        url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz',
+        range: '>=4.2.0 <=4.3.1',
+        title: 'Synthetic low severity advisory',
+      },
+    ],
+    effects: [],
+    range: '>=4.2.0',
+    nodes: ['node_modules/deepmerge'],
+    fixAvailable: {
+      name: 'expo',
+      version: '51.0.39',
+      isSemVerMajor: true,
+    },
+  };
+  report.metadata.vulnerabilities.low++;
+  report.metadata.vulnerabilities.total++;
+
+  const [finding] = inspectAudit(result(report)).unexpected;
+  assert.deepEqual(finding, {
+    package: 'deepmerge',
+    advisory: 'GHSA-xxxx-yyyy-zzzz',
+    severity: 'low',
+    affectedRange: '>=4.2.0 <=4.3.1',
+    title: 'Synthetic low severity advisory',
+    remediation:
+      'npm proposes expo@51.0.39 (major version change; check compatibility), which does not replace deepmerge.',
+  });
 });
 
 test('accepts a complete clean report and rejects inconsistent status', () => {
