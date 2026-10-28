@@ -12,7 +12,7 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 |---|---|---|---|
 | `GET /health` | aucune | — | `200` `ok` |
 | `GET /hello` | aucune | — | `200` `Hello, world!` |
-| `POST /register` | aucune | `{ username, password }` | `201` `{ id, username }` |
+| `POST /register` | aucune | `{ username, password }` | `201` jetons (voir ci-dessous) |
 | `POST /login` | aucune | `{ username, password }` | `200` jetons (voir ci-dessous) |
 | `POST /refresh` | JWT, **expiré toléré** | `{ refresh_token }` | `200` nouveaux jetons |
 | `POST /logout` | JWT valide | `{ refresh_token }` | `204` |
@@ -26,7 +26,7 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
 
-### Réponse de `/login` et `/refresh`
+### Réponse de `/register`, `/login` et `/refresh`
 
 ```json
 {

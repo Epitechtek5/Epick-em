@@ -75,12 +75,6 @@ struct RefreshRequest {
 }
 
 #[derive(Serialize, ToSchema)]
-struct RegisterResponse {
-    id: Uuid,
-    username: String,
-}
-
-#[derive(Serialize, ToSchema)]
 struct TokenResponse {
     access_token: String,
     refresh_token: String,
@@ -124,14 +118,14 @@ fn decode_claims(token: &str, secret: &str, check_expiry: bool) -> Option<Claims
     .map(|data| data.claims)
 }
 
-/// Crée un compte.
+/// Crée un compte et renvoie directement les jetons, comme `/login`.
 #[utoipa::path(
     post,
     path = "/register",
     tag = "auth",
     request_body = Credentials,
     responses(
-        (status = 201, description = "Compte créé", body = RegisterResponse),
+        (status = 201, description = "Compte créé, jetons émis", body = TokenResponse),
         (status = 400, description = "Requête invalide", body = ErrorResponse),
         (status = 409, description = "Nom d'utilisateur déjà pris", body = ErrorResponse),
     ),
@@ -153,10 +147,17 @@ async fn register(
             StoreError::UsernameTaken => ApiError::Conflict,
             other => ApiError::internal(other),
         })?;
-    Ok(HttpResponse::Created().json(RegisterResponse {
-        id: user.id,
-        username: user.username,
-    }))
+    let refresh_token = new_refresh_token();
+    state
+        .store
+        .insert_refresh_token(
+            user.id,
+            &hash_token(&refresh_token),
+            state.config.refresh_token_ttl,
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(HttpResponse::Created().json(token_response(&state.config, &user, refresh_token)?))
 }
 
 /// Échange des identifiants contre un jeton d'accès et un jeton de rafraîchissement.
