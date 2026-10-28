@@ -28,10 +28,12 @@ pub enum ApiError {
     Unauthorized,
     /// Authentifié, mais sans le rôle exigé ou sans droit sur cette ressource.
     Forbidden,
-    /// Compte introuvable.
+    /// Compte ou jeu introuvable.
     NotFound,
     /// Nom d'utilisateur déjà pris.
     Conflict,
+    /// Nom de jeu déjà pris.
+    GameNameTaken,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -54,15 +56,16 @@ impl ApiError {
                 "Identifiants ou jeton invalides",
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Action non autorisée"),
-            ApiError::NotFound => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "Utilisateur introuvable",
-            ),
+            ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Ressource introuvable"),
             ApiError::Conflict => (
                 StatusCode::CONFLICT,
                 "username_taken",
                 "Ce nom d'utilisateur est déjà pris",
+            ),
+            ApiError::GameNameTaken => (
+                StatusCode::CONFLICT,
+                "game_name_taken",
+                "Ce nom de jeu est déjà pris",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

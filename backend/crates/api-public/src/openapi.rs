@@ -24,6 +24,7 @@ use utoipa::{Modify, OpenApi};
     tags(
         (name = "auth", description = "Inscription, connexion et jetons"),
         (name = "users", description = "Consultation et gestion des comptes"),
+        (name = "games", description = "Consultation et administration des jeux"),
         (name = "system", description = "Santé du service"),
     ),
     modifiers(&BearerAuth),
