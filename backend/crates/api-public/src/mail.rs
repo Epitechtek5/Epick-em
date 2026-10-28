@@ -130,7 +130,7 @@ impl Mailer for ResendMailer {
 fn reset_text(link: &str) -> String {
     format!(
         "Vous avez demandé à réinitialiser votre mot de passe Epick'em.\n\n\
-         Ouvrez ce lien pour en choisir un nouveau (valable une heure) :\n{link}\n\n\
+         Ouvrez ce lien pour en choisir un nouveau (valable 15 minutes) :\n{link}\n\n\
          Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : \
          votre mot de passe reste inchangé."
     )
@@ -139,7 +139,7 @@ fn reset_text(link: &str) -> String {
 fn reset_html(link: &str) -> String {
     format!(
         "<p>Vous avez demandé à réinitialiser votre mot de passe Epick'em.</p>\
-         <p><a href=\"{link}\">Choisir un nouveau mot de passe</a> (lien valable une heure).</p>\
+         <p><a href=\"{link}\">Choisir un nouveau mot de passe</a> (lien valable 15 minutes).</p>\
          <p>Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : \
          votre mot de passe reste inchangé.</p>"
     )
@@ -217,6 +217,12 @@ mod tests {
         .unwrap();
         assert_eq!(config.from, "a@b.fr");
         assert_eq!(config.reset_url, "epickem://reset");
+    }
+
+    #[test]
+    fn message_announces_the_validity() {
+        assert!(reset_text("l").contains("15 minutes"));
+        assert!(reset_html("l").contains("15 minutes"));
     }
 
     #[test]

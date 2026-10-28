@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 use utoipa_actix_web::service_config::ServiceConfig;
 
 /// Durée de validité d'un lien de réinitialisation.
-pub const RESET_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
+pub const RESET_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
 pub const EMAIL_MAX: usize = 254;
 
 /// Routes de réinitialisation du mot de passe, avec leur documentation OpenAPI.
@@ -153,6 +153,12 @@ mod tests {
             assert!(email_error(bad).is_some(), "{bad}");
         }
         assert!(email_error(&format!("{}@b.fr", "a".repeat(250))).is_some());
+    }
+
+    /// Le message envoyé annonce cette durée (`mail.rs`).
+    #[test]
+    fn links_are_valid_for_fifteen_minutes() {
+        assert_eq!(RESET_TOKEN_TTL, Duration::from_secs(15 * 60));
     }
 
     #[test]
