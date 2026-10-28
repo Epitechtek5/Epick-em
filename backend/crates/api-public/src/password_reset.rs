@@ -90,7 +90,7 @@ async fn forgot_password(
             .insert_password_reset_token(user.id, &hash_token(&token), RESET_TOKEN_TTL)
             .await
             .map_err(ApiError::internal)?;
-        let link = reset_link(&state.reset_url, &token);
+        let link = reset_link(&state.public_url, &token);
         let mailer = state.mailer.clone();
         // En tâche de fond : la durée de la réponse ne dépend pas de l'existence du compte, et
         // une panne de Resend ne change pas la réponse (elle est seulement journalisée).

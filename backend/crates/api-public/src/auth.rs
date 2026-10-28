@@ -31,7 +31,7 @@ pub const USERNAME_MIN: usize = 3;
 pub const USERNAME_MAX: usize = 32;
 pub const PASSWORD_MIN: usize = 8;
 pub const PASSWORD_MAX: usize = 128;
-const DEFAULT_RESET_URL: &str = "http://localhost:3000/reset-password";
+const DEFAULT_PUBLIC_URL: &str = "http://localhost:3000";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -42,8 +42,8 @@ pub struct AppState {
     dummy_hash: Arc<str>,
     /// Envoi des e-mails ; par défaut [`NoopMailer`] (Resend n'est pas branché).
     pub(crate) mailer: Arc<dyn Mailer>,
-    /// Début du lien de réinitialisation envoyé par e-mail.
-    pub(crate) reset_url: Arc<str>,
+    /// Origine publique du site, début des liens envoyés par e-mail.
+    pub(crate) public_url: Arc<str>,
 }
 
 impl AppState {
@@ -57,15 +57,15 @@ impl AppState {
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
-            reset_url: DEFAULT_RESET_URL.into(),
+            public_url: DEFAULT_PUBLIC_URL.into(),
         })
     }
 
-    /// Branche l'envoi des e-mails ; `reset_url` est le début du lien de réinitialisation du
-    /// mot de passe (le jeton s'y ajoute en paramètre `token`).
-    pub fn with_mailer(mut self, mailer: Arc<dyn Mailer>, reset_url: &str) -> Self {
+    /// Branche l'envoi des e-mails ; `public_url` est l'origine publique du site (ex.
+    /// `https://epickem.app`) : le lien de réinitialisation du mot de passe en est déduit.
+    pub fn with_mailer(mut self, mailer: Arc<dyn Mailer>, public_url: &str) -> Self {
         self.mailer = mailer;
-        self.reset_url = reset_url.into();
+        self.public_url = public_url.into();
         self
     }
 }

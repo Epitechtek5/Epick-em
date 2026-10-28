@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const RESET_URL: &str = "https://epickem.test/reset-password";
+pub const PUBLIC_URL: &str = "https://epickem.test";
 pub const SECRET: &str = "0123456789abcdef0123456789abcdef";
 
 /// L'application complète (garde d'authentification comprise) sur le store donné.
@@ -34,7 +34,7 @@ pub async fn app_with(
     test::init_service(app(state)).await
 }
 
-/// Comme [`app_with`], avec `mailer` branché et le lien de réinitialisation `RESET_URL`.
+/// Comme [`app_with`], avec `mailer` branché et l'origine publique `PUBLIC_URL`.
 pub async fn app_with_mailer(
     store: Arc<MemoryStore>,
     mailer: Arc<MemoryMailer>,
@@ -50,7 +50,7 @@ pub async fn app_with_mailer(
     };
     let state = AppState::new(store, config)
         .unwrap()
-        .with_mailer(mailer, RESET_URL);
+        .with_mailer(mailer, PUBLIC_URL);
     test::init_service(app(state)).await
 }
 

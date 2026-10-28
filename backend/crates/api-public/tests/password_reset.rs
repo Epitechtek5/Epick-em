@@ -6,7 +6,7 @@ use actix_web::http::StatusCode;
 use api_public::config::AuthConfig;
 use api_public::mail::{MailConfig, Mailer, MemoryMailer, ResendMailer};
 use api_public::store::{AuthStore, MemoryStore};
-use common::{RESET_URL, access, app_with_mailer, login, post, post_as};
+use common::{PUBLIC_URL, access, app_with_mailer, login, post, post_as};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,7 +42,7 @@ async fn wait_for_mails(mailer: &MemoryMailer, count: usize) -> Vec<(String, Str
 }
 
 fn token_of(link: &str) -> &str {
-    link.strip_prefix(&format!("{RESET_URL}?token="))
+    link.strip_prefix(&format!("{PUBLIC_URL}/reset-password?token="))
         .expect("lien de réinitialisation")
 }
 
@@ -366,7 +366,7 @@ fn mail_config() -> MailConfig {
     MailConfig {
         api_key: "re_test_key".into(),
         from: "Epick'em <no-reply@epickem.test>".into(),
-        reset_url: RESET_URL.into(),
+        public_url: PUBLIC_URL.into(),
     }
 }
 

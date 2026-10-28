@@ -30,7 +30,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?;
     let state = match MailConfig::from_env() {
-        Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.reset_url),
+        Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
         None => {
             eprintln!("api-public : RESEND_API_KEY absente, les e-mails ne seront pas envoyés");
             state

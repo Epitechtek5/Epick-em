@@ -35,8 +35,9 @@ pub struct MailConfig {
     pub api_key: String,
     /// Expéditeur, sur un domaine vérifié chez Resend (ex. `Epick'em <no-reply@epickem.app>`).
     pub from: String,
-    /// Début du lien envoyé : le jeton y est ajouté en paramètre `token`.
-    pub reset_url: String,
+    /// Origine publique du site (ex. `https://epickem.app`), sans chemin : les liens des
+    /// e-mails en sont déduits.
+    pub public_url: String,
 }
 
 // Écrit à la main pour ne jamais journaliser la clé d'API.
@@ -45,7 +46,7 @@ impl fmt::Debug for MailConfig {
         f.debug_struct("MailConfig")
             .field("api_key", &"<masqué>")
             .field("from", &self.from)
-            .field("reset_url", &self.reset_url)
+            .field("public_url", &self.public_url)
             .finish()
     }
 }
@@ -62,16 +63,21 @@ impl MailConfig {
         Some(MailConfig {
             api_key: get("RESEND_API_KEY")?,
             from: get("MAIL_FROM").unwrap_or_else(|| "Epick'em <onboarding@resend.dev>".into()),
-            reset_url: get("PASSWORD_RESET_URL")
-                .unwrap_or_else(|| "http://localhost:3000/reset-password".into()),
+            public_url: get("PUBLIC_URL").unwrap_or_else(|| "http://localhost:3000".into()),
         })
     }
 }
 
-/// Lien envoyé par e-mail : `reset_url` suivi du jeton (hexadécimal, donc sans échappement).
-pub fn reset_link(reset_url: &str, token: &str) -> String {
-    let separator = if reset_url.contains('?') { '&' } else { '?' };
-    format!("{reset_url}{separator}token={token}")
+/// Route de la page (web, ou app mobile via les liens universels) qui reçoit le jeton.
+pub const RESET_PATH: &str = "/reset-password";
+
+/// Lien envoyé par e-mail : l'origine du site, [`RESET_PATH`] et le jeton (hexadécimal, donc
+/// sans échappement).
+pub fn reset_link(public_url: &str, token: &str) -> String {
+    format!(
+        "{}{RESET_PATH}?token={token}",
+        public_url.trim_end_matches('/')
+    )
 }
 
 pub struct ResendMailer {
@@ -207,16 +213,16 @@ mod tests {
     fn config_has_defaults_and_hides_the_key() {
         let config = config(&[("RESEND_API_KEY", "re_secret")]).unwrap();
         assert!(config.from.contains("resend.dev"));
-        assert!(config.reset_url.ends_with("/reset-password"));
+        assert_eq!(config.public_url, "http://localhost:3000");
         assert!(!format!("{config:?}").contains("re_secret"));
         let config = self::config(&[
             ("RESEND_API_KEY", "k"),
             ("MAIL_FROM", "a@b.fr"),
-            ("PASSWORD_RESET_URL", "epickem://reset"),
+            ("PUBLIC_URL", "https://epickem.app"),
         ])
         .unwrap();
         assert_eq!(config.from, "a@b.fr");
-        assert_eq!(config.reset_url, "epickem://reset");
+        assert_eq!(config.public_url, "https://epickem.app");
     }
 
     #[test]
@@ -228,12 +234,12 @@ mod tests {
     #[test]
     fn link_appends_the_token() {
         assert_eq!(
-            reset_link("https://x.fr/reset", "abc"),
-            "https://x.fr/reset?token=abc"
+            reset_link("https://x.fr", "abc"),
+            "https://x.fr/reset-password?token=abc"
         );
         assert_eq!(
-            reset_link("https://x.fr/r?a=1", "abc"),
-            "https://x.fr/r?a=1&token=abc"
+            reset_link("https://x.fr/", "abc"),
+            "https://x.fr/reset-password?token=abc"
         );
     }
 }
