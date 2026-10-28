@@ -1,0 +1,3 @@
+# Synthetic JWT signing key in the export-cache integration test (not a credential).
+# Sans hash de commit pour rester valable après un rebase.
+backend/crates/api-public/tests/export_cache.rs:generic-api-key:35
