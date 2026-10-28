@@ -3,11 +3,12 @@
 use super::teams::now_rfc3339;
 use super::{
     AuthStore, Game, GameInput, GameUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
-    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate,
-    StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament,
-    TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus, TournamentTeam,
-    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
-    UserUpdate,
+    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step,
+    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepParticipantStatus,
+    StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole,
+    TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentParticipant,
+    TournamentStatus, TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate,
+    UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -38,6 +39,9 @@ struct State {
     scoring_rules: Vec<ScoringRule>,
     participants: Vec<TournamentParticipant>,
     points: HashMap<Uuid, f64>,
+    steps: Vec<Step>,
+    step_groups: Vec<StepGroup>,
+    step_participants: Vec<StepParticipant>,
 }
 
 #[derive(Default)]
@@ -1203,6 +1207,7 @@ impl AuthStore for MemoryStore {
         let mut state = self.state();
         let before = state.participants.len();
         state.participants.retain(|p| p.id != id);
+        state.step_participants.retain(|p| p.participant_id != id);
         Ok(state.participants.len() != before)
     }
 
@@ -1211,12 +1216,212 @@ impl AuthStore for MemoryStore {
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError> {
         let state = self.state();
-        Ok(state
+        let mut points: HashMap<Uuid, f64> = state
             .participants
             .iter()
             .filter(|p| p.tournament_id == tournament_id)
             .filter_map(|p| state.points.get(&p.id).map(|points| (p.id, *points)))
-            .collect())
+            .collect();
+        for step in state
+            .steps
+            .iter()
+            .filter(|s| s.tournament_id == tournament_id)
+        {
+            for member in state
+                .step_participants
+                .iter()
+                .filter(|p| p.step_id == step.id)
+            {
+                *points.entry(member.participant_id).or_default() += member.points;
+            }
+        }
+        Ok(points)
+    }
+
+    async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError> {
+        let mut steps: Vec<Step> = self
+            .state()
+            .steps
+            .iter()
+            .filter(|s| s.tournament_id == tournament_id)
+            .cloned()
+            .collect();
+        steps.sort_by_key(|s| s.position);
+        Ok(steps)
+    }
+
+    async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError> {
+        Ok(self.state().steps.iter().find(|s| s.id == id).cloned())
+    }
+
+    async fn create_step(&self, input: StepInput) -> Result<Option<Step>, StoreError> {
+        let mut state = self.state();
+        if !state
+            .tournaments
+            .iter()
+            .any(|t| t.id == input.tournament_id)
+        {
+            return Ok(None);
+        }
+        let definition = input.definition;
+        if state
+            .steps
+            .iter()
+            .any(|s| s.tournament_id == input.tournament_id && s.position == definition.position)
+        {
+            return Err(StoreError::StepPositionTaken);
+        }
+        let now = now_rfc3339();
+        let step = Step {
+            id: Uuid::new_v4(),
+            tournament_id: input.tournament_id,
+            position: definition.position,
+            format: definition.format,
+            match_type: definition.match_type,
+            group_count: definition.group_count,
+            group_size: definition.group_size,
+            matches_per_group: definition.matches_per_group,
+            advance_per_group: definition.advance_per_group,
+            tiebreak: definition.tiebreak,
+            status: StepStatus::Pending,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        state.steps.push(step.clone());
+        Ok(Some(step))
+    }
+
+    async fn replace_step(
+        &self,
+        id: Uuid,
+        definition: StepDefinition,
+    ) -> Result<Option<Step>, StoreError> {
+        let mut state = self.state();
+        let Some(tournament_id) = state
+            .steps
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.tournament_id)
+        else {
+            return Ok(None);
+        };
+        if state.steps.iter().any(|s| {
+            s.id != id && s.tournament_id == tournament_id && s.position == definition.position
+        }) {
+            return Err(StoreError::StepPositionTaken);
+        }
+        let Some(step) = state.steps.iter_mut().find(|s| s.id == id) else {
+            return Ok(None);
+        };
+        step.position = definition.position;
+        step.format = definition.format;
+        step.match_type = definition.match_type;
+        step.group_count = definition.group_count;
+        step.group_size = definition.group_size;
+        step.matches_per_group = definition.matches_per_group;
+        step.advance_per_group = definition.advance_per_group;
+        step.tiebreak = definition.tiebreak;
+        step.updated_at = now_rfc3339();
+        Ok(Some(step.clone()))
+    }
+
+    async fn delete_step(&self, id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let before = state.steps.len();
+        state.remove_step(id);
+        Ok(state.steps.len() != before)
+    }
+
+    async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError> {
+        let mut groups: Vec<StepGroup> = self
+            .state()
+            .step_groups
+            .iter()
+            .filter(|g| g.step_id == step_id)
+            .cloned()
+            .collect();
+        groups.sort_by_key(|g| g.index);
+        Ok(groups)
+    }
+
+    async fn list_step_participants(
+        &self,
+        step_id: Uuid,
+    ) -> Result<Vec<StepParticipant>, StoreError> {
+        let state = self.state();
+        let index_of = |group_id: Uuid| {
+            state
+                .step_groups
+                .iter()
+                .find(|g| g.id == group_id)
+                .map_or(0, |g| g.index)
+        };
+        let mut members: Vec<StepParticipant> = state
+            .step_participants
+            .iter()
+            .filter(|p| p.step_id == step_id)
+            .cloned()
+            .collect();
+        members.sort_by_key(|p| (index_of(p.group_id), p.participant_id));
+        Ok(members)
+    }
+
+    async fn start_step(&self, start: StepStart) -> Result<Option<Step>, StoreError> {
+        self.state().start_step(start)
+    }
+
+    async fn close_step(&self, closing: StepClosing) -> Result<Option<Step>, StoreError> {
+        let mut state = self.state();
+        let Some(step) = state.steps.iter().find(|s| s.id == closing.step_id) else {
+            return Ok(None);
+        };
+        if step.status != StepStatus::Ongoing {
+            return Err(StoreError::StepState);
+        }
+        // L'étape suivante est lancée d'abord : si elle échoue, rien n'a changé.
+        let mut scratch = State {
+            steps: state.steps.clone(),
+            step_groups: state.step_groups.clone(),
+            step_participants: state.step_participants.clone(),
+            participants: state.participants.clone(),
+            ..State::default()
+        };
+        if let Some(next) = closing.next {
+            scratch.start_step(next)?;
+        }
+        for outcome in &closing.outcomes {
+            if let Some(member) = scratch.step_participants.iter_mut().find(|p| {
+                p.step_id == closing.step_id && p.participant_id == outcome.participant_id
+            }) {
+                member.final_rank = Some(outcome.final_rank);
+                member.status = outcome.status;
+            }
+        }
+        let finished = scratch.set_step_status(closing.step_id, StepStatus::Finished);
+        state.steps = scratch.steps;
+        state.step_groups = scratch.step_groups;
+        state.step_participants = scratch.step_participants;
+        Ok(finished)
+    }
+
+    async fn set_step_points(
+        &self,
+        step_id: Uuid,
+        participant_id: Uuid,
+        points: f64,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        match state
+            .step_participants
+            .iter_mut()
+            .find(|p| p.step_id == step_id && p.participant_id == participant_id)
+        {
+            Some(member) => {
+                member.points = points;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     async fn import_tournaments(
@@ -1300,6 +1505,15 @@ impl AuthStore for MemoryStore {
         participants: Vec<ParticipantImport>,
     ) -> Result<(), StoreError> {
         let mut state = self.state();
+        let replaced: Vec<Uuid> = state
+            .participants
+            .iter()
+            .filter(|p| p.tournament_id == tournament_id)
+            .map(|p| p.id)
+            .collect();
+        state
+            .step_participants
+            .retain(|p| !replaced.contains(&p.participant_id));
         state
             .participants
             .retain(|p| p.tournament_id != tournament_id);
@@ -1357,10 +1571,73 @@ impl State {
         })
     }
 
+    fn remove_step(&mut self, id: Uuid) {
+        self.steps.retain(|s| s.id != id);
+        self.step_groups.retain(|g| g.step_id != id);
+        self.step_participants.retain(|p| p.step_id != id);
+    }
+
+    /// Crée les groupes et les participants d'une étape `pending` et la passe en `ongoing`.
+    fn start_step(&mut self, start: StepStart) -> Result<Option<Step>, StoreError> {
+        let Some(step) = self.steps.iter().find(|s| s.id == start.step_id) else {
+            return Ok(None);
+        };
+        if step.status != StepStatus::Pending {
+            return Err(StoreError::StepState);
+        }
+        let tournament_id = step.tournament_id;
+        for ids in &start.groups {
+            for id in ids {
+                let enrolled = self
+                    .participants
+                    .iter()
+                    .any(|p| p.id == *id && p.tournament_id == tournament_id);
+                if !enrolled {
+                    return Err(StoreError::Other(format!("inscrit {id} hors du tournoi")));
+                }
+            }
+        }
+        for (index, ids) in start.groups.iter().enumerate() {
+            let group = StepGroup {
+                id: Uuid::new_v4(),
+                step_id: start.step_id,
+                index: i32::try_from(index + 1).unwrap_or(i32::MAX),
+            };
+            for id in ids {
+                self.step_participants.push(StepParticipant {
+                    step_id: start.step_id,
+                    participant_id: *id,
+                    group_id: group.id,
+                    points: 0.0,
+                    final_rank: None,
+                    status: StepParticipantStatus::In,
+                });
+            }
+            self.step_groups.push(group);
+        }
+        Ok(self.set_step_status(start.step_id, StepStatus::Ongoing))
+    }
+
+    fn set_step_status(&mut self, id: Uuid, status: StepStatus) -> Option<Step> {
+        let step = self.steps.iter_mut().find(|s| s.id == id)?;
+        step.status = status;
+        step.updated_at = now_rfc3339();
+        Some(step.clone())
+    }
+
     fn remove_tournament(&mut self, id: Uuid) {
         self.tournaments.retain(|t| t.id != id);
         self.scoring_rules.retain(|r| r.tournament_id != id);
         self.participants.retain(|p| p.tournament_id != id);
+        let steps: Vec<Uuid> = self
+            .steps
+            .iter()
+            .filter(|s| s.tournament_id == id)
+            .map(|s| s.id)
+            .collect();
+        for step in steps {
+            self.remove_step(step);
+        }
         let doomed: Vec<Uuid> = self
             .tournament_teams
             .iter()

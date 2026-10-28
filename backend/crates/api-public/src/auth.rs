@@ -12,6 +12,7 @@ use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
 use crate::stat_io::StoreStats;
+use crate::step_io::StoreSteps;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
 use crate::tournament_io::{NoChild, TournamentChild};
 use crate::tournament_team_io::StoreTournamentTeams;
@@ -45,8 +46,8 @@ pub struct AppState {
     /// celles de la base ([`StoreStats`]).
     pub(crate) stats: Arc<dyn GameStats>,
     /// Équipes, étapes et matchs des tournois, importés et exportés avec eux (opaques pour les
-    /// tournois). Par défaut les équipes sont celles de la base ([`StoreTournamentTeams`]) ;
-    /// les étapes et les matchs ne sont pas encore pris en charge.
+    /// tournois). Par défaut les équipes et les étapes sont celles de la base
+    /// ([`StoreTournamentTeams`], [`StoreSteps`]) ; les matchs ne sont pas encore pris en charge.
     pub(crate) tournament_teams: Arc<dyn TournamentChild>,
     pub(crate) steps: Arc<dyn TournamentChild>,
     pub(crate) matches: Arc<dyn TournamentChild>,
@@ -61,7 +62,7 @@ impl AppState {
         Ok(AppState {
             stats: Arc::new(StoreStats(store.clone())),
             tournament_teams: Arc::new(StoreTournamentTeams(store.clone())),
-            steps: Arc::new(NoChild("les étapes")),
+            steps: Arc::new(StoreSteps::new(store.clone())),
             matches: Arc::new(NoChild("les matchs")),
             store,
             config: Arc::new(config),
