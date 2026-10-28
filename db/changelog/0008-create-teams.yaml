@@ -1,0 +1,239 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0008-create-teams
+      author: epickem
+      changes:
+        - createTable:
+            tableName: teams
+            remarks: Équipes globales, liées à un jeu et indépendantes de tout tournoi
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: game_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: teams_game_fk
+                    references: games(id)
+                    deleteCascade: true
+              - column:
+                  name: name
+                  type: varchar(64)
+                  remarks: Nom de l'équipe, unique par jeu sans tenir compte de la casse
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tag
+                  type: varchar(8)
+                  remarks: Abréviation affichée à côté du nom
+              - column:
+                  name: picture_url
+                  type: text
+                  remarks: URL de la photo de profil
+              - column:
+                  name: owner_id
+                  type: uuid
+                  remarks: Seul compte autorisé à modifier ou supprimer l'équipe
+                  constraints:
+                    nullable: false
+                    foreignKeyName: teams_owner_fk
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX teams_game_name_lower_key ON teams (game_id, lower(name));
+              CREATE INDEX teams_owner_idx ON teams (owner_id)
+            rollback: >-
+              DROP INDEX teams_owner_idx;
+              DROP INDEX teams_game_name_lower_key
+        - createTable:
+            tableName: team_member
+            remarks: Appartenance d'un compte à une équipe globale ; un départ garde la ligne (left_at)
+            columns:
+              - column:
+                  name: team_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: team_member_team_fk
+                    references: teams(id)
+                    deleteCascade: true
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: team_member_user_fk
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: role
+                  type: varchar(16)
+                  remarks: owner, member ou substitute
+                  constraints:
+                    nullable: false
+              - column:
+                  name: joined_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: left_at
+                  type: timestamptz
+                  remarks: Renseigné quand le membre a quitté l'équipe
+        - addPrimaryKey:
+            tableName: team_member
+            columnNames: team_id, user_id, joined_at
+            constraintName: team_member_pkey
+        - sql:
+            sql: >-
+              ALTER TABLE team_member
+              ADD CONSTRAINT team_member_role_check CHECK (role IN ('owner', 'member', 'substitute')),
+              ADD CONSTRAINT team_member_left_check CHECK (left_at IS NULL OR left_at >= joined_at);
+              CREATE UNIQUE INDEX team_member_active_key ON team_member (team_id, user_id) WHERE left_at IS NULL;
+              CREATE UNIQUE INDEX team_member_owner_key ON team_member (team_id) WHERE role = 'owner' AND left_at IS NULL;
+              CREATE INDEX team_member_user_idx ON team_member (user_id)
+            rollback: >-
+              DROP INDEX team_member_user_idx;
+              DROP INDEX team_member_owner_key;
+              DROP INDEX team_member_active_key;
+              ALTER TABLE team_member DROP CONSTRAINT team_member_left_check, DROP CONSTRAINT team_member_role_check
+        - createTable:
+            tableName: tournament_teams
+            remarks: Équipes créées pour un seul tournoi, copie indépendante d'une équipe globale ou créée de zéro
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tournament_id
+                  type: uuid
+                  remarks: Tournoi de l'équipe ; la clé étrangère vers tournaments est ajoutée avec cette table
+                  constraints:
+                    nullable: false
+              - column:
+                  name: team_id
+                  type: uuid
+                  remarks: Équipe globale dont celle-ci est une copie, null si créée de zéro ou si l'équipe globale a été supprimée
+              - column:
+                  name: name
+                  type: varchar(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tag
+                  type: varchar(8)
+              - column:
+                  name: picture_url
+                  type: text
+              - column:
+                  name: owner_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: tournament_teams_owner_fk
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - addForeignKeyConstraint:
+            baseTableName: tournament_teams
+            baseColumnNames: team_id
+            constraintName: tournament_teams_team_fk
+            referencedTableName: teams
+            referencedColumnNames: id
+            onDelete: SET NULL
+        - sql:
+            sql: >-
+              ALTER TABLE tournament_teams ADD CONSTRAINT tournament_teams_id_tournament_key UNIQUE (id, tournament_id);
+              CREATE UNIQUE INDEX tournament_teams_team_key ON tournament_teams (tournament_id, team_id) WHERE team_id IS NOT NULL;
+              CREATE INDEX tournament_teams_tournament_idx ON tournament_teams (tournament_id);
+              CREATE INDEX tournament_teams_owner_idx ON tournament_teams (owner_id)
+            rollback: >-
+              DROP INDEX tournament_teams_owner_idx;
+              DROP INDEX tournament_teams_tournament_idx;
+              DROP INDEX tournament_teams_team_key;
+              ALTER TABLE tournament_teams DROP CONSTRAINT tournament_teams_id_tournament_key
+        - createTable:
+            tableName: tournament_team_member
+            remarks: Membres d'une équipe de tournoi
+            columns:
+              - column:
+                  name: tournament_team_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tournament_id
+                  type: uuid
+                  remarks: Recopie de tournament_teams.tournament_id, pour garantir une seule équipe par joueur et par tournoi
+                  constraints:
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: tournament_team_member_user_fk
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: role
+                  type: varchar(16)
+                  remarks: owner, member ou substitute
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: tournament_team_member
+            columnNames: tournament_team_id, user_id
+            constraintName: tournament_team_member_pkey
+        - sql:
+            sql: >-
+              ALTER TABLE tournament_team_member
+              ADD CONSTRAINT tournament_team_member_team_fk FOREIGN KEY (tournament_team_id, tournament_id)
+                  REFERENCES tournament_teams (id, tournament_id) ON DELETE CASCADE,
+              ADD CONSTRAINT tournament_team_member_user_key UNIQUE (tournament_id, user_id),
+              ADD CONSTRAINT tournament_team_member_role_check CHECK (role IN ('owner', 'member', 'substitute'));
+              CREATE UNIQUE INDEX tournament_team_member_owner_key ON tournament_team_member (tournament_team_id) WHERE role = 'owner'
+            rollback: >-
+              DROP INDEX tournament_team_member_owner_key;
+              ALTER TABLE tournament_team_member
+              DROP CONSTRAINT tournament_team_member_role_check,
+              DROP CONSTRAINT tournament_team_member_user_key,
+              DROP CONSTRAINT tournament_team_member_team_fk
+      rollback:
+        - dropTable:
+            tableName: tournament_team_member
+        - dropTable:
+            tableName: tournament_teams
+        - dropTable:
+            tableName: team_member
+        - dropTable:
+            tableName: teams
