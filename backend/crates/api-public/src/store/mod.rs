@@ -3,9 +3,11 @@
 //! Le trait [`AuthStore`] isole les handlers de PostgreSQL : [`PgStore`] sert en production,
 //! [`MemoryStore`] sert aux tests sans base.
 
+mod games;
 mod memory;
 mod postgres;
 
+pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 
@@ -88,6 +90,8 @@ pub struct UserUpdate {
 pub enum StoreError {
     /// Le nom d'utilisateur existe déjà (sans tenir compte de la casse).
     UsernameTaken,
+    /// Le nom de jeu existe déjà (sans tenir compte de la casse).
+    GameNameTaken,
     Other(String),
 }
 
@@ -95,6 +99,7 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::UsernameTaken => f.write_str("nom d'utilisateur déjà pris"),
+            StoreError::GameNameTaken => f.write_str("nom de jeu déjà pris"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -163,4 +168,24 @@ pub trait AuthStore: Send + Sync {
     /// appartenant à un autre compte n'est pas une erreur (et n'est pas modifié).
     async fn revoke_refresh_token(&self, user_id: Uuid, token_hash: &str)
     -> Result<(), StoreError>;
+
+    /// Jeux par ordre de nom, `limit` à partir de `offset`.
+    async fn list_games(&self, limit: i64, offset: i64) -> Result<Vec<Game>, StoreError>;
+
+    async fn find_game(&self, id: Uuid) -> Result<Option<Game>, StoreError>;
+
+    /// Crée le jeu ; [`StoreError::GameNameTaken`] si le nom est déjà utilisé.
+    async fn create_game(&self, game: GameInput) -> Result<Game, StoreError>;
+
+    /// Applique `update` ; `None` si le jeu n'existe pas, [`StoreError::GameNameTaken`] si le
+    /// nouveau nom est déjà utilisé.
+    async fn update_game(&self, id: Uuid, update: GameUpdate) -> Result<Option<Game>, StoreError>;
+
+    /// Supprime le jeu ; `false` s'il n'existait pas.
+    async fn delete_game(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par nom, sans tenir compte de la casse) les jeux donnés, en une
+    /// seule opération : en cas d'erreur, aucun n'est modifié. Chaque jeu est renvoyé avec
+    /// `true` s'il vient d'être créé. Les noms de `games` sont distincts.
+    async fn upsert_games(&self, games: Vec<GameInput>) -> Result<Vec<(Game, bool)>, StoreError>;
 }
