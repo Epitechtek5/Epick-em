@@ -149,7 +149,7 @@ pub struct MemberImport {
 
 /// Instant présent au format des horodatages de l'API (`2026-10-26T14:03:09.123456Z`), pour le
 /// store en mémoire ; PostgreSQL produit le même format.
-pub(super) fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();

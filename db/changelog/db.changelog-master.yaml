@@ -16,3 +16,7 @@ databaseChangeLog:
       file: changelog/0007-create-stats.yaml
   - include:
       file: changelog/0008-create-teams.yaml
+  - include:
+      file: changelog/0009-create-tournaments.yaml
+  - include:
+      file: changelog/0010-tournament-unique-name.yaml
