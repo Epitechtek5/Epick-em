@@ -85,6 +85,50 @@ pub trait TournamentChild: Send + Sync {
     /// dans le même ordre.
     async fn import(&self, tournament_id: Uuid, items: Vec<Value>)
     -> Result<Vec<Uuid>, StoreError>;
+
+    /// Comme [`export`](Self::export), pour un sous-niveau qui désigne les équipes par leur rang
+    /// : `team_order` donne les équipes du tournoi dans l'ordre du fichier.
+    async fn export_in(
+        &self,
+        tournament_id: Uuid,
+        _team_order: &[Uuid],
+    ) -> Result<Vec<(Uuid, Value)>, StoreError> {
+        self.export(tournament_id).await
+    }
+
+    /// Comme [`validate`](Self::validate), pour un sous-niveau qui désigne des inscrits du
+    /// fichier.
+    async fn validate_in(
+        &self,
+        game_id: Uuid,
+        items: &[Value],
+        _scope: &FileScope,
+    ) -> Result<Option<String>, StoreError> {
+        self.validate(game_id, items).await
+    }
+
+    /// Comme [`import`](Self::import), pour un sous-niveau qui désigne des inscrits : les
+    /// inscrits du tournoi sont déjà écrits et `team_ids` donne ses équipes dans l'ordre du
+    /// fichier.
+    async fn import_in(
+        &self,
+        tournament_id: Uuid,
+        items: Vec<Value>,
+        _team_ids: &[Uuid],
+    ) -> Result<Vec<Uuid>, StoreError> {
+        self.import(tournament_id, items).await
+    }
+}
+
+/// Ce que le fichier d'un tournoi déclare de ses inscrits, pour les sous-niveaux qui s'y
+/// réfèrent (les étapes) : ils ne connaissent ni les équipes ni les inscrits du tournoi, seulement
+/// de quoi les désigner.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FileScope {
+    /// Noms d'utilisateur (en minuscules) des inscrits qui jouent à titre individuel.
+    pub users: HashSet<String>,
+    /// Rangs (dans `teams`) des équipes inscrites seules.
+    pub teams: HashSet<usize>,
 }
 
 /// Tant qu'un niveau n'est pas branché : rien à exporter, rien d'accepté.
@@ -279,9 +323,10 @@ pub(crate) async fn export_tournaments(
         participants.sort_by(|a, b| {
             (&a.registered_at, &a.user, a.team).cmp(&(&b.registered_at, &b.user, b.team))
         });
+        let team_order: Vec<Uuid> = teams.iter().map(|(id, _)| *id).collect();
         let steps = state
             .steps
-            .export(tournament.id)
+            .export_in(tournament.id, &team_order)
             .await
             .map_err(ApiError::internal)?;
         let matches = state
@@ -402,16 +447,6 @@ pub(crate) async fn import_tournaments(
             .import(tournament.id, teams)
             .await
             .map_err(ApiError::internal)?;
-        state
-            .steps
-            .import(tournament.id, steps)
-            .await
-            .map_err(ApiError::internal)?;
-        state
-            .matches
-            .import(tournament.id, matches)
-            .await
-            .map_err(ApiError::internal)?;
         let participants = participants
             .into_iter()
             .map(|p| ParticipantImport {
@@ -421,9 +456,20 @@ pub(crate) async fn import_tournaments(
                 registered_at: p.registered_at,
             })
             .collect();
+        // Les inscrits d'abord : les étapes et les matchs les désignent.
         state
             .store
             .replace_participants(tournament.id, participants)
+            .await
+            .map_err(ApiError::internal)?;
+        state
+            .steps
+            .import_in(tournament.id, steps, &team_ids)
+            .await
+            .map_err(ApiError::internal)?;
+        state
+            .matches
+            .import(tournament.id, matches)
             .await
             .map_err(ApiError::internal)?;
         if created {
@@ -591,6 +637,20 @@ async fn prepare(
         }
         let rules = check_rules(lookups, game_id, &tournament.scoring_rules, &mut reasons);
         let participants = check_participants(lookups, &tournament, &mut reasons);
+        let scope = FileScope {
+            users: tournament
+                .participants
+                .iter()
+                .filter_map(|p| p.user.as_deref())
+                .map(|name| name.trim().to_lowercase())
+                .collect(),
+            teams: tournament
+                .participants
+                .iter()
+                .filter(|p| p.user.is_none())
+                .filter_map(|p| p.team)
+                .collect(),
+        };
         if let Some(game_id) = game_id {
             for (label, items) in [
                 ("teams", &tournament.teams),
@@ -603,7 +663,7 @@ async fn prepare(
                     _ => state.matches.as_ref(),
                 };
                 if let Some(problem) = child
-                    .validate(game_id, items)
+                    .validate_in(game_id, items, &scope)
                     .await
                     .map_err(ApiError::internal)?
                 {
