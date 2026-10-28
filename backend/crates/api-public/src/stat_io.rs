@@ -294,7 +294,10 @@ pub(crate) async fn import_stats(
             .store
             .set_stat_games(stat.id, ids)
             .await
-            .map_err(ApiError::internal)?
+            .map_err(|err| match err {
+                StoreError::StatInUse => ApiError::StatInUse,
+                other => ApiError::internal(other),
+            })?
         {
             return Err(ApiError::internal(format!(
                 "liaison de la statistique {} impossible",
