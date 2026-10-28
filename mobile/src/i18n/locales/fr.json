@@ -265,6 +265,10 @@
     "members": "Membres",
     "transfer": "Importer et exporter",
     "allGames": "Tous les jeux",
+    "selectGame": "Choisissez un jeu",
+    "gameSelection": "Jeu sélectionné : {{game}}",
+    "searchGames": "Rechercher un jeu",
+    "noMatchingGames": "Aucun jeu ne correspond à votre recherche.",
     "gameUnavailable": "Jeu indisponible",
     "empty": "Aucune équipe trouvée.",
     "loading": "Chargement des équipes",
@@ -319,7 +323,7 @@
       "alreadyMember": "Cet utilisateur est déjà membre actif.",
       "alreadyRegistered": "Cette équipe est déjà inscrite au tournoi.",
       "playerRegistered": "Un joueur sélectionné appartient déjà à une autre équipe du tournoi.",
-      "notFound": "Équipe, jeu ou membre introuvable.",
+      "notFound": "L’équipe, le jeu ou le membre demandé est introuvable.",
       "ownerOnly": "Seul le propriétaire peut effectuer des modifications.",
       "readFile": "Impossible de lire le fichier.",
       "saveFile": "Impossible d’enregistrer le fichier.",
@@ -332,7 +336,6 @@
     "noOwnedTeams": "Aucune équipe dont vous êtes propriétaire sur cette page.",
     "filterByGame": "Filtrer par jeu",
     "filterSelection": "Filtre de jeu : {{game}}",
-    "loadMoreGames": "Charger d’autres jeux",
     "noGames": "Aucun jeu disponible."
   }
 }

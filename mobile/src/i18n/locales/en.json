@@ -265,6 +265,10 @@
     "members": "Members",
     "transfer": "Import and export",
     "allGames": "All games",
+    "selectGame": "Choose a game",
+    "gameSelection": "Selected game: {{game}}",
+    "searchGames": "Search games",
+    "noMatchingGames": "No games match your search.",
     "gameUnavailable": "Game unavailable",
     "empty": "No teams found.",
     "loading": "Loading teams",
@@ -319,7 +323,7 @@
       "alreadyMember": "This user is already an active member.",
       "alreadyRegistered": "This team is already registered in the tournament.",
       "playerRegistered": "A selected player already belongs to another team in this tournament.",
-      "notFound": "Team, game or member not found.",
+      "notFound": "The requested team, game, or member was not found.",
       "ownerOnly": "Only the team owner can make changes.",
       "readFile": "Unable to read the file.",
       "saveFile": "Unable to save the file.",
@@ -332,7 +336,6 @@
     "noOwnedTeams": "No teams you own on this page.",
     "filterByGame": "Filter by game",
     "filterSelection": "Game filter: {{game}}",
-    "loadMoreGames": "Load more games",
     "noGames": "No games available."
   }
 }

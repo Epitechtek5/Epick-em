@@ -1,14 +1,12 @@
 import { useCallback, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GameFilterSelect } from '@/components/teams/game-filter-select';
 import { TeamForm } from '@/components/teams/team-form';
-import { Button } from '@/components/ui/button';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
-import { Text } from '@/components/ui/text';
 import { useAuth } from '@/features/auth/session';
-import { listGames } from '@/features/games/api';
 import { useGameResource } from '@/features/games/use-game-resource';
+import type { Game } from '@/features/games/types';
 import {
   createTeam,
   getTeam,
@@ -29,14 +27,12 @@ type EditorMode =
 
 function TeamEditor({ mode }: { mode: EditorMode }) {
   const { t } = useTranslation();
-  const insets = useSafeAreaInsets();
   const { token, user } = useAuth();
   const { id, tournamentId } = useLocalSearchParams<{
     id?: string;
     tournamentId?: string;
   }>();
-  const [gamePage, setGamePage] = useState(0);
-  const [gameId, setGameId] = useState('');
+  const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [message, setMessage] = useState('');
   const isGlobal = mode.startsWith('global');
   const editing = mode.endsWith('edit');
@@ -49,13 +45,6 @@ function TeamEditor({ mode }: { mode: EditorMode }) {
     [id, isGlobal],
   );
   const teamState = useGameResource(loadTeam, teamErrorKey);
-  const loadGames = useCallback(
-    (accessToken: string) =>
-      listGames(accessToken, { limit: 20, offset: gamePage * 20 }),
-    [gamePage],
-  );
-  const gamesState = useGameResource(loadGames);
-  const games = gamesState.data ?? [];
   const team = teamState.data;
 
   if (editing && (teamState.loading || teamState.error || !team)) {
@@ -110,11 +99,14 @@ function TeamEditor({ mode }: { mode: EditorMode }) {
         picture_url: values.picture_url.trim() || undefined,
       };
       if (isGlobal) {
-        if (!gameId) {
+        if (!selectedGame) {
           setMessage(t('teams.validation.game'));
           return;
         }
-        const created = await createTeam(token, { ...input, game_id: gameId });
+        const created = await createTeam(token, {
+          ...input,
+          game_id: selectedGame.id,
+        });
         router.replace({
           pathname: '/(authenticated)/teams/[id]',
           params: { id: created.id },
@@ -132,57 +124,27 @@ function TeamEditor({ mode }: { mode: EditorMode }) {
   }
 
   return (
-    <KeyboardAvoidingView
-      className="flex-1 bg-background"
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        contentContainerClassName="gap-5 px-5 py-5"
-        contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
-      >
-        {!editing && isGlobal ? (
-          <View className="gap-3">
-            <Text variant="large">{t('teams.fields.game_id')}</Text>
-            {gamesState.loading ? (
-              <ScreenState loading message={t('games.loading')} />
-            ) : null}
-            {gamesState.error ? (
-              <FormMessage>{t(gamesState.error)}</FormMessage>
-            ) : null}
-            {games.map((game) => (
-              <Button
-                key={game.id}
-                variant={game.id === gameId ? 'default' : 'outline'}
-                onPress={() => setGameId(game.id)}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: game.id === gameId }}
-              >
-                <Text>{game.name}</Text>
-              </Button>
-            ))}
-            <View className="flex-row justify-between">
-              <Button
-                variant="outline"
-                disabled={gamePage === 0}
-                onPress={() => setGamePage(gamePage - 1)}
-              >
-                <Text>{t('users.previous')}</Text>
-              </Button>
-              <Button
-                variant="outline"
-                disabled={games.length < 20}
-                onPress={() => setGamePage(gamePage + 1)}
-              >
-                <Text>{t('users.next')}</Text>
-              </Button>
-            </View>
-          </View>
-        ) : null}
-        {message ? <FormMessage>{message}</FormMessage> : null}
-        <TeamForm key={team?.id ?? 'new'} initial={initial} onSave={save} />
-      </ScrollView>
-    </KeyboardAvoidingView>
+    <TeamForm
+      key={team?.id ?? 'new'}
+      initial={initial}
+      onSave={save}
+      beforeFields={
+        <View className="gap-4">
+          {!editing && isGlobal ? (
+            <GameFilterSelect
+              selectedGame={selectedGame}
+              onSelect={(game) => {
+                setSelectedGame(game);
+                setMessage('');
+              }}
+              includeAllGames={false}
+              label={t('teams.fields.game_id')}
+            />
+          ) : null}
+          {message ? <FormMessage>{message}</FormMessage> : null}
+        </View>
+      }
+    />
   );
 }
 

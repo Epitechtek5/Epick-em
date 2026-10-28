@@ -1,10 +1,18 @@
 import { useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, View } from 'react-native';
+import {
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ArrowDown01Icon from '@hugeicons/core-free-icons/ArrowDown01Icon';
 import { Button } from '@/components/ui/button';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Icon } from '@/components/ui/icon';
+import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import { useAuth } from '@/features/auth/session';
 import { listGames } from '@/features/games/api';
@@ -18,9 +26,13 @@ const PAGE_SIZE = 50;
 export function GameFilterSelect({
   selectedGame,
   onSelect,
+  includeAllGames = true,
+  label,
 }: {
   selectedGame: Game | null;
   onSelect: (game: Game | null) => void;
+  includeAllGames?: boolean;
+  label?: string;
 }) {
   const { t } = useTranslation();
   const { token } = useAuth();
@@ -30,19 +42,27 @@ export function GameFilterSelect({
   const [open, setOpen] = useState(false);
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
 
-  async function loadGamesPage(offset: number) {
+  async function loadGames() {
     if (!token || loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     setError('');
 
+    const allGames: Game[] = [];
+    let offset = 0;
+
     try {
-      const page = await listGames(token, { limit: PAGE_SIZE, offset });
-      setGames((current) => offset === 0 ? page : [...current, ...page]);
-      setHasMore(page.length === PAGE_SIZE);
+      while (true) {
+        const page = await listGames(token, { limit: PAGE_SIZE, offset });
+        allGames.push(...page);
+        setGames([...allGames]);
+
+        if (page.length < PAGE_SIZE) break;
+        offset += page.length;
+      }
     } catch (caught) {
       setError(gameErrorKey(caught));
     } finally {
@@ -51,13 +71,19 @@ export function GameFilterSelect({
     }
   }
 
+  const filteredGames = games.filter((game) =>
+    game.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
+  );
+
   function showOptions() {
+    setSearch('');
     setOpen(true);
-    void loadGamesPage(0);
+    void loadGames();
   }
 
   function choose(game: Game | null) {
     onSelect(game);
+    setSearch('');
     setOpen(false);
   }
 
@@ -84,18 +110,26 @@ export function GameFilterSelect({
   return (
     <>
       <View className="gap-2">
-        <Text className="text-sm font-medium">{t('teams.filterByGame')}</Text>
+        <Text className="text-sm font-medium">
+          {label ?? t('teams.filterByGame')}
+        </Text>
         <Pressable
           className="min-h-12 flex-row items-center gap-3 rounded-md border border-input bg-background px-3 py-3"
           accessibilityRole="button"
-          accessibilityLabel={t('teams.filterSelection', {
-            game: selectedGame?.name ?? t('teams.allGames'),
-          })}
+          accessibilityLabel={t(
+            includeAllGames ? 'teams.filterSelection' : 'teams.gameSelection',
+            {
+              game:
+                selectedGame?.name ??
+                t(includeAllGames ? 'teams.allGames' : 'teams.selectGame'),
+            },
+          )}
           accessibilityState={{ expanded: open }}
           onPress={showOptions}
         >
           <Text className="min-w-0 flex-1" numberOfLines={1}>
-            {selectedGame?.name ?? t('teams.allGames')}
+            {selectedGame?.name ??
+              t(includeAllGames ? 'teams.allGames' : 'teams.selectGame')}
           </Text>
           <Icon icon={ArrowDown01Icon} tone="foreground" size={18} />
         </Pressable>
@@ -105,9 +139,14 @@ export function GameFilterSelect({
         visible={open}
         transparent
         animationType={reducedMotion ? 'none' : 'fade'}
+        statusBarTranslucent
+        navigationBarTranslucent
         onRequestClose={() => setOpen(false)}
       >
-        <View className="flex-1 justify-end bg-black/50">
+        <KeyboardAvoidingView
+          className="flex-1 justify-end bg-black/50"
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <View
             className="max-h-[80%] gap-4 rounded-t-xl border border-border bg-card px-5 pt-5"
             style={{ paddingBottom: insets.bottom + 20 }}
@@ -115,34 +154,56 @@ export function GameFilterSelect({
           >
             <View className="flex-row items-center justify-between gap-3">
               <Text variant="large" accessibilityRole="header">
-                {t('teams.filterByGame')}
+                {label ?? t('teams.filterByGame')}
               </Text>
               <Button size="sm" variant="ghost" onPress={() => setOpen(false)}>
                 <Text>{t('common.cancel')}</Text>
               </Button>
             </View>
+            <Input
+              value={search}
+              onChangeText={setSearch}
+              placeholder={t('teams.searchGames')}
+              accessibilityLabel={t('teams.searchGames')}
+              autoCapitalize="none"
+              returnKeyType="search"
+            />
             <FlatList
-              data={games}
+              data={filteredGames}
               keyExtractor={(game) => game.id}
-              keyboardShouldPersistTaps="handled"
-              ListHeaderComponent={option(null)}
+              keyboardShouldPersistTaps="always"
+              keyboardDismissMode={
+                Platform.OS === 'ios' ? 'interactive' : 'on-drag'
+              }
+              ListHeaderComponent={includeAllGames ? option(null) : undefined}
               ListEmptyComponent={
                 loading ? (
                   <ScreenState loading message={t('games.loading')} />
-                ) : !error ? (
-                  <ScreenState message={t('teams.noGames')} />
-                ) : undefined
+                ) : error ? (
+                  <ScreenState
+                    error
+                    message={t(error)}
+                    onRetry={() => void loadGames()}
+                  />
+                ) : (
+                  <ScreenState
+                    message={t(
+                      search.trim() ? 'teams.noMatchingGames' : 'teams.noGames',
+                    )}
+                  />
+                )
               }
               ListFooterComponent={
                 <View className="gap-3 py-3">
-                  {error ? <FormMessage>{t(error)}</FormMessage> : null}
-                  {error || hasMore ? (
-                    <Button
-                      variant="outline"
-                      disabled={loading}
-                      onPress={() => void loadGamesPage(error ? 0 : games.length)}
-                    >
-                      <Text>{t(error ? 'common.retry' : 'teams.loadMoreGames')}</Text>
+                  {error && filteredGames.length > 0 ? (
+                    <FormMessage>{t(error)}</FormMessage>
+                  ) : null}
+                  {loading && filteredGames.length > 0 ? (
+                    <ScreenState loading message={t('games.loading')} />
+                  ) : null}
+                  {error && filteredGames.length > 0 ? (
+                    <Button variant="outline" onPress={() => void loadGames()}>
+                      <Text>{t('common.retry')}</Text>
                     </Button>
                   ) : null}
                 </View>
@@ -150,7 +211,7 @@ export function GameFilterSelect({
               renderItem={({ item }) => option(item)}
             />
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );
