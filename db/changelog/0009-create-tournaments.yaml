@@ -1,0 +1,265 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0009-create-tournaments
+      author: epickem
+      changes:
+        - createTable:
+            tableName: tournaments
+            remarks: Tournois d'un jeu ; barème et étapes verrouillés dès le statut ongoing
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: game_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: tournaments_game_fk
+                    references: games(id)
+                    deleteCascade: true
+              - column:
+                  name: name
+                  type: varchar(128)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: description
+                  type: text
+              - column:
+                  name: start_date
+                  type: timestamptz
+                  constraints:
+                    nullable: false
+              - column:
+                  name: end_date
+                  type: timestamptz
+                  constraints:
+                    nullable: false
+              - column:
+                  name: registration_open_at
+                  type: timestamptz
+              - column:
+                  name: registration_close_at
+                  type: timestamptz
+              - column:
+                  name: participant_type
+                  type: varchar(8)
+                  remarks: "solo : joueurs inscrits un par un ; team : équipes inscrites"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: team_size
+                  type: integer
+                  remarks: Joueurs par équipe, renseigné si et seulement si participant_type = team
+              - column:
+                  name: max_participants
+                  type: integer
+                  remarks: Égal à group_count x group_size de l'étape 1
+                  constraints:
+                    nullable: false
+              - column:
+                  name: team_scoring_mode
+                  type: varchar(8)
+                  remarks: "Agrégation des participants d'une équipe : none, sum, best ou top_n"
+                  defaultValue: none
+                  constraints:
+                    nullable: false
+              - column:
+                  name: team_scoring_n
+                  type: integer
+                  remarks: Nombre de meilleurs scores retenus, renseigné si et seulement si team_scoring_mode = top_n
+              - column:
+                  name: status
+                  type: varchar(16)
+                  remarks: draft, registration, ongoing, finished ou cancelled
+                  defaultValue: draft
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE tournaments
+              ADD CONSTRAINT tournaments_id_game_key UNIQUE (id, game_id),
+              ADD CONSTRAINT tournaments_participant_type_check CHECK (participant_type IN ('solo', 'team')),
+              ADD CONSTRAINT tournaments_team_size_check CHECK (
+                  (participant_type = 'team' AND team_size IS NOT NULL AND team_size > 0)
+                  OR (participant_type = 'solo' AND team_size IS NULL)),
+              ADD CONSTRAINT tournaments_max_participants_check CHECK (max_participants > 0),
+              ADD CONSTRAINT tournaments_team_scoring_mode_check CHECK (team_scoring_mode IN ('none', 'sum', 'best', 'top_n')),
+              ADD CONSTRAINT tournaments_team_scoring_n_check CHECK (
+                  (team_scoring_mode = 'top_n' AND team_scoring_n IS NOT NULL AND team_scoring_n > 0)
+                  OR (team_scoring_mode <> 'top_n' AND team_scoring_n IS NULL)),
+              ADD CONSTRAINT tournaments_status_check CHECK (status IN ('draft', 'registration', 'ongoing', 'finished', 'cancelled')),
+              ADD CONSTRAINT tournaments_dates_check CHECK (end_date >= start_date),
+              ADD CONSTRAINT tournaments_registration_check CHECK (
+                  registration_open_at IS NULL OR registration_close_at IS NULL
+                  OR registration_close_at >= registration_open_at);
+              CREATE INDEX tournaments_game_idx ON tournaments (game_id);
+              CREATE INDEX tournaments_status_idx ON tournaments (status)
+            rollback: >-
+              DROP INDEX tournaments_status_idx;
+              DROP INDEX tournaments_game_idx;
+              ALTER TABLE tournaments
+              DROP CONSTRAINT tournaments_registration_check,
+              DROP CONSTRAINT tournaments_dates_check,
+              DROP CONSTRAINT tournaments_status_check,
+              DROP CONSTRAINT tournaments_team_scoring_n_check,
+              DROP CONSTRAINT tournaments_team_scoring_mode_check,
+              DROP CONSTRAINT tournaments_max_participants_check,
+              DROP CONSTRAINT tournaments_team_size_check,
+              DROP CONSTRAINT tournaments_participant_type_check,
+              DROP CONSTRAINT tournaments_id_game_key
+        - addForeignKeyConstraint:
+            baseTableName: tournament_teams
+            baseColumnNames: tournament_id
+            constraintName: tournament_teams_tournament_fk
+            referencedTableName: tournaments
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - createTable:
+            tableName: tournament_participant
+            remarks: Inscrit à un tournoi. Solo sans équipe user_id seul, solo avec équipe user_id et tournament_team_id, tournoi par équipes tournament_team_id seul
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tournament_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: tournament_participant_tournament_fk
+                    references: tournaments(id)
+                    deleteCascade: true
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    foreignKeyName: tournament_participant_user_fk
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: tournament_team_id
+                  type: uuid
+              - column:
+                  name: status
+                  type: varchar(16)
+                  remarks: registered, checked_in, disqualified ou withdrawn
+                  defaultValue: registered
+                  constraints:
+                    nullable: false
+              - column:
+                  name: registered_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE tournament_participant
+              ADD CONSTRAINT tournament_participant_team_fk FOREIGN KEY (tournament_team_id, tournament_id)
+                  REFERENCES tournament_teams (id, tournament_id) ON DELETE CASCADE,
+              ADD CONSTRAINT tournament_participant_who_check CHECK (user_id IS NOT NULL OR tournament_team_id IS NOT NULL),
+              ADD CONSTRAINT tournament_participant_status_check CHECK (status IN ('registered', 'checked_in', 'disqualified', 'withdrawn'));
+              CREATE UNIQUE INDEX tournament_participant_user_key ON tournament_participant (tournament_id, user_id) WHERE user_id IS NOT NULL;
+              CREATE UNIQUE INDEX tournament_participant_team_key ON tournament_participant (tournament_id, tournament_team_id) WHERE user_id IS NULL;
+              CREATE INDEX tournament_participant_user_idx ON tournament_participant (user_id);
+              CREATE INDEX tournament_participant_team_idx ON tournament_participant (tournament_team_id)
+            rollback: >-
+              DROP INDEX tournament_participant_team_idx;
+              DROP INDEX tournament_participant_user_idx;
+              DROP INDEX tournament_participant_team_key;
+              DROP INDEX tournament_participant_user_key;
+              ALTER TABLE tournament_participant
+              DROP CONSTRAINT tournament_participant_status_check,
+              DROP CONSTRAINT tournament_participant_who_check,
+              DROP CONSTRAINT tournament_participant_team_fk
+        - createTable:
+            tableName: scoring_rule
+            remarks: Barème d'un tournoi, de la valeur d'une statistique vers des points, défini avant le tournoi
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tournament_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: game_id
+                  type: uuid
+                  remarks: Recopie de tournaments.game_id, pour garantir que la statistique est liée au jeu du tournoi
+                  constraints:
+                    nullable: false
+              - column:
+                  name: stat_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: mode
+                  type: varchar(8)
+                  remarks: "linear : points = valeur x coefficient ; table : valeur vers points via points_table"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: coefficient
+                  type: numeric
+                  remarks: Renseigné si et seulement si mode = linear
+              - column:
+                  name: points_table
+                  type: jsonb
+                  remarks: 'Objet valeur vers points (ex. {"1": 8, "2": 7}), renseigné si et seulement si mode = table'
+        - sql:
+            sql: >-
+              ALTER TABLE scoring_rule
+              ADD CONSTRAINT scoring_rule_tournament_fk FOREIGN KEY (tournament_id, game_id)
+                  REFERENCES tournaments (id, game_id) ON DELETE CASCADE,
+              ADD CONSTRAINT scoring_rule_stat_game_fk FOREIGN KEY (stat_id, game_id)
+                  REFERENCES stat_game (stat_id, game_id) ON DELETE CASCADE,
+              ADD CONSTRAINT scoring_rule_tournament_stat_key UNIQUE (tournament_id, stat_id),
+              ADD CONSTRAINT scoring_rule_mode_check CHECK (
+                  (mode = 'linear' AND coefficient IS NOT NULL AND points_table IS NULL)
+                  OR (mode = 'table' AND coefficient IS NULL AND points_table IS NOT NULL
+                      AND jsonb_typeof(points_table) = 'object'))
+            rollback: >-
+              ALTER TABLE scoring_rule
+              DROP CONSTRAINT scoring_rule_mode_check,
+              DROP CONSTRAINT scoring_rule_tournament_stat_key,
+              DROP CONSTRAINT scoring_rule_stat_game_fk,
+              DROP CONSTRAINT scoring_rule_tournament_fk
+      rollback:
+        - dropTable:
+            tableName: scoring_rule
+        - dropTable:
+            tableName: tournament_participant
+        - dropForeignKeyConstraint:
+            baseTableName: tournament_teams
+            constraintName: tournament_teams_tournament_fk
+        - dropTable:
+            tableName: tournaments
