@@ -78,6 +78,24 @@ it('creates, edits and deletes a global team with the shared Bearer transport', 
       headers: expect.objectContaining({ Authorization: 'Bearer token' }),
     }),
   );
+  await createTeam('token', {
+    game_id: other,
+    name: 'Vitality',
+    tag: 'VIT',
+    picture_url: 'https://example.org/team.png',
+  });
+  expect(fetch).toHaveBeenLastCalledWith(
+    `${base}/teams`,
+    expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        game_id: other,
+        name: 'Vitality',
+        tag: 'VIT',
+        picture_url: 'https://example.org/team.png',
+      }),
+    }),
+  );
   await updateTeam('token', id, { tag: '' });
   expect(fetch).toHaveBeenLastCalledWith(
     `${base}/teams/${id}`,
