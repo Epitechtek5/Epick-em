@@ -8,9 +8,12 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod export_cache;
 pub mod game_io;
 pub mod games;
 pub mod guard;
+pub mod match_io;
+pub mod matches;
 pub mod openapi;
 pub mod ranking;
 pub mod router;
