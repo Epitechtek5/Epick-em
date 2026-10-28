@@ -28,10 +28,24 @@ pub enum ApiError {
     Unauthorized,
     /// Authentifié, mais sans le rôle exigé ou sans droit sur cette ressource.
     Forbidden,
-    /// Compte introuvable.
+    /// Compte ou jeu introuvable.
     NotFound,
     /// Nom d'utilisateur déjà pris.
     Conflict,
+    /// Nom de jeu déjà pris.
+    GameNameTaken,
+    /// Clé de statistique déjà prise.
+    StatKeyTaken,
+    /// Statistique utilisée par un tournoi en cours.
+    StatInUse,
+    /// Nom d'équipe déjà pris pour ce jeu.
+    TeamNameTaken,
+    /// Le compte est déjà membre de l'équipe.
+    AlreadyTeamMember,
+    /// Équipe globale déjà inscrite à ce tournoi.
+    TeamAlreadyRegistered,
+    /// Joueur déjà dans une équipe de ce tournoi.
+    PlayerAlreadyRegistered,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -54,15 +68,46 @@ impl ApiError {
                 "Identifiants ou jeton invalides",
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Action non autorisée"),
-            ApiError::NotFound => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "Utilisateur introuvable",
-            ),
+            ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Ressource introuvable"),
             ApiError::Conflict => (
                 StatusCode::CONFLICT,
                 "username_taken",
                 "Ce nom d'utilisateur est déjà pris",
+            ),
+            ApiError::GameNameTaken => (
+                StatusCode::CONFLICT,
+                "game_name_taken",
+                "Ce nom de jeu est déjà pris",
+            ),
+            ApiError::StatKeyTaken => (
+                StatusCode::CONFLICT,
+                "stat_key_taken",
+                "Cette clé de statistique est déjà prise",
+            ),
+            ApiError::StatInUse => (
+                StatusCode::CONFLICT,
+                "stat_in_use",
+                "Cette statistique est utilisée par un tournoi en cours",
+            ),
+            ApiError::TeamNameTaken => (
+                StatusCode::CONFLICT,
+                "team_name_taken",
+                "Ce nom d'équipe est déjà pris pour ce jeu",
+            ),
+            ApiError::AlreadyTeamMember => (
+                StatusCode::CONFLICT,
+                "already_team_member",
+                "Ce compte est déjà membre de l'équipe",
+            ),
+            ApiError::TeamAlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "team_already_registered",
+                "Cette équipe est déjà inscrite à ce tournoi",
+            ),
+            ApiError::PlayerAlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "player_already_registered",
+                "Ce joueur est déjà dans une équipe de ce tournoi",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
