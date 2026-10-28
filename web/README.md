@@ -34,7 +34,7 @@ Contrat de l'API publique (voir `backend/crates/api-public`) :
 
 | Appel | Succès | Erreurs gérées |
 |---|---|---|
-| `POST /register` | 201 `{ id, username }` | 400 (`errors` par champ), 409 (nom déjà pris) |
+| `POST /register` | 201 jetons (corps ignoré par le web) | 400 (`errors` par champ), 409 (nom déjà pris) |
 | `POST /login` | 200 `{ access_token, refresh_token, token_type, expires_in }` | 400, 401 |
 | `POST /logout` (Bearer JWT + `{ refresh_token }`) | 204 (révoque le refresh token) | ignorées : la session locale est fermée quoi qu'il arrive |
 
