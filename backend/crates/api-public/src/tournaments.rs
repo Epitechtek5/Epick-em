@@ -443,8 +443,8 @@ async fn delete_tournament(
 /// Transitions : `draft` → `registration`, `registration` → `ongoing`, `ongoing` →
 /// `finished`, et `draft`, `registration` ou `ongoing` → `cancelled`. Le passage en `ongoing`
 /// exige au moins deux inscrits actifs (ni `withdrawn` ni `disqualified`) et, pour un tournoi
-/// par équipes, `team_size` titulaires (ni remplaçants) dans chaque équipe inscrite. La
-/// validation des étapes (#52) s'ajoutera à ces contrôles.
+/// par équipes, `team_size` titulaires (ni remplaçants) dans chaque équipe inscrite. Le
+/// chaînage des étapes, s'il y en a, doit être valide (voir `POST /tournaments/{id}/steps`).
 #[utoipa::path(
     post,
     path = "/tournaments/{id}/status",
@@ -1087,7 +1087,7 @@ async fn team_ranking(
     Ok(HttpResponse::Ok().json(ranking))
 }
 
-async fn find_tournament(state: &AppState, id: Uuid) -> Result<Tournament, ApiError> {
+pub(crate) async fn find_tournament(state: &AppState, id: Uuid) -> Result<Tournament, ApiError> {
     state
         .store
         .find_tournament(id)
@@ -1158,7 +1158,7 @@ async fn starters(state: &AppState, team_id: Uuid) -> Result<usize, ApiError> {
 }
 
 /// Inscrits ni retirés ni disqualifiés.
-async fn active_participants(
+pub(crate) async fn active_participants(
     state: &AppState,
     tournament_id: Uuid,
 ) -> Result<Vec<TournamentParticipant>, ApiError> {
@@ -1210,7 +1210,7 @@ async fn require_actor(
     Err(ApiError::Forbidden)
 }
 
-fn require_scoring_editable(tournament: &Tournament) -> Result<(), ApiError> {
+pub(crate) fn require_scoring_editable(tournament: &Tournament) -> Result<(), ApiError> {
     if matches!(
         tournament.status,
         TournamentStatus::Draft | TournamentStatus::Registration
@@ -1260,6 +1260,10 @@ async fn start_problems(
     tournament: &Tournament,
 ) -> Result<Vec<String>, ApiError> {
     let mut problems = Vec::new();
+    problems.extend(crate::steps::chain_problems(
+        tournament,
+        &crate::steps::steps_of(state, tournament.id).await?,
+    ));
     let participants = active_participants(state, tournament.id).await?;
     if participants.len() < 2 {
         problems.push(format!(
