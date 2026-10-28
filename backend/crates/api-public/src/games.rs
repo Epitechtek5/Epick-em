@@ -297,7 +297,7 @@ pub(crate) fn validate(
     errors
 }
 
-fn is_image_url(url: &str) -> bool {
+pub(crate) fn is_image_url(url: &str) -> bool {
     url.len() <= IMAGE_URL_MAX
         && ["http://", "https://"].iter().any(|scheme| {
             url.get(..scheme.len())
