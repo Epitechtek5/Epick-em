@@ -29,6 +29,7 @@ use utoipa::{Modify, OpenApi};
         (name = "teams", description = "Équipes globales et leurs membres"),
         (name = "tournament-teams", description = "Équipes de tournoi, copies indépendantes des équipes globales"),
         (name = "tournaments", description = "Tournois, barème, inscriptions, statuts et classements"),
+        (name = "steps", description = "Étapes d'un tournoi : réglages, lancement, clôture et classements par groupe"),
         (name = "system", description = "Santé du service"),
     ),
     modifiers(&BearerAuth),

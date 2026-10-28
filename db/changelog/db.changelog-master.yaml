@@ -20,3 +20,5 @@ databaseChangeLog:
       file: changelog/0009-create-tournaments.yaml
   - include:
       file: changelog/0010-tournament-unique-name.yaml
+  - include:
+      file: changelog/0011-create-steps.yaml
