@@ -1,1 +1,1 @@
-export { CreateStatScreen as default } from '@/screens/StatEditorScreen';
+export { CreateStatScreen as default } from '@/screens/stats/StatEditorScreen';

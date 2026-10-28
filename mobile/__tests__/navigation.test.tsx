@@ -1,6 +1,6 @@
 import { colors } from '../src/theme/colors';
 import { useSyncExternalStore } from 'react';
-import ProfileScreen from '../src/screens/ProfileScreen';
+import ProfileScreen from '../src/screens/account/ProfileScreen';
 import { PreferencesProvider } from '../src/features/preferences/provider';
 import {
   renderRouter,
@@ -20,16 +20,16 @@ import TabsLayout from '../src/app/(authenticated)/(tabs)/_layout';
 import {
   CreateGameScreen,
   EditGameScreen,
-} from '../src/screens/GameEditorScreen';
-import GameTransferScreen from '../src/screens/GameTransferScreen';
-import StatsScreen from '../src/screens/StatsScreen';
-import StatTransferScreen from '../src/screens/StatTransferScreen';
-import GameStatsManagementScreen from '../src/screens/GameStatsManagementScreen';
+} from '../src/screens/games/GameEditorScreen';
+import GameTransferScreen from '../src/screens/games/GameTransferScreen';
+import StatsScreen from '../src/screens/stats/StatsScreen';
+import StatTransferScreen from '../src/screens/stats/StatTransferScreen';
+import GameStatsManagementScreen from '../src/screens/games/GameStatsManagementScreen';
 import {
   CreateStatScreen,
   EditStatScreen,
-} from '../src/screens/StatEditorScreen';
-import AdminUserScreen from '../src/screens/AdminUserScreen';
+} from '../src/screens/stats/StatEditorScreen';
+import AdminUserScreen from '../src/screens/users/AdminUserScreen';
 import { useAuth } from '../src/features/auth/session';
 
 jest.mock('../src/features/games/files', () => ({
@@ -65,6 +65,7 @@ const routes = {
     </ThemeProvider>
   ),
   '(authenticated)/(tabs)/games': () => <Text>Games content</Text>,
+  '(authenticated)/(tabs)/teams': () => <Text>Teams content</Text>,
   '(authenticated)/games/[id]/index': () => <Text>Game details</Text>,
   '(authenticated)/games/create': CreateGameScreen,
   '(authenticated)/games/[id]/edit': EditGameScreen,
@@ -115,6 +116,8 @@ it.each([DefaultTheme, DarkTheme])(
       vbHeight: 24,
     });
     expect(screen.getByLabelText('Users')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Teams')).toBeOnTheScreen();
+    expect(screen.getAllByTestId('teams-tab-icon').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Settings')).toBeOnTheScreen();
     expect(screen.getAllByTestId('settings-tab-icon').length).toBeGreaterThan(
       0,
