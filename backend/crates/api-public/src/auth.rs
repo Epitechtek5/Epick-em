@@ -13,6 +13,8 @@ use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
 use crate::stat_io::StoreStats;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
+use crate::tournament_io::{NoChild, TournamentChild};
+use crate::tournament_team_io::StoreTournamentTeams;
 use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
@@ -42,6 +44,12 @@ pub struct AppState {
     /// Statistiques des jeux, importées et exportées avec eux (opaques pour les jeux). Par défaut
     /// celles de la base ([`StoreStats`]).
     pub(crate) stats: Arc<dyn GameStats>,
+    /// Équipes, étapes et matchs des tournois, importés et exportés avec eux (opaques pour les
+    /// tournois). Par défaut les équipes sont celles de la base ([`StoreTournamentTeams`]) ;
+    /// les étapes et les matchs ne sont pas encore pris en charge.
+    pub(crate) tournament_teams: Arc<dyn TournamentChild>,
+    pub(crate) steps: Arc<dyn TournamentChild>,
+    pub(crate) matches: Arc<dyn TournamentChild>,
 }
 
 impl AppState {
@@ -52,10 +60,31 @@ impl AppState {
         let dummy_hash = hash_password("mot de passe factice")?;
         Ok(AppState {
             stats: Arc::new(StoreStats(store.clone())),
+            tournament_teams: Arc::new(StoreTournamentTeams(store.clone())),
+            steps: Arc::new(NoChild("les étapes")),
+            matches: Arc::new(NoChild("les matchs")),
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
         })
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les équipes des tournois.
+    pub fn with_tournament_teams(mut self, teams: Arc<dyn TournamentChild>) -> Self {
+        self.tournament_teams = teams;
+        self
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les étapes des tournois.
+    pub fn with_steps(mut self, steps: Arc<dyn TournamentChild>) -> Self {
+        self.steps = steps;
+        self
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les matchs des tournois.
+    pub fn with_matches(mut self, matches: Arc<dyn TournamentChild>) -> Self {
+        self.matches = matches;
+        self
     }
 
     /// Branche le sous-niveau qui importe et exporte les statistiques des jeux.

@@ -1,0 +1,8 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0010-tournament-unique-name
+      author: epickem
+      changes:
+        - sql:
+            sql: CREATE UNIQUE INDEX tournaments_game_name_lower_key ON tournaments (game_id, lower(name))
+            rollback: DROP INDEX tournaments_game_name_lower_key
