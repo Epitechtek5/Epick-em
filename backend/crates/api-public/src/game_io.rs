@@ -69,26 +69,26 @@ pub enum Format {
 }
 
 impl Format {
-    fn content_type(self) -> &'static str {
+    pub(crate) fn content_type(self) -> &'static str {
         match self {
             Format::Json => "application/json",
             Format::Csv => "text/csv; charset=utf-8",
         }
     }
 
-    fn filename(self) -> &'static str {
+    pub(crate) fn extension(self) -> &'static str {
         match self {
-            Format::Json => "games.json",
-            Format::Csv => "games.csv",
+            Format::Json => "json",
+            Format::Csv => "csv",
         }
     }
 }
 
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
-struct FormatQuery {
+pub(crate) struct FormatQuery {
     /// Format du fichier (`json` par défaut).
-    format: Option<Format>,
+    pub(crate) format: Option<Format>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -164,7 +164,7 @@ pub(crate) async fn export_games(
         .insert_header((CONTENT_TYPE, format.content_type()))
         .insert_header((
             CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", format.filename()),
+            format!("attachment; filename=\"games.{}\"", format.extension()),
         ))
         .body(body))
 }
