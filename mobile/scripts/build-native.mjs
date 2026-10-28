@@ -55,17 +55,17 @@ mkdirSync(new URL('../build/', import.meta.url), { recursive: true });
 
 if (platform === 'android') {
   // Expo's generated release variant uses the debug key until production signing is configured.
+  // Par défaut React Native compile le code natif pour 4 ABI, ce qui domine la durée du build.
+  // arm64-v8a couvre les appareils, x86_64 les émulateurs ; surchargeable via MOBILE_ANDROID_ABIS.
+  const gradleArgs = [
+    'assembleRelease',
+    '-Pandroid.cmakeVersion=3.30.5',
+    `-PreactNativeArchitectures=${process.env.MOBILE_ANDROID_ABIS || 'arm64-v8a,x86_64'}`,
+    '--no-daemon',
+  ];
   run(
     windows ? 'cmd.exe' : './gradlew',
-    windows
-      ? [
-          '/c',
-          'gradlew.bat',
-          'assembleRelease',
-          '-Pandroid.cmakeVersion=3.30.5',
-          '--no-daemon',
-        ]
-      : ['assembleRelease', '-Pandroid.cmakeVersion=3.30.5', '--no-daemon'],
+    windows ? ['/c', 'gradlew.bat', ...gradleArgs] : gradleArgs,
     `${root}/android`,
   );
   copyFileSync(
@@ -90,6 +90,9 @@ if (platform === 'android') {
     'generic/platform=iOS Simulator',
     '-derivedDataPath',
     'build/ios',
+    // Simulateur Apple Silicon uniquement : évite de compiler une seconde architecture.
+    'ARCHS=arm64',
+    'ONLY_ACTIVE_ARCH=NO',
     'CODE_SIGNING_ALLOWED=NO',
     'build',
   ]);
