@@ -101,6 +101,9 @@ jobs:
     needs: [changes, gitleaks, backend, db, web, mobile, deploy]
     runs-on: ubuntu-latest
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Validate required component checks
         env:
           NEEDS: ${{ toJSON(needs) }}
