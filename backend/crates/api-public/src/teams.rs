@@ -67,6 +67,10 @@ pub(crate) struct Pagination {
 }
 
 impl Pagination {
+    pub(crate) fn new(limit: Option<i64>, offset: Option<i64>) -> Self {
+        Pagination { limit, offset }
+    }
+
     pub(crate) fn bounds(&self) -> (i64, i64) {
         (
             self.limit

@@ -227,7 +227,10 @@ pub(crate) async fn import_games(
             .stats
             .import(game.id, stats)
             .await
-            .map_err(ApiError::internal)?;
+            .map_err(|err| match err {
+                StoreError::StatInUse => ApiError::StatInUse,
+                other => ApiError::internal(other),
+            })?;
         if created {
             report.created += 1;
         } else {
