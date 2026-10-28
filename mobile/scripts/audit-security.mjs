@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -7,11 +8,14 @@ const exceptions = new Map([
   ['GHSA-86w9-cpqp-85rv', 'node-forge'],
   ['GHSA-rj75-hqrm-r3gf', 'postcss-selector-parser'],
 ]);
+const temporaryExceptions = new Map([
+  ['GHSA-gcqx-w48m-w2h4', { package: 'deepmerge', reviewBy: '2026-11-28' }],
+]);
 const severities = ['info', 'low', 'moderate', 'high', 'critical'];
 const isObject = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-export function inspectAudit(result) {
+export function inspectAudit(result, { now = new Date() } = {}) {
   if (result.error || result.signal || ![0, 1].includes(result.status)) {
     throw new Error(
       `Audit execution failed: ${result.error?.message || result.signal || `exit ${result.status}`}`,
@@ -80,12 +84,31 @@ export function inspectAudit(result) {
             via.url,
           );
         const id = match?.[1];
+        const temporaryException = temporaryExceptions.get(id);
+        const exceptionPackage =
+          exceptions.get(id) ?? temporaryException?.package;
+        const expired =
+          temporaryException !== undefined &&
+          now.toISOString().slice(0, 10) > temporaryException.reviewBy;
         if (
-          exceptions.get(id) === name &&
+          exceptionPackage === name &&
           via.name === name &&
           via.dependency === name
         ) {
-          accepted.add(`${name}: ${id}`);
+          if (expired) {
+            const finding = {
+              package: name,
+              advisory: id,
+              severity: via.severity,
+              affectedRange: via.range ?? entry.range,
+              title: via.title,
+              remediation: remediationFor(name, entry.fixAvailable),
+              reason: `Temporary exception expired after ${temporaryException.reviewBy}.`,
+            };
+            unexpected.set(`${name}:${id}`, finding);
+          } else {
+            accepted.add(`${name}: ${id}`);
+          }
         } else {
           const advisoryId = id ?? via.url;
           const finding = {
@@ -155,8 +178,13 @@ export function inspectAudit(result) {
   };
 }
 
-export function runAudits(execute = spawnSync, log = console.log) {
+export function runAudits(
+  execute = spawnSync,
+  log = console.log,
+  { now = new Date() } = {},
+) {
   const failures = [];
+  const auditResults = [];
 
   for (const [label, args] of [
     ['Full tree', ['audit', '--json']],
@@ -169,7 +197,8 @@ export function runAudits(execute = spawnSync, log = console.log) {
         timeout: 120_000,
         maxBuffer: 16 * 1024 * 1024,
       });
-      const findings = inspectAudit(result);
+      const findings = inspectAudit(result, { now });
+      auditResults.push({ label, findings });
       log(
         `${label}: ${findings.accepted.length} accepted, ${findings.unexpected.length} unexpected advisories`,
       );
@@ -182,6 +211,7 @@ export function runAudits(execute = spawnSync, log = console.log) {
           finding.severity,
           `affected ${finding.affectedRange}`,
           finding.title,
+          ...(finding.reason ? [finding.reason] : []),
           `Remediation: ${finding.remediation}`,
         ].join(' | ');
         log(`  Unexpected: ${detail}`);
@@ -201,13 +231,79 @@ export function runAudits(execute = spawnSync, log = console.log) {
     } catch (error) {
       const failure = `${label}: ${error.message}`;
       failures.push(failure);
+      auditResults.push({ label, error: failure });
       log(failure);
     }
+  }
+
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (summaryPath) {
+    appendFileSync(summaryPath, formatAuditSummary(auditResults));
   }
 
   if (failures.length > 0) {
     throw new Error(failures.join('\n'));
   }
+}
+
+export function formatAuditSummary(auditResults) {
+  const lines = [
+    '## Mobile dependency security audit',
+    '',
+    '| Dependency tree | Unexpected advisory status | Accepted known advisories |',
+    '| --- | --- | --- |',
+  ];
+
+  for (const auditResult of auditResults) {
+    if (auditResult.error) {
+      lines.push(
+        `| ${auditResult.label} | Audit failed before policy evaluation | None |`,
+      );
+      continue;
+    }
+
+    const accepted = auditResult.findings.accepted.length
+      ? auditResult.findings.accepted
+          .map((entry) => {
+            const [packageName, advisory] = entry.split(': ');
+            const exception = temporaryExceptions.get(advisory);
+            const reviewNote = exception
+              ? ` (review by ${exception.reviewBy})`
+              : ' (existing exception)';
+            return `${packageName} ${advisory}${reviewNote}`;
+          })
+          .join('<br>')
+      : 'None';
+    const status = auditResult.findings.unexpected.length
+      ? 'New or expired advisories require action'
+      : 'No unexpected advisories';
+
+    lines.push(`| ${auditResult.label} | ${status} | ${accepted} |`);
+  }
+
+  const unexpectedFindings = auditResults.flatMap(
+    (auditResult) => auditResult.findings?.unexpected ?? [],
+  );
+  if (unexpectedFindings.length) {
+    lines.push('', '### New or expired advisories requiring action', '');
+    for (const finding of unexpectedFindings) {
+      lines.push(
+        `- **${finding.package} — ${finding.advisory} (${finding.severity})**: ` +
+          `${finding.title}. ${finding.reason ?? finding.remediation}`,
+      );
+    }
+  }
+
+  const auditErrors = auditResults.filter((auditResult) => auditResult.error);
+  if (auditErrors.length) {
+    lines.push('', '### Audit execution errors', '');
+    for (const auditError of auditErrors) {
+      lines.push(`- ${auditError.error}`);
+    }
+  }
+
+  lines.push('');
+  return lines.join('\n');
 }
 
 if (
