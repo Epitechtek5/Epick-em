@@ -17,9 +17,18 @@ import {
 import { Text } from 'react-native';
 import AuthenticatedLayout from '../src/app/(authenticated)/_layout';
 import TabsLayout from '../src/app/(authenticated)/(tabs)/_layout';
+import {
+  CreateGameScreen,
+  EditGameScreen,
+} from '../src/screens/GameEditorScreen';
+import GameTransferScreen from '../src/screens/GameTransferScreen';
 import AdminUserScreen from '../src/screens/AdminUserScreen';
 import { useAuth } from '../src/features/auth/session';
 
+jest.mock('../src/features/games/files', () => ({
+  pickAndImportGames: jest.fn(),
+  saveGamesExport: jest.fn(),
+}));
 jest.mock('../src/features/auth/session', () => ({ useAuth: jest.fn() }));
 const user = {
   id: '22222222-2222-4222-8222-222222222222',
@@ -48,6 +57,11 @@ const routes = {
       <Slot />
     </ThemeProvider>
   ),
+  '(authenticated)/(tabs)/games': () => <Text>Games content</Text>,
+  '(authenticated)/games/[id]/index': () => <Text>Game details</Text>,
+  '(authenticated)/games/create': CreateGameScreen,
+  '(authenticated)/games/[id]/edit': EditGameScreen,
+  '(authenticated)/games/transfer': GameTransferScreen,
   '(authenticated)/user/[id]': () => <Text>User detail</Text>,
   '(authenticated)/_layout': AuthenticatedLayout,
   '(authenticated)/(tabs)/_layout': TabsLayout,
@@ -83,6 +97,11 @@ it.each([DefaultTheme, DarkTheme])(
       { initialUrl: '/profile' },
     );
     expect(await screen.findByText('Profile content')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Games')).toBeOnTheScreen();
+    expect(screen.getAllByTestId('games-tab-icon')[0].props).toMatchObject({
+      vbWidth: 24,
+      vbHeight: 24,
+    });
     expect(screen.getByLabelText('Users')).toBeOnTheScreen();
     expect(screen.getByLabelText('Settings')).toBeOnTheScreen();
     expect(screen.getAllByTestId('settings-tab-icon').length).toBeGreaterThan(
@@ -155,5 +174,28 @@ it('returns from Settings to Login after logout and rejects subsequent protected
   await act(async () => {
     router.push('/profile');
   });
+  expect(await screen.findByText('Login content')).toBeOnTheScreen();
+});
+
+it.each(['user', 'watcher'] as const)(
+  'blocks all Games administration deep links for %s',
+  async (role) => {
+    session(role);
+    await renderRouter(routes, { initialUrl: '/games/create' });
+    expect(await screen.findByText('Games content')).toBeOnTheScreen();
+    await act(async () => {
+      router.push(`/games/${user.id}/edit`);
+    });
+    expect(await screen.findByText('Games content')).toBeOnTheScreen();
+    await act(async () => {
+      router.push('/games/transfer');
+    });
+    expect(await screen.findByText('Games content')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Name')).toBeNull();
+  },
+);
+it('protects Games details and administration after session loss', async () => {
+  session(null);
+  await renderRouter(routes, { initialUrl: `/games/${user.id}` });
   expect(await screen.findByText('Login content')).toBeOnTheScreen();
 });
