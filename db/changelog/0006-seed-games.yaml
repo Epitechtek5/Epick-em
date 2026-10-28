@@ -1,0 +1,17 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0006-seed-games
+      author: epickem
+      changes:
+        - sql:
+            sql: >-
+              INSERT INTO games (name, description) VALUES
+              ('League of Legends', 'MOBA 5 contre 5 : détruire le nexus adverse.'),
+              ('Counter-Strike 2', 'FPS tactique 5 contre 5 : attaque et défense de sites.'),
+              ('Valorant', 'FPS tactique 5 contre 5 avec agents dotés de capacités.'),
+              ('Rocket League', 'Football en voitures propulsées par fusées.'),
+              ('Dota 2', 'MOBA 5 contre 5 : détruire l''ancien adverse.')
+              ON CONFLICT (lower(name)) DO NOTHING
+            rollback: >-
+              DELETE FROM games WHERE lower(name) IN ('league of legends', 'counter-strike 2',
+              'valorant', 'rocket league', 'dota 2')

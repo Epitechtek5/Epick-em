@@ -1,6 +1,8 @@
 //! Implémentation en mémoire de [`AuthStore`], pour les tests.
 
-use super::{AuthStore, Role, StoreError, UserProfile, UserRecord, UserUpdate};
+use super::{
+    AuthStore, Game, GameInput, GameUpdate, Role, StoreError, UserProfile, UserRecord, UserUpdate,
+};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -16,6 +18,7 @@ struct RefreshToken {
 #[derive(Default)]
 struct State {
     users: Vec<UserRecord>,
+    games: Vec<Game>,
     tokens: HashMap<String, RefreshToken>,
 }
 
@@ -206,5 +209,100 @@ impl AuthStore for MemoryStore {
             token.revoked = true;
         }
         Ok(())
+    }
+
+    async fn list_games(&self, limit: i64, offset: i64) -> Result<Vec<Game>, StoreError> {
+        let mut games = self.state().games.clone();
+        games.sort_by_key(|game| (game.name.to_lowercase(), game.id));
+        Ok(games
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(0))
+            .take(usize::try_from(limit).unwrap_or(0))
+            .collect())
+    }
+
+    async fn find_game(&self, id: Uuid) -> Result<Option<Game>, StoreError> {
+        Ok(self.state().games.iter().find(|g| g.id == id).cloned())
+    }
+
+    async fn create_game(&self, input: GameInput) -> Result<Game, StoreError> {
+        let mut state = self.state();
+        if state
+            .games
+            .iter()
+            .any(|g| g.name.to_lowercase() == input.name.to_lowercase())
+        {
+            return Err(StoreError::GameNameTaken);
+        }
+        let game = Game {
+            id: Uuid::new_v4(),
+            name: input.name,
+            description: input.description,
+            images: input.images,
+        };
+        state.games.push(game.clone());
+        Ok(game)
+    }
+
+    async fn update_game(&self, id: Uuid, update: GameUpdate) -> Result<Option<Game>, StoreError> {
+        let mut state = self.state();
+        if let Some(name) = &update.name
+            && state
+                .games
+                .iter()
+                .any(|g| g.id != id && g.name.to_lowercase() == name.to_lowercase())
+        {
+            return Err(StoreError::GameNameTaken);
+        }
+        let Some(game) = state.games.iter_mut().find(|g| g.id == id) else {
+            return Ok(None);
+        };
+        if let Some(name) = update.name {
+            game.name = name;
+        }
+        if let Some(description) = update.description {
+            game.description = description;
+        }
+        if let Some(images) = update.images {
+            game.images = images;
+        }
+        Ok(Some(game.clone()))
+    }
+
+    async fn delete_game(&self, id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let before = state.games.len();
+        state.games.retain(|g| g.id != id);
+        Ok(state.games.len() != before)
+    }
+
+    async fn upsert_games(&self, games: Vec<GameInput>) -> Result<Vec<(Game, bool)>, StoreError> {
+        let mut state = self.state();
+        let mut result = Vec::with_capacity(games.len());
+        for input in games {
+            let existing = state
+                .games
+                .iter_mut()
+                .find(|g| g.name.to_lowercase() == input.name.to_lowercase());
+            match existing {
+                Some(game) => {
+                    game.name = input.name;
+                    game.description = input.description;
+                    game.images = input.images;
+                    result.push((game.clone(), false));
+                }
+                None => {
+                    let game = Game {
+                        id: Uuid::new_v4(),
+                        name: input.name,
+                        description: input.description,
+                        images: input.images,
+                    };
+                    state.games.push(game.clone());
+                    result.push((game, true));
+                }
+            }
+        }
+        Ok(result)
     }
 }
