@@ -6,6 +6,7 @@
 
 use crate::auth::{AppState, Claims, hash_password_blocking, password_error, username_error};
 use crate::error::{ApiError, ErrorResponse};
+use crate::password_reset::{email_error, normalize_email};
 use crate::store::{Role, StoreError, UserProfile, UserUpdate};
 use actix_web::{HttpResponse, delete, get, patch, web};
 use serde::Deserialize;
@@ -34,6 +35,9 @@ struct UpdateUserRequest {
     #[schema(min_length = 8, max_length = 128, format = Password)]
     password: Option<String>,
     role: Option<Role>,
+    /// Sert à réinitialiser le mot de passe.
+    #[schema(max_length = 254, format = Email, example = "alice@example.com")]
+    email: Option<String>,
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -116,7 +120,7 @@ async fn get_user(
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
         (status = 404, description = "Compte introuvable", body = ErrorResponse),
-        (status = 409, description = "Nom d'utilisateur déjà pris", body = ErrorResponse),
+        (status = 409, description = "Nom d'utilisateur ou adresse e-mail déjà pris", body = ErrorResponse),
     ),
 )]
 #[patch("/user/{id}/update")]
@@ -169,7 +173,7 @@ async fn delete_user(
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Le rôle n'est pas modifiable ici", body = ErrorResponse),
         (status = 404, description = "Compte introuvable", body = ErrorResponse),
-        (status = 409, description = "Nom d'utilisateur déjà pris", body = ErrorResponse),
+        (status = 409, description = "Nom d'utilisateur ou adresse e-mail déjà pris", body = ErrorResponse),
     ),
 )]
 #[patch("/me/update")]
@@ -236,8 +240,10 @@ async fn update(
         username,
         password,
         role,
+        email,
     } = request;
-    if username.is_none() && password.is_none() && role.is_none() {
+    let email = email.as_deref().map(normalize_email);
+    if username.is_none() && password.is_none() && role.is_none() && email.is_none() {
         return Err(ApiError::Validation(vec![(
             "body",
             "Renseignez au moins un champ à modifier.".to_string(),
@@ -249,6 +255,9 @@ async fn update(
     }
     if let Some(message) = password.as_deref().and_then(password_error) {
         errors.push(("password", message));
+    }
+    if let Some(message) = email.as_deref().and_then(email_error) {
+        errors.push(("email", message));
     }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
@@ -266,11 +275,13 @@ async fn update(
                 username,
                 password_hash,
                 role,
+                email,
             },
         )
         .await
         .map_err(|err| match err {
             StoreError::UsernameTaken => ApiError::Conflict,
+            StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?
         .ok_or(ApiError::NotFound)

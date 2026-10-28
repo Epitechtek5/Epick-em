@@ -32,6 +32,10 @@ pub enum ApiError {
     NotFound,
     /// Nom d'utilisateur déjà pris.
     Conflict,
+    /// Adresse e-mail déjà utilisée par un autre compte.
+    EmailTaken,
+    /// Lien de réinitialisation du mot de passe inconnu, expiré ou déjà utilisé.
+    InvalidResetToken,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -63,6 +67,16 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "username_taken",
                 "Ce nom d'utilisateur est déjà pris",
+            ),
+            ApiError::EmailTaken => (
+                StatusCode::CONFLICT,
+                "email_taken",
+                "Cette adresse e-mail est déjà utilisée",
+            ),
+            ApiError::InvalidResetToken => (
+                StatusCode::BAD_REQUEST,
+                "invalid_reset_token",
+                "Lien de réinitialisation invalide ou expiré",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

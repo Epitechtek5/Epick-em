@@ -1,4 +1,4 @@
-//! API publique : authentification (inscription, connexion, rafraîchissement, déconnexion) et
+//! API publique : authentification (inscription, connexion, rafraîchissement, déconnexion, mot de passe oublié) et
 //! gestion des comptes.
 //! La documentation OpenAPI est servie sur `/docs` (Swagger UI) et `/openapi.json`.
 //!
@@ -9,7 +9,9 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod guard;
+pub mod mail;
 pub mod openapi;
+pub mod password_reset;
 pub mod router;
 pub mod store;
 pub mod users;

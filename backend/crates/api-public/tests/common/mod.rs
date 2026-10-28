@@ -6,12 +6,14 @@ use actix_web::dev::{Service, ServiceResponse};
 use actix_web::http::StatusCode;
 use actix_web::test::{self, TestRequest};
 use api_public::config::AuthConfig;
+use api_public::mail::MemoryMailer;
 use api_public::store::MemoryStore;
 use api_public::{AppState, app};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
+pub const RESET_URL: &str = "https://epickem.test/reset-password";
 pub const SECRET: &str = "0123456789abcdef0123456789abcdef";
 
 /// L'application complète (garde d'authentification comprise) sur le store donné.
@@ -29,6 +31,26 @@ pub async fn app_with(
         refresh_token_ttl: refresh_ttl,
     };
     let state = AppState::new(store, config).unwrap();
+    test::init_service(app(state)).await
+}
+
+/// Comme [`app_with`], avec `mailer` branché et le lien de réinitialisation `RESET_URL`.
+pub async fn app_with_mailer(
+    store: Arc<MemoryStore>,
+    mailer: Arc<MemoryMailer>,
+) -> impl Service<
+    actix_http::Request,
+    Response = ServiceResponse<impl MessageBody>,
+    Error = actix_web::Error,
+> {
+    let config = AuthConfig {
+        jwt_secret: SECRET.into(),
+        access_token_ttl: Duration::from_secs(900),
+        refresh_token_ttl: Duration::from_secs(3600),
+    };
+    let state = AppState::new(store, config)
+        .unwrap()
+        .with_mailer(mailer, RESET_URL);
     test::init_service(app(state)).await
 }
 
