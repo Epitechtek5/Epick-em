@@ -23,6 +23,7 @@ fn api_routes(cfg: &mut ServiceConfig) {
     cfg.service(health)
         .service(hello)
         .configure(crate::auth::routes)
+        .configure(crate::password_reset::routes)
         .configure(crate::users::routes);
 }
 

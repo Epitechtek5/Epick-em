@@ -55,6 +55,8 @@ pub struct UserRecord {
     pub username: String,
     pub password_hash: String,
     pub role: Role,
+    /// Adresse e-mail en minuscules, si le compte en a une.
+    pub email: Option<String>,
 }
 
 /// Vue publique d'un compte : jamais l'empreinte du mot de passe. C'est aussi la valeur mise en
@@ -82,12 +84,16 @@ pub struct UserUpdate {
     pub username: Option<String>,
     pub password_hash: Option<String>,
     pub role: Option<Role>,
+    /// Adresse e-mail, en minuscules.
+    pub email: Option<String>,
 }
 
 #[derive(Debug)]
 pub enum StoreError {
     /// Le nom d'utilisateur existe déjà (sans tenir compte de la casse).
     UsernameTaken,
+    /// L'adresse e-mail est déjà utilisée par un autre compte.
+    EmailTaken,
     Other(String),
 }
 
@@ -95,6 +101,7 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::UsernameTaken => f.write_str("nom d'utilisateur déjà pris"),
+            StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -110,16 +117,21 @@ impl From<sqlx::Error> for StoreError {
 
 #[async_trait]
 pub trait AuthStore: Send + Sync {
-    /// Crée le compte ; [`StoreError::UsernameTaken`] si le nom est déjà utilisé.
+    /// Crée le compte ; [`StoreError::UsernameTaken`] si le nom est déjà utilisé,
+    /// [`StoreError::EmailTaken`] si l'adresse e-mail (en minuscules) l'est.
     async fn create_user(
         &self,
         username: &str,
+        email: Option<&str>,
         password_hash: &str,
     ) -> Result<UserRecord, StoreError>;
 
     /// Cherche un compte par nom d'utilisateur, sans tenir compte de la casse.
     async fn find_user_by_username(&self, username: &str)
     -> Result<Option<UserRecord>, StoreError>;
+
+    /// Cherche un compte par adresse e-mail (en minuscules).
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, StoreError>;
 
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError>;
 
@@ -130,7 +142,7 @@ pub trait AuthStore: Send + Sync {
     async fn list_profiles(&self, limit: i64, offset: i64) -> Result<Vec<UserProfile>, StoreError>;
 
     /// Applique `update` ; `None` si le compte n'existe pas, [`StoreError::UsernameTaken`] si le
-    /// nouveau nom est déjà utilisé.
+    /// nouveau nom est déjà utilisé, [`StoreError::EmailTaken`] si la nouvelle adresse l'est.
     async fn update_user(
         &self,
         id: Uuid,
@@ -163,4 +175,22 @@ pub trait AuthStore: Send + Sync {
     /// appartenant à un autre compte n'est pas une erreur (et n'est pas modifié).
     async fn revoke_refresh_token(&self, user_id: Uuid, token_hash: &str)
     -> Result<(), StoreError>;
+
+    /// Enregistre l'empreinte d'un jeton de réinitialisation valable pendant `ttl`, et invalide
+    /// les jetons de réinitialisation encore en attente du compte.
+    async fn insert_password_reset_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        ttl: Duration,
+    ) -> Result<(), StoreError>;
+
+    /// Consomme le jeton s'il est valide (existant, non utilisé, non expiré) : remplace le mot de
+    /// passe du compte par `password_hash` et révoque tous ses jetons de rafraîchissement, en une
+    /// seule opération. Renvoie `false` si le jeton est inutilisable (rien n'est alors modifié).
+    async fn consume_password_reset_token(
+        &self,
+        token_hash: &str,
+        password_hash: &str,
+    ) -> Result<bool, StoreError>;
 }
