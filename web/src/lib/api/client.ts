@@ -1,79 +1,57 @@
+import { refreshSession, endSession } from '@/lib/auth/session'
 import { tokenStore } from '@/lib/auth/token-store'
+import { ApiError, httpRequest, type HttpOptions } from './http'
 
-// En dev, Vite proxifie /api vers api-public ; en Docker, nginx fait de même.
-const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/+$/, '')
+export { ApiError, NetworkError } from './http'
 
-export class ApiError extends Error {
-  readonly status: number
-  readonly body: unknown
-
-  constructor(status: number, body: unknown) {
-    super(`HTTP ${status}`)
-    this.name = 'ApiError'
-    this.status = status
-    this.body = body
-  }
-}
-
-export class NetworkError extends Error {
-  constructor(options?: { cause?: unknown }) {
-    super('Serveur injoignable', options)
-    this.name = 'NetworkError'
-  }
-}
-
-interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-  body?: unknown
-  signal?: AbortSignal
+export interface RequestOptions extends Omit<HttpOptions, 'accessToken'> {
   // Ne pas joindre le token (ex. register, login).
   skipAuth?: boolean
-  // Statut de succès attendu (ex. 201). Un autre 2xx est traité comme une erreur :
-  // il trahit un serveur non conforme (mauvaise cible de proxy, squelette…).
-  expectedStatus?: number
+  // Jeton explicite (ex. révocation d'une session déjà fermée localement) : désactive
+  // aussi le renouvellement automatique.
+  accessToken?: string
+  // Désactive le renouvellement automatique sur 401.
+  retryOnUnauthorized?: boolean
 }
 
-async function parseBody(response: Response): Promise<unknown> {
-  const text = await response.text()
-  if (text.length === 0) return undefined
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
-  }
-}
-
-// Seul mécanisme d'authentification : Authorization: Bearer <JWT>.
-// Jamais d'en-tête X-User-Id.
+// Requête authentifiée avec renouvellement automatique de la session :
+// sur 401, le jeton est renouvelé (une seule fois à la fois, même si plusieurs
+// requêtes échouent ensemble) puis la requête est rejouée une fois. Si le
+// renouvellement est refusé ou si le rejeu échoue encore en 401, la session locale
+// est fermée et l'interface revient à la connexion.
 export async function apiRequest<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' }
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+  const { skipAuth, retryOnUnauthorized, accessToken, ...http } = options
+  const used = tokenStore.get()
+  const token = skipAuth ? undefined : (accessToken ?? used?.accessToken)
 
-  const accessToken = tokenStore.get()?.accessToken
-  if (accessToken && !options.skipAuth) {
-    headers.Authorization = `Bearer ${accessToken}`
-  }
-
-  let response: Response
   try {
-    response = await fetch(`${baseUrl}${path}`, {
-      method: options.method ?? 'GET',
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: options.signal,
-    })
-  } catch (cause) {
-    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
-    throw new NetworkError({ cause })
-  }
+    return await httpRequest<T>(path, { ...http, accessToken: token })
+  } catch (error) {
+    const recoverable =
+      !skipAuth &&
+      accessToken === undefined &&
+      retryOnUnauthorized !== false &&
+      used !== null &&
+      error instanceof ApiError &&
+      error.status === 401
+    if (!recoverable) throw error
 
-  const body = await parseBody(response)
-  if (!response.ok) throw new ApiError(response.status, body)
-  if (options.expectedStatus !== undefined && response.status !== options.expectedStatus) {
-    throw new ApiError(response.status, body)
+    // Une autre requête a pu renouveler la session entre-temps : on réutilise sa rotation.
+    const latest = tokenStore.get()
+    if (latest === used) await refreshSession()
+    else if (!latest) throw error
+
+    try {
+      return await httpRequest<T>(path, {
+        ...http,
+        accessToken: tokenStore.get()?.accessToken,
+      })
+    } catch (retryError) {
+      if (retryError instanceof ApiError && retryError.status === 401) endSession()
+      throw retryError
+    }
   }
-  return body as T
 }
