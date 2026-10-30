@@ -126,6 +126,11 @@
     "title": "Jeux",
     "description": "Découvrez le catalogue de jeux.",
     "create": "Créer un jeu",
+    "actions": {
+      "create": "Créer",
+      "transfer": "Transfert",
+      "stats": "Stats"
+    },
     "edit": "Modifier le jeu",
     "details": "Détails du jeu",
     "transfer": "Importer / Exporter",
@@ -183,6 +188,71 @@
       "sharing": "Le partage de fichiers est indisponible sur cet appareil.",
       "readFile": "Impossible de lire le fichier choisi. Choisissez un autre fichier local et réessayez.",
       "saveFile": "Impossible d’enregistrer le fichier. Vérifiez l’accès au dossier et l’espace disponible."
+    }
+  },
+  "stats": {
+    "title": "Statistiques",
+    "description": "Gérez les définitions de statistiques utilisées par les jeux.",
+    "gameTitle": "Statistiques",
+    "manageGame": "Gérer les statistiques",
+    "associated": "Statistiques associées",
+    "available": "Catalogue",
+    "alreadyAssociated": "Associée",
+    "addAssociation": "Associer au jeu",
+    "removeAssociation": "Retirer l’association",
+    "addNamed": "Associer {{name}} à ce jeu",
+    "removeNamed": "Retirer {{name}} de ce jeu",
+    "confirmRemoval": "Retirer {{name}} de ce jeu ?",
+    "name": "Nom",
+    "key": "Clé",
+    "type": "Type",
+    "types": {
+      "flat": "Valeur brute",
+      "percent": "Pourcentage"
+    },
+    "information": "Définition de statistique",
+    "formHint": "Nom, clé unique et type",
+    "create": "Créer une statistique",
+    "edit": "Modifier la statistique",
+    "editNamed": "Modifier {{name}}",
+    "delete": "Supprimer la statistique",
+    "deleting": "Suppression…",
+    "confirmDelete": "Supprimer définitivement {{name}} ? Ses associations aux jeux seront également supprimées.",
+    "saving": "Enregistrement…",
+    "empty": "Aucune statistique trouvée.",
+    "gameEmpty": "Aucune statistique n’est associée à ce jeu.",
+    "loading": "Chargement des statistiques",
+    "refresh": "Actualiser les statistiques",
+    "transfer": "Importer / exporter",
+    "import": "Importer des statistiques",
+    "importHint": "Sélectionnez un fichier JSON ou CSV UTF-8 (256 Kio maximum). Les jeux référencés doivent exister.",
+    "export": "Exporter les statistiques",
+    "exportHint": "Enregistrez ou partagez les définitions et leurs associations aux jeux.",
+    "chooseFile": "Choisir un fichier",
+    "saveFile": "Enregistrer le fichier",
+    "shareFile": "Partager le fichier",
+    "transferring": "Transfert des statistiques",
+    "shareClosed": "Fenêtre de partage fermée.",
+    "exportSaved": "Fichier de statistiques enregistré.",
+    "transferCanceled": "Sélection du fichier annulée.",
+    "importResult": "{{created}} statistiques créées, {{updated}} mises à jour.",
+    "returnToCatalog": "Retour aux statistiques",
+    "validation": {
+      "name": "Le nom doit contenir de 1 à 64 caractères après suppression des espaces.",
+      "key": "La clé doit compter 64 caractères maximum : lettres minuscules, chiffres et segments séparés par _.",
+      "type": "Choisissez Valeur brute ou Pourcentage.",
+      "fileFormat": "Choisissez un fichier .json ou .csv.",
+      "fileSize": "Le fichier doit faire entre 1 octet et 256 Kio.",
+      "fileContent": "Le fichier doit être en UTF-8 valide ; le JSON doit être valide."
+    },
+    "errors": {
+      "keyTaken": "Cette clé de statistique est déjà utilisée.",
+      "inUse": "Cette statistique est utilisée par un tournoi en cours.",
+      "notFound": "Statistique ou jeu introuvable.",
+      "file": "Le fichier importé est invalide.",
+      "readFile": "Impossible de lire le fichier sélectionné.",
+      "saveFile": "Impossible d’enregistrer le fichier.",
+      "sharing": "Impossible de partager le fichier."
     }
   }
 }

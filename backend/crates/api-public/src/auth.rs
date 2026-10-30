@@ -10,7 +10,8 @@
 
 use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
-use crate::game_io::{GameStats, NoStats};
+use crate::game_io::GameStats;
+use crate::stat_io::StoreStats;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
 use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
@@ -38,7 +39,8 @@ pub struct AppState {
     /// Empreinte factice, vérifiée quand le compte n'existe pas pour que « compte inconnu »
     /// et « mauvais mot de passe » prennent le même temps.
     dummy_hash: Arc<str>,
-    /// Statistiques des jeux, importées et exportées avec eux (opaques pour les jeux).
+    /// Statistiques des jeux, importées et exportées avec eux (opaques pour les jeux). Par défaut
+    /// celles de la base ([`StoreStats`]).
     pub(crate) stats: Arc<dyn GameStats>,
 }
 
@@ -49,10 +51,10 @@ impl AppState {
     ) -> Result<Self, argon2::password_hash::Error> {
         let dummy_hash = hash_password("mot de passe factice")?;
         Ok(AppState {
+            stats: Arc::new(StoreStats(store.clone())),
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
-            stats: Arc::new(NoStats),
         })
     }
 

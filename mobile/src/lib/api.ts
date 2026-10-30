@@ -4,6 +4,7 @@ export class ApiError extends Error {
     message: string,
     public readonly code?: string,
     public readonly fields: string[] = [],
+    public readonly fileDetails?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -41,18 +42,33 @@ export async function apiRequest<T>(
     const body: unknown = await response.json().catch(() => null);
     const metadata = body && typeof body === 'object' ? body : {};
     const code =
-      'error' in metadata && metadata.error === 'game_name_taken'
-        ? 'game_name_taken'
+      'error' in metadata && typeof metadata.error === 'string'
+        ? metadata.error
         : undefined;
     const errors = 'errors' in metadata ? metadata.errors : null;
-    // Keep field identifiers only; local translations never echo server text.
+    // Field identifiers are allowlisted; only import errors.file text is displayed.
     const fields =
       errors && typeof errors === 'object'
         ? Object.keys(errors).filter((field) =>
-            ['name', 'description', 'images', 'file', 'body'].includes(field),
+            [
+              'name',
+              'key',
+              'type',
+              'description',
+              'images',
+              'file',
+              'body',
+            ].includes(field),
           )
         : [];
-    throw new ApiError(response.status, message, code, fields);
+    const fileDetails =
+      errors &&
+      typeof errors === 'object' &&
+      'file' in errors &&
+      typeof errors.file === 'string'
+        ? errors.file
+        : undefined;
+    throw new ApiError(response.status, message, code, fields, fileDetails);
   }
 
   if (response.status === 204) {
