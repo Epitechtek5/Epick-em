@@ -10,6 +10,7 @@
 
 use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
+use crate::game_io::{GameStats, NoStats};
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
 use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
@@ -37,6 +38,8 @@ pub struct AppState {
     /// Empreinte factice, vérifiée quand le compte n'existe pas pour que « compte inconnu »
     /// et « mauvais mot de passe » prennent le même temps.
     dummy_hash: Arc<str>,
+    /// Statistiques des jeux, importées et exportées avec eux (opaques pour les jeux).
+    pub(crate) stats: Arc<dyn GameStats>,
 }
 
 impl AppState {
@@ -49,7 +52,14 @@ impl AppState {
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
+            stats: Arc::new(NoStats),
         })
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les statistiques des jeux.
+    pub fn with_stats(mut self, stats: Arc<dyn GameStats>) -> Self {
+        self.stats = stats;
+        self
     }
 }
 

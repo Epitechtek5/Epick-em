@@ -1,6 +1,5 @@
 import { jsonResponse, mockFetch } from '@/test/render'
-import { login, logout, register } from './auth'
-import { tokenStore } from '@/lib/auth/token-store'
+import { login, refreshRequest, register, revokeSession } from './auth'
 
 describe('register', () => {
   it('appelle POST /register avec username et password', async () => {
@@ -43,16 +42,46 @@ describe('login', () => {
   })
 })
 
-describe('logout', () => {
+describe('revokeSession', () => {
   it('révoque le refresh token via POST /logout', async () => {
     const fetchMock = mockFetch(jsonResponse(204))
 
-    tokenStore.set({ accessToken: 'jwt', refreshToken: 'refresh-1' })
-    await logout('refresh-1')
+    await revokeSession({ accessToken: 'jwt', refreshToken: 'refresh-1' })
 
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/logout')
     expect(init.headers.Authorization).toBe('Bearer jwt')
     expect(JSON.parse(init.body)).toEqual({ refresh_token: 'refresh-1' })
+  })
+
+  it('renouvelle puis révoque quand le jeton d\'accès a expiré', async () => {
+    const fetchMock = mockFetch(
+      jsonResponse(401, { error: 'unauthorized' }),
+      jsonResponse(200, { access_token: 'jwt-2', refresh_token: 'refresh-2' }),
+      jsonResponse(204),
+    )
+
+    await revokeSession({ accessToken: 'jwt', refreshToken: 'refresh-1' })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/logout',
+      '/api/refresh',
+      '/api/logout',
+    ])
+    expect(fetchMock.mock.calls[2][1].headers.Authorization).toBe('Bearer jwt-2')
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ refresh_token: 'refresh-2' })
+  })
+})
+
+describe('refreshRequest', () => {
+  it('envoie le refresh token avec le jeton d\'accès en Bearer', async () => {
+    const fetchMock = mockFetch(
+      jsonResponse(200, { access_token: 'jwt-2', refresh_token: 'refresh-2' }),
+    )
+
+    const tokens = await refreshRequest({ accessToken: 'jwt', refreshToken: 'refresh-1' })
+
+    expect(tokens).toEqual({ accessToken: 'jwt-2', refreshToken: 'refresh-2' })
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer jwt')
   })
 })

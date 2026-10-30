@@ -37,6 +37,22 @@ export default function AuthenticatedLayout() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="user/[id]" options={{ title: t('user.title') }} />
       <Stack.Screen name="admin/[id]" options={{ title: t('admin.title') }} />
+      <Stack.Screen
+        name="games/[id]/index"
+        options={{ title: t('games.details') }}
+      />
+      <Stack.Screen
+        name="games/[id]/edit"
+        options={{ title: t('games.edit') }}
+      />
+      <Stack.Screen
+        name="games/create"
+        options={{ title: t('games.create') }}
+      />
+      <Stack.Screen
+        name="games/transfer"
+        options={{ title: t('games.transfer') }}
+      />
     </Stack>
   );
 }

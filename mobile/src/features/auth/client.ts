@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { apiRequest, ApiError } from '@/lib/api';
+import type { ApiRequestOptions } from '@/lib/api';
 import { accountId } from '@/features/users/api';
 import type {
   RegisterRequest,
@@ -114,7 +115,10 @@ export class SessionClient {
     return this.refreshOperation;
   }
 
-  request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
+  request = async <T>(
+    path: string,
+    options: ApiRequestOptions = {},
+  ): Promise<T> => {
     if (this.signingOut || !this.session)
       throw new ApiError(401, 'Authentication is required');
     const generation = this.generation;
