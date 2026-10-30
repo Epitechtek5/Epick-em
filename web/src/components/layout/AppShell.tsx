@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { Outlet, useLocation } from 'react-router'
 
+import { useI18n } from '@/i18n/context'
 import { AppHeader } from './AppHeader'
 
 // Structure commune : lien d'évitement, en-tête, zone principale. À chaque
 // changement de page, le focus revient sur la zone principale (navigation SPA).
 export function AppShell() {
+  const { t } = useI18n()
   const { pathname } = useLocation()
   const mainRef = useRef<HTMLElement>(null)
   const firstRender = useRef(true)
@@ -28,7 +30,7 @@ export function AppShell() {
           mainRef.current?.focus()
         }}
       >
-        Aller au contenu principal
+        {t('common.openMainContent')}
       </a>
       <AppHeader />
       <main
