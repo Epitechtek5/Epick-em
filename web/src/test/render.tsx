@@ -4,15 +4,21 @@ import { MemoryRouter } from 'react-router'
 import { vi } from 'vitest'
 
 import App from '@/App'
+import { I18nProvider } from '@/i18n/I18nProvider'
 import { AuthProvider } from '@/lib/auth/AuthProvider'
+import type { Role } from '@/lib/auth/jwt'
+import { tokenStore } from '@/lib/auth/token-store'
+import { makeJwt } from './jwt'
 
 export function renderApp(route = '/') {
   return render(
-    <MemoryRouter initialEntries={[route]}>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </MemoryRouter>,
+    <I18nProvider>
+      <MemoryRouter initialEntries={[route]}>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </MemoryRouter>
+    </I18nProvider>,
   )
 }
 
@@ -48,4 +54,33 @@ export async function renderSignedIn(username = 'alice') {
   await screen.findByRole('heading', { level: 1, name: /Bonjour/ })
 
   return user
+}
+
+// Session déjà ouverte avec un rôle donné (sans passer par l'écran de connexion).
+export function signInAs(role: Role = 'user', username = 'alice') {
+  tokenStore.set({ accessToken: makeJwt(role, username), refreshToken: 'refresh-1' })
+}
+
+export const GAME_A = {
+  id: '11111111-1111-4111-8111-111111111111',
+  name: 'Alpha Quest',
+  description: 'Un jeu d\'aventure.',
+  images: ['https://img.example/a1.png', 'https://img.example/a2.png'],
+}
+export const GAME_B = {
+  id: '22222222-2222-4222-8222-222222222222',
+  name: 'Beta Racer',
+  description: '',
+  images: [],
+}
+
+// Serveur simulé : le gestionnaire reçoit chaque requête (url sans le préfixe /api).
+export function routeFetch(
+  handler: (path: string, init: RequestInit & { headers: Record<string, string> }) => Response | Promise<Response>,
+) {
+  const fetchMock = vi.fn(async (url: string, init: RequestInit & { headers: Record<string, string> }) =>
+    handler(url.replace(/^\/api/, ''), init),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
 }
