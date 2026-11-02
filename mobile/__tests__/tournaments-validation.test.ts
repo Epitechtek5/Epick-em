@@ -31,6 +31,9 @@ it('validates dates and mode-dependent fields without exceeding backend limits',
     'tournaments.validation.name',
   );
   expect(
+    validateTournament({ ...input, description: '🎮'.repeat(4000) }),
+  ).toBeNull();
+  expect(
     validateTournament({ ...input, end_date: '2026-11-13T18:00:00Z' }),
   ).toBe('tournaments.validation.dates');
   expect(

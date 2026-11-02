@@ -38,7 +38,7 @@ export function validateTournament(input: TournamentInput): string | null {
   if (!input.game_id) return 'tournaments.validation.game';
   if (!input.name.trim() || Array.from(input.name.trim()).length > 128)
     return 'tournaments.validation.name';
-  if ((input.description ?? '').length > 4000)
+  if (Array.from(input.description ?? '').length > 4000)
     return 'tournaments.validation.description';
   if (!normalizeDate(input.start_date) || !normalizeDate(input.end_date))
     return 'tournaments.validation.dates';

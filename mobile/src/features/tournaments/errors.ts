@@ -31,6 +31,7 @@ export function tournamentErrorKey(error: unknown): string {
   if (error.status === 401) return 'errors.unauthorized';
   if (error.status === 403) return 'errors.forbidden';
   if (error.status === 404) return 'tournaments.errors.notFound';
+  if (error.status === 413) return 'tournaments.validation.fileSize';
   if (error.status === 409) {
     const known: Record<string, string> = {
       tournament_name_taken: 'tournaments.errors.nameTaken',
