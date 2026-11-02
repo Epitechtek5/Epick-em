@@ -369,7 +369,7 @@ fn check_members(
 
 /// Horodatage RFC 3339 en UTC (`2026-10-26T14:03:09Z`, décimales facultatives) ramené à six
 /// décimales, format de l'export : des chaînes normalisées se comparent dans l'ordre du temps.
-fn normalize_timestamp(value: &str) -> Option<String> {
+pub(crate) fn normalize_timestamp(value: &str) -> Option<String> {
     let value = value.trim().strip_suffix('Z')?;
     let (date_time, fraction) = match value.split_once('.') {
         Some((head, fraction)) => (head, fraction),

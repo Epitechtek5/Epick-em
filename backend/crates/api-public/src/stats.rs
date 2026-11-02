@@ -339,7 +339,7 @@ async fn unlink_stat(
         .store
         .unlink_stat(game_id, stat_id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(store_error)?
     {
         Ok(HttpResponse::NoContent().finish())
     } else {
