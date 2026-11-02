@@ -1,7 +1,23 @@
 import { ApiError } from '@/lib/api';
+import { z } from 'zod';
 import type { TeamChanges, TeamValues } from './types';
 
 export const MAX_TEAM_IMPORT_BYTES = 256 * 1024;
+
+const teamSchema = z.object({
+  name: z
+    .string()
+    .transform((value) => value.trim())
+    .refine((value) => {
+      const length = Array.from(value).length;
+      return length >= 1 && length <= 64;
+    }),
+  tag: z
+    .string()
+    .transform((value) => value.trim())
+    .refine((value) => Array.from(value).length <= 8),
+  picture_url: z.string(),
+});
 
 export function teamId(id: string): string {
   if (
@@ -20,11 +36,15 @@ export function validateTeam(
   values: TeamValues,
 ): Partial<Record<keyof TeamValues, string>> {
   const errors: Partial<Record<keyof TeamValues, string>> = {};
-  const nameLength = Array.from(values.name.trim()).length;
-  const tagLength = Array.from(values.tag.trim()).length;
+  const result = teamSchema.safeParse(values);
   const url = values.picture_url.trim();
-  if (nameLength < 1 || nameLength > 64) errors.name = 'teams.validation.name';
-  if (tagLength > 8) errors.tag = 'teams.validation.tag';
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      const field = issue.path[0];
+      if (field === 'name') errors.name = 'teams.validation.name';
+      if (field === 'tag') errors.tag = 'teams.validation.tag';
+    }
+  }
   if (
     url &&
     (!/^https?:\/\/[^\s]+$/i.test(url) ||

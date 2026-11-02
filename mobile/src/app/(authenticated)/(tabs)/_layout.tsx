@@ -2,7 +2,6 @@ import { Tabs } from 'expo-router';
 import { TabIcon } from '@/components/ui/tab-icon';
 import { colors as themeColors } from '@/theme/colors';
 import Settings01Icon from '@hugeicons/core-free-icons/Settings01Icon';
-import UserGroupIcon from '@hugeicons/core-free-icons/UserGroupIcon';
 import TeamWorkIcon from '@hugeicons/core-free-icons/TeamWorkIcon';
 import GameController03Icon from '@hugeicons/core-free-icons/GameController03Icon';
 import TrophyIcon from '@hugeicons/core-free-icons/TrophyIcon';
@@ -98,21 +97,7 @@ export default function TabsLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="users"
-        options={{
-          title: t('users.title'),
-          tabBarAccessibilityLabel: t('users.title'),
-          tabBarIcon: ({ focused, size }) => (
-            <TabIcon
-              icon={UserGroupIcon}
-              size={size}
-              focused={focused}
-              testID="users-tab-icon"
-            />
-          ),
-        }}
-      />
+      <Tabs.Screen name="users" options={{ href: null }} />
     </Tabs>
   );
 }
