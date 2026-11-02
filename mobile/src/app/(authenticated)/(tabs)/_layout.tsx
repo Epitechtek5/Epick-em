@@ -5,6 +5,7 @@ import Settings01Icon from '@hugeicons/core-free-icons/Settings01Icon';
 import UserGroupIcon from '@hugeicons/core-free-icons/UserGroupIcon';
 import TeamWorkIcon from '@hugeicons/core-free-icons/TeamWorkIcon';
 import GameController03Icon from '@hugeicons/core-free-icons/GameController03Icon';
+import TrophyIcon from '@hugeicons/core-free-icons/TrophyIcon';
 import { useReducedMotionPreference } from '@/lib/motion';
 import { useTheme } from '@react-navigation/native';
 import { useTranslation } from '@/i18n';
@@ -48,6 +49,21 @@ export default function TabsLayout() {
               size={size}
               focused={focused}
               testID="games-tab-icon"
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="tournaments"
+        options={{
+          title: t('tournaments.title'),
+          tabBarAccessibilityLabel: t('tournaments.title'),
+          tabBarIcon: ({ focused, size }) => (
+            <TabIcon
+              icon={TrophyIcon}
+              size={size}
+              focused={focused}
+              testID="tournaments-tab-icon"
             />
           ),
         }}
