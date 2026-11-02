@@ -13,6 +13,12 @@ export function getErrorMessage(body: unknown): string | null {
   return null
 }
 
+// Code stable de l'erreur (`error` : invalid_request, game_name_taken…).
+export function getErrorCode(body: unknown): string | null {
+  if (!isRecord(body)) return null
+  return typeof body.error === 'string' ? body.error : null
+}
+
 // Erreurs par champ si le serveur les détaille : { errors: { username: "..." | ["..."] } }.
 export function getFieldErrors(
   body: unknown,
