@@ -104,13 +104,17 @@
   "validation": {
     "username": "Username must contain 3–32 letters, numbers, _, . or -.",
     "password": "Password must contain 8–128 characters.",
+    "passwordLength": "Password must contain 8–128 characters.",
+    "passwordDigit": "Password must contain at least one digit.",
+    "passwordUppercase": "Password must contain at least one uppercase letter.",
+    "passwordSpecial": "Password must contain at least one special character.",
     "match": "Passwords do not match."
   },
   "form": {
     "noChanges": "No changes to save.",
     "saved": "Changes saved successfully.",
     "failed": "Unable to save changes.",
-    "passwordHint": "Leave blank to keep the current password."
+    "passwordHint": "Leave blank to keep the current password. New passwords require 8–128 characters, a digit, an uppercase letter and a special character."
   },
   "errors": {
     "invalid": "Invalid information. Check the submitted fields.",
@@ -266,6 +270,17 @@
     "open": "Open {{name}}",
     "transfer": "Import / Export",
     "filterGame": "Filter by game",
+    "filters": {
+      "search": "Search tournaments",
+      "toggle": "Show tournament filters",
+      "startRange": "Tournament start",
+      "closeRange": "Registration closing",
+      "after": "From",
+      "before": "Until",
+      "mine": "My tournaments",
+      "reset": "Reset all filters",
+      "partial": "The first 1,000 matching server records were scanned. Refine the filters for complete results."
+    },
     "loading": "Loading tournament",
     "empty": "No tournaments found.",
     "noChanges": "No changes to save.",
@@ -278,6 +293,9 @@
     "noTeams": "No eligible teams on this page.",
     "noTeam": "No team",
     "register": "Register",
+    "registerTeam": "Register a team",
+    "viewRegistration": "View my registration",
+    "manageParticipants": "Manage participants",
     "checkIn": "Check in",
     "withdraw": "Withdraw",
     "emptyParticipants": "No participants yet.",
@@ -296,6 +314,12 @@
     "chooseDate": "Choose date and time",
     "clearDate": "Clear date",
     "transition": "Move to {{status}}",
+    "transitions": {
+      "registration": "Open registration",
+      "ongoing": "Start tournament",
+      "finished": "Finish tournament",
+      "cancelled": "Cancel tournament"
+    },
     "confirmTitle": "Confirm tournament action",
     "confirmTransition": "Move this tournament to {{status}}? This may lock further changes.",
     "confirmDelete": "Permanently delete this tournament and its related data?",
@@ -324,6 +348,21 @@
       "teamScoringMode": "Team scoring",
       "teamScoringN": "Scored team members"
     },
+    "editor": {
+      "general": "General information",
+      "generalHelp": "Name the tournament and choose its game.",
+      "dates": "Dates and registration",
+      "datesHelp": "Times are displayed in your local timezone.",
+      "participants": "Participant configuration",
+      "soloParticipants": "Players register individually and may optionally represent a tournament team.",
+      "teamParticipants": "A tournament team is registered as one participant.",
+      "teamSizeHelp": "Required number of starting players. Substitutes are not counted.",
+      "soloCapacityHelp": "Maximum number of registered players.",
+      "teamCapacityHelp": "Maximum number of registered teams.",
+      "scoring": "Team scoring",
+      "scoringHelp": "Optional aggregation of affiliated solo players for team rankings.",
+      "topNHelp": "Number of highest-scoring affiliated players to include."
+    },
     "status": {
       "draft": "Draft",
       "registration": "Registration",
@@ -339,10 +378,43 @@
       "withdrawn": "Withdrawn"
     },
     "teamScoring": {
-      "none": "None",
-      "sum": "Sum",
-      "best": "Best",
-      "top_n": "Top N"
+      "none": "No team ranking",
+      "sum": "Total points",
+      "best": "Best player",
+      "top_n": "Top N players"
+    },
+    "teamScoringHelp": {
+      "none": "No team ranking is calculated from individual scores.",
+      "sum": "Adds the points of all affiliated players.",
+      "best": "Uses the highest individual score.",
+      "top_n": "Adds the scores of the top N affiliated players."
+    },
+    "detailsSections": {
+      "dates": "Dates and registration period",
+      "registration": "Registration",
+      "availability": "Availability",
+      "capacity": "Registered / capacity",
+      "explore": "Participants and rankings",
+      "administration": "Tournament administration"
+    },
+    "registrationStates": {
+      "open": "Open",
+      "closed": "Closed",
+      "full": "Tournament full"
+    },
+    "registration": {
+      "soloTitle": "Register for tournament",
+      "soloHelp": "Your current account will be registered. Representing a tournament team is optional.",
+      "teamTitle": "Register a team",
+      "teamHelp": "Only the team owner or an administrator may register it. The required number of starters must be exact; substitutes are not counted.",
+      "teamSummary": "{{starters}} / {{required}} starters · {{members}} members",
+      "teamMembers": "Members: {{names}}",
+      "noEligibleTeam": "No eligible team is available. Create a tournament team or copy one from an existing team, then add the required starters.",
+      "soloWithTeam": "Your account will be registered and affiliated with the selected team.",
+      "soloWithoutTeam": "Your account will be registered without a team affiliation.",
+      "unavailable": "Registration is not currently available for this tournament.",
+      "success": "Registration completed successfully.",
+      "checkedIn": "Check-in completed successfully."
     },
     "scoringMode": { "linear": "Linear", "table": "Table" },
     "validation": {

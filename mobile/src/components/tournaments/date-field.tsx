@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { useTranslation } from '@/i18n';
+import { formatTournamentDate } from '@/features/tournaments/presentation';
 
 export function TournamentDateField({
   label,
@@ -20,7 +21,7 @@ export function TournamentDateField({
   onChange: (value: string | null) => void;
   optional?: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { colorScheme } = useColorScheme();
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
@@ -57,7 +58,9 @@ export function TournamentDateField({
       <Text className="font-medium">{label}</Text>
       <Button variant="outline" accessibilityLabel={label} onPress={show}>
         <Text>
-          {value ? selected.toLocaleString() : t('tournaments.chooseDate')}
+          {value
+            ? formatTournamentDate(value, i18n.language)
+            : t('tournaments.chooseDate')}
         </Text>
       </Button>
       {optional && value ? (

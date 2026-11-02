@@ -42,7 +42,7 @@ export function validateTournament(input: TournamentInput): string | null {
     return 'tournaments.validation.description';
   if (!normalizeDate(input.start_date) || !normalizeDate(input.end_date))
     return 'tournaments.validation.dates';
-  if (new Date(input.start_date) > new Date(input.end_date))
+  if (new Date(input.start_date) >= new Date(input.end_date))
     return 'tournaments.validation.dates';
   if (input.registration_open_at && !normalizeDate(input.registration_open_at))
     return 'tournaments.validation.dates';
@@ -81,7 +81,8 @@ export function validateTournament(input: TournamentInput): string | null {
 }
 
 export function buildTournamentInput(input: TournamentInput): TournamentInput {
-  const mode: TeamScoringMode = input.team_scoring_mode;
+  const mode: TeamScoringMode =
+    input.participant_type === 'solo' ? input.team_scoring_mode : 'none';
   return {
     ...input,
     name: input.name.trim(),
@@ -114,9 +115,10 @@ export function changedTournamentFields(
     'registration_close_at',
     'team_size',
     'max_participants',
-    'team_scoring_mode',
-    'team_scoring_n',
   ];
+  if (current.participant_type === 'solo') {
+    fields.push('team_scoring_mode', 'team_scoring_n');
+  }
   for (const field of fields) {
     if (
       [

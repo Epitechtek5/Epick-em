@@ -36,6 +36,9 @@ it('validates dates and mode-dependent fields without exceeding backend limits',
   expect(
     validateTournament({ ...input, end_date: '2026-11-13T18:00:00Z' }),
   ).toBe('tournaments.validation.dates');
+  expect(validateTournament({ ...input, end_date: input.start_date })).toBe(
+    'tournaments.validation.dates',
+  );
   expect(
     validateTournament({ ...input, participant_type: 'team', team_size: null }),
   ).toBe('tournaments.validation.teamSize');
@@ -63,6 +66,15 @@ it('omits irrelevant configuration and emits null only for changed nullable PATC
     team_size: null,
     team_scoring_n: null,
   });
+  expect(
+    buildTournamentInput({
+      ...input,
+      participant_type: 'team',
+      team_size: 3,
+      team_scoring_mode: 'top_n',
+      team_scoring_n: 2,
+    }),
+  ).toMatchObject({ team_scoring_mode: 'none', team_scoring_n: null });
   const current = {
     ...input,
     id: '33333333-3333-4333-8333-333333333333',
@@ -72,6 +84,22 @@ it('omits irrelevant configuration and emits null only for changed nullable PATC
     updated_at: '',
   } as Tournament;
   expect(changedTournamentFields(current, next)).toEqual({ description: null });
+  expect(
+    changedTournamentFields(
+      {
+        ...current,
+        participant_type: 'team',
+        team_size: 3,
+        team_scoring_mode: 'sum',
+      },
+      {
+        ...next,
+        participant_type: 'team',
+        team_size: 3,
+        team_scoring_mode: 'none',
+      },
+    ),
+  ).toEqual({ description: null });
 });
 
 it('accepts numeric scoring tables and rejects malformed values', () => {

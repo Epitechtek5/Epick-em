@@ -20,6 +20,9 @@ export function TournamentTeamSelect({
   page,
   hasNext,
   onPageChange,
+  disabledIds = new Set(),
+  descriptions = {},
+  allowNoTeam = true,
 }: {
   teams: TournamentTeam[];
   selectedId: string | null;
@@ -27,6 +30,9 @@ export function TournamentTeamSelect({
   page: number;
   hasNext: boolean;
   onPageChange: (page: number) => void;
+  disabledIds?: ReadonlySet<string>;
+  descriptions?: Record<string, string>;
+  allowNoTeam?: boolean;
 }) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -85,12 +91,20 @@ export function TournamentTeamSelect({
               renderItem={({ item }) => (
                 <Button
                   variant={item.id === selectedId ? 'default' : 'outline'}
+                  disabled={disabledIds.has(item.id)}
                   onPress={() => {
                     onSelect(item.id);
                     setOpen(false);
                   }}
                 >
-                  <Text>{item.name}</Text>
+                  <View className="flex-1 gap-1">
+                    <Text>{item.name}</Text>
+                    {descriptions[item.id] ? (
+                      <Text className="text-xs" variant="muted">
+                        {descriptions[item.id]}
+                      </Text>
+                    ) : null}
+                  </View>
                 </Button>
               )}
             />
@@ -114,16 +128,18 @@ export function TournamentTeamSelect({
               </Button>
             </View>
             <View className="flex-row gap-2">
-              <Button
-                className="flex-1"
-                variant="outline"
-                onPress={() => {
-                  onSelect(null);
-                  setOpen(false);
-                }}
-              >
-                <Text>{t('tournaments.noTeam')}</Text>
-              </Button>
+              {allowNoTeam ? (
+                <Button
+                  className="flex-1"
+                  variant="outline"
+                  onPress={() => {
+                    onSelect(null);
+                    setOpen(false);
+                  }}
+                >
+                  <Text>{t('tournaments.noTeam')}</Text>
+                </Button>
+              ) : null}
               <Button className="flex-1" onPress={() => setOpen(false)}>
                 <Text>{t('common.cancel')}</Text>
               </Button>

@@ -104,13 +104,17 @@
   "validation": {
     "username": "Le nom d’utilisateur doit contenir 3 à 32 lettres, chiffres, _, . ou -.",
     "password": "Le mot de passe doit contenir 8 à 128 caractères.",
+    "passwordLength": "Le mot de passe doit contenir entre 8 et 128 caractères.",
+    "passwordDigit": "Le mot de passe doit contenir au moins un chiffre.",
+    "passwordUppercase": "Le mot de passe doit contenir au moins une majuscule.",
+    "passwordSpecial": "Le mot de passe doit contenir au moins un caractère spécial.",
     "match": "Les mots de passe ne correspondent pas."
   },
   "form": {
     "noChanges": "Aucune modification à enregistrer.",
     "saved": "Modifications enregistrées avec succès.",
     "failed": "Enregistrement des modifications impossible.",
-    "passwordHint": "Laissez ce champ vide pour conserver le mot de passe actuel."
+    "passwordHint": "Laissez ce champ vide pour conserver le mot de passe actuel. Un nouveau mot de passe doit contenir 8 à 128 caractères, un chiffre, une majuscule et un caractère spécial."
   },
   "errors": {
     "invalid": "Informations invalides. Vérifiez les champs saisis.",
@@ -266,6 +270,17 @@
     "open": "Ouvrir {{name}}",
     "transfer": "Importer / Exporter",
     "filterGame": "Filtrer par jeu",
+    "filters": {
+      "search": "Rechercher un tournoi",
+      "toggle": "Afficher les filtres des tournois",
+      "startRange": "Début du tournoi",
+      "closeRange": "Clôture des inscriptions",
+      "after": "À partir du",
+      "before": "Jusqu’au",
+      "mine": "Mes tournois",
+      "reset": "Réinitialiser les filtres",
+      "partial": "Les 1 000 premiers résultats du serveur ont été analysés. Affinez les filtres pour obtenir des résultats complets."
+    },
     "loading": "Chargement du tournoi",
     "empty": "Aucun tournoi trouvé.",
     "noChanges": "Aucune modification à enregistrer.",
@@ -278,6 +293,9 @@
     "noTeams": "Aucune équipe admissible sur cette page.",
     "noTeam": "Aucune équipe",
     "register": "S’inscrire",
+    "registerTeam": "Inscrire une équipe",
+    "viewRegistration": "Voir mon inscription",
+    "manageParticipants": "Gérer les participants",
     "checkIn": "Pointer",
     "withdraw": "Se retirer",
     "emptyParticipants": "Aucun participant.",
@@ -296,6 +314,12 @@
     "chooseDate": "Choisir une date et une heure",
     "clearDate": "Effacer la date",
     "transition": "Passer à {{status}}",
+    "transitions": {
+      "registration": "Ouvrir les inscriptions",
+      "ongoing": "Démarrer le tournoi",
+      "finished": "Terminer le tournoi",
+      "cancelled": "Annuler le tournoi"
+    },
     "confirmTitle": "Confirmer l’action sur le tournoi",
     "confirmTransition": "Passer ce tournoi à {{status}} ? Certaines modifications pourront être verrouillées.",
     "confirmDelete": "Supprimer définitivement ce tournoi et ses données associées ?",
@@ -324,6 +348,21 @@
       "teamScoringMode": "Score d’équipe",
       "teamScoringN": "Membres comptabilisés"
     },
+    "editor": {
+      "general": "Informations générales",
+      "generalHelp": "Nommez le tournoi et choisissez son jeu.",
+      "dates": "Dates et inscriptions",
+      "datesHelp": "Les horaires sont affichés dans votre fuseau horaire.",
+      "participants": "Configuration des participants",
+      "soloParticipants": "Les joueurs s’inscrivent individuellement et peuvent représenter une équipe du tournoi.",
+      "teamParticipants": "Une équipe du tournoi est inscrite comme un seul participant.",
+      "teamSizeHelp": "Nombre requis de joueurs titulaires. Les remplaçants ne sont pas comptabilisés.",
+      "soloCapacityHelp": "Nombre maximum de joueurs inscrits.",
+      "teamCapacityHelp": "Nombre maximum d’équipes inscrites.",
+      "scoring": "Classement par équipe",
+      "scoringHelp": "Agrégation facultative des joueurs solo affiliés pour le classement des équipes.",
+      "topNHelp": "Nombre de joueurs affiliés ayant les meilleurs scores à comptabiliser."
+    },
     "status": {
       "draft": "Brouillon",
       "registration": "Inscriptions",
@@ -339,10 +378,43 @@
       "withdrawn": "Retiré"
     },
     "teamScoring": {
-      "none": "Aucun",
-      "sum": "Somme",
-      "best": "Meilleur",
-      "top_n": "N meilleurs"
+      "none": "Aucun classement par équipe",
+      "sum": "Total des points",
+      "best": "Meilleur joueur",
+      "top_n": "N meilleurs joueurs"
+    },
+    "teamScoringHelp": {
+      "none": "Aucun classement par équipe n’est calculé à partir des scores individuels.",
+      "sum": "Additionne les points de tous les joueurs affiliés.",
+      "best": "Utilise le meilleur score individuel.",
+      "top_n": "Additionne les scores des N meilleurs joueurs affiliés."
+    },
+    "detailsSections": {
+      "dates": "Dates et période d’inscription",
+      "registration": "Inscriptions",
+      "availability": "Disponibilité",
+      "capacity": "Inscrits / capacité",
+      "explore": "Participants et classements",
+      "administration": "Administration du tournoi"
+    },
+    "registrationStates": {
+      "open": "Ouvertes",
+      "closed": "Fermées",
+      "full": "Tournoi complet"
+    },
+    "registration": {
+      "soloTitle": "S’inscrire au tournoi",
+      "soloHelp": "Votre compte actuel sera inscrit. Représenter une équipe du tournoi est facultatif.",
+      "teamTitle": "Inscrire une équipe",
+      "teamHelp": "Seul le propriétaire de l’équipe ou un administrateur peut l’inscrire. Le nombre de titulaires doit être exact ; les remplaçants ne sont pas comptabilisés.",
+      "teamSummary": "{{starters}} / {{required}} titulaires · {{members}} membres",
+      "teamMembers": "Membres : {{names}}",
+      "noEligibleTeam": "Aucune équipe admissible. Créez une équipe du tournoi ou partez d’une équipe existante, puis ajoutez le nombre requis de titulaires.",
+      "soloWithTeam": "Votre compte sera inscrit et affilié à l’équipe sélectionnée.",
+      "soloWithoutTeam": "Votre compte sera inscrit sans affiliation à une équipe.",
+      "unavailable": "Les inscriptions ne sont pas disponibles actuellement pour ce tournoi.",
+      "success": "Inscription enregistrée avec succès.",
+      "checkedIn": "Pointage enregistré avec succès."
     },
     "scoringMode": { "linear": "Linéaire", "table": "Table" },
     "validation": {
@@ -414,8 +486,8 @@
     "former": "Ancien",
     "emptyMembers": "Aucun membre trouvé.",
     "tournamentTeams": "Équipes du tournoi",
-    "copy": "Copier une équipe globale",
-    "copyHint": "Choisissez une équipe globale dont vous êtes propriétaire. Sa copie dans le tournoi est indépendante.",
+    "copy": "Créer à partir d’une équipe existante",
+    "copyHint": "Choisissez une équipe existante dont vous êtes propriétaire. Sa copie dans le tournoi est indépendante.",
     "copyMembers": "Membres à copier",
     "ownerIncluded": "Le propriétaire est toujours inclus.",
     "import": "Importer des équipes",

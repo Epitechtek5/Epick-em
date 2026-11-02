@@ -10,13 +10,13 @@ import { useAuth } from '@/features/auth/session';
 import { useGameResource } from '@/features/games/use-game-resource';
 import {
   getTournament,
-  listParticipants,
   registerParticipant,
   checkInParticipant,
   removeParticipant,
   updateParticipantStatus,
 } from '@/features/tournaments/api';
 import { tournamentErrorKey } from '@/features/tournaments/errors';
+import { listAllTournamentParticipants } from '@/features/tournaments/catalog';
 import type {
   ParticipantStatus,
   TournamentParticipant,
@@ -43,19 +43,18 @@ export default function TournamentParticipantsScreen() {
   const [busy, setBusy] = useState(false);
   const load = useCallback(
     async (accessToken: string) => {
-      const [tournament, participants, teams] = await Promise.all([
+      const [tournament, allParticipants, teams] = await Promise.all([
         getTournament(accessToken, tournamentId),
-        listParticipants(
-          accessToken,
-          tournamentId,
-          PAGE_SIZE,
-          page * PAGE_SIZE,
-        ),
+        listAllTournamentParticipants(accessToken, tournamentId),
         listTournamentTeams(accessToken, tournamentId, {
           limit: PAGE_SIZE,
           offset: teamPage * PAGE_SIZE,
         }),
       ]);
+      const participants = allParticipants.slice(
+        page * PAGE_SIZE,
+        (page + 1) * PAGE_SIZE,
+      );
       const names = await Promise.all(
         participants.map(async (participant) => {
           if (!participant.user_id) return null;
@@ -69,7 +68,7 @@ export default function TournamentParticipantsScreen() {
       const knownIds = new Set(teams.map((team) => team.id));
       const missingIds = [
         ...new Set(
-          participants
+          allParticipants
             .map((participant) => participant.tournament_team_id)
             .filter((id): id is string => id !== null && !knownIds.has(id)),
         ),
@@ -83,35 +82,86 @@ export default function TournamentParticipantsScreen() {
           }
         }),
       );
-      const eligibleTeams =
-        tournament.participant_type === 'team'
-          ? teams.filter(
-              (team) => user?.role === 'admin' || team.owner_id === user?.id,
-            )
-          : (
-              await Promise.all(
-                teams.map(async (team) => {
+      const availableTeams = [...teams, ...referencedTeams].filter(
+        (team): team is TournamentTeam => team !== null,
+      );
+      const registeredTeamMembers = Object.fromEntries(
+        await Promise.all(
+          availableTeams.map(async (team) => {
+            try {
+              const members = await listTournamentTeamMembers(
+                accessToken,
+                team.id,
+              );
+              return [
+                team.id,
+                members.map((member) => member.user_id),
+              ] as const;
+            } catch {
+              return [team.id, []] as const;
+            }
+          }),
+        ),
+      );
+      const teamOptions = (
+        await Promise.all(
+          teams.map(async (team) => {
+            if (
+              tournament.participant_type === 'team' &&
+              user?.role !== 'admin' &&
+              team.owner_id !== user?.id
+            ) {
+              return null;
+            }
+            try {
+              const members = await listTournamentTeamMembers(
+                accessToken,
+                team.id,
+              );
+              if (
+                tournament.participant_type === 'solo' &&
+                !members.some((member) => member.user_id === user?.id)
+              ) {
+                return null;
+              }
+              const starters = members.filter(
+                (member) => member.role !== 'substitute',
+              ).length;
+              const eligible =
+                tournament.participant_type === 'solo' ||
+                starters === tournament.team_size;
+              const memberNames = await Promise.all(
+                members.map(async (member) => {
                   try {
-                    const members = await listTournamentTeamMembers(
-                      accessToken,
-                      team.id,
-                    );
-                    return members.some((member) => member.user_id === user?.id)
-                      ? team
-                      : null;
+                    return (await getUser(accessToken, member.user_id))
+                      .username;
                   } catch {
-                    return null;
+                    return member.user_id;
                   }
                 }),
-              )
-            ).filter((team): team is TournamentTeam => team !== null);
+              );
+              return { team, members, memberNames, starters, eligible };
+            } catch {
+              return {
+                team,
+                members: [],
+                memberNames: [],
+                starters: 0,
+                eligible: false,
+              };
+            }
+          }),
+        )
+      ).filter((option) => option !== null);
       return {
         tournament,
         participants,
+        allParticipants,
         teams,
-        eligibleTeams,
+        teamOptions,
         names,
         loadedAt: Date.now(),
+        registeredTeamMembers,
         referencedTeams: referencedTeams.filter(
           (team): team is TournamentTeam => team !== null,
         ),
@@ -124,13 +174,14 @@ export default function TournamentParticipantsScreen() {
     tournamentErrorKey,
   );
 
-  async function mutate(operation: () => Promise<unknown>) {
+  async function mutate(operation: () => Promise<unknown>, success?: string) {
     if (busy) return;
     setBusy(true);
     setMessage('');
     try {
       await operation();
       await reload();
+      if (success) setMessage(success);
     } catch (caught) {
       setMessage(tournamentErrorKey(caught));
     } finally {
@@ -178,8 +229,21 @@ export default function TournamentParticipantsScreen() {
   const teamById = new Map(
     [...teams, ...data.referencedTeams].map((team) => [team.id, team]),
   );
-  const hasRegistration = participants.some(
-    (p) => p.user_id === user?.id && p.status !== 'withdrawn',
+  const ownedTeamIds = new Set(
+    [...teams, ...data.referencedTeams]
+      .filter((team) => team.owner_id === user?.id)
+      .map((team) => team.id),
+  );
+  const hasRegistration = data.allParticipants.some(
+    (participant) =>
+      participant.status !== 'withdrawn' &&
+      (participant.user_id === user?.id ||
+        (participant.tournament_team_id
+          ? ownedTeamIds.has(participant.tournament_team_id) ||
+            data.registeredTeamMembers[
+              participant.tournament_team_id
+            ]?.includes(user?.id ?? '')
+          : false)),
   );
   const registrationOpen =
     !tournament.registration_open_at ||
@@ -187,60 +251,147 @@ export default function TournamentParticipantsScreen() {
   const registrationActive =
     !tournament.registration_close_at ||
     data.loadedAt <= Date.parse(tournament.registration_close_at);
+  const activeCount = data.allParticipants.filter(
+    (participant) =>
+      participant.status === 'registered' ||
+      participant.status === 'checked_in',
+  ).length;
+  const full = activeCount >= tournament.max_participants;
   const registerable =
     tournament.status === 'registration' &&
     registrationOpen &&
     registrationActive &&
-    !hasRegistration;
+    !hasRegistration &&
+    !full;
 
   return (
     <View className="flex-1 bg-background px-5 pt-5">
       {message ? <FormMessage>{t(message)}</FormMessage> : null}
       {error ? <FormMessage>{t(error)}</FormMessage> : null}
+      {!registerable && !hasRegistration ? (
+        <Card className="mb-4">
+          <CardContent className="gap-2 pt-5">
+            <Text className="font-semibold">
+              {t(
+                full
+                  ? 'tournaments.registrationStates.full'
+                  : 'tournaments.registrationStates.closed',
+              )}
+            </Text>
+            <Text variant="muted">
+              {t('tournaments.registration.unavailable')}
+            </Text>
+          </CardContent>
+        </Card>
+      ) : null}
       {registerable ? (
-        <View className="mb-4 gap-2">
-          {tournament.participant_type === 'team' ||
-          data.eligibleTeams.length ? (
-            <TournamentTeamSelect
-              teams={data.eligibleTeams}
-              selectedId={selectedTeam}
-              onSelect={setSelectedTeam}
-              page={teamPage}
-              hasNext={teams.length === PAGE_SIZE}
-              onPageChange={setTeamPage}
-            />
-          ) : null}
-          {tournament.participant_type === 'team' ? (
+        <Card className="mb-4">
+          <CardContent className="gap-3 pt-5">
+            <Text className="text-lg font-semibold">
+              {t(
+                tournament.participant_type === 'team'
+                  ? 'tournaments.registration.teamTitle'
+                  : 'tournaments.registration.soloTitle',
+              )}
+            </Text>
+            <Text variant="muted">
+              {t(
+                tournament.participant_type === 'team'
+                  ? 'tournaments.registration.teamHelp'
+                  : 'tournaments.registration.soloHelp',
+              )}
+            </Text>
+            {tournament.participant_type === 'team' ||
+            data.teamOptions.length ? (
+              <TournamentTeamSelect
+                teams={data.teamOptions.map((option) => option.team)}
+                selectedId={selectedTeam}
+                onSelect={setSelectedTeam}
+                page={teamPage}
+                hasNext={teams.length === PAGE_SIZE}
+                onPageChange={setTeamPage}
+                allowNoTeam={tournament.participant_type === 'solo'}
+                disabledIds={
+                  new Set(
+                    data.teamOptions
+                      .filter((option) => !option.eligible)
+                      .map((option) => option.team.id),
+                  )
+                }
+                descriptions={Object.fromEntries(
+                  data.teamOptions.map((option) => [
+                    option.team.id,
+                    `${t('tournaments.registration.teamSummary', {
+                      starters: option.starters,
+                      required: tournament.team_size ?? option.starters,
+                      members: option.members.length,
+                    })}\n${t('tournaments.registration.teamMembers', {
+                      names: (option.memberNames ?? []).join(', '),
+                    })}`,
+                  ]),
+                )}
+              />
+            ) : null}
+            {tournament.participant_type === 'team' ? (
+              <Button
+                variant="outline"
+                onPress={() =>
+                  router.push({
+                    pathname:
+                      '/(authenticated)/tournaments/[tournamentId]/teams',
+                    params: { tournamentId },
+                  })
+                }
+              >
+                <Text>{t('teams.tournamentTeams')}</Text>
+              </Button>
+            ) : null}
+            {tournament.participant_type === 'team' &&
+            !data.teamOptions.some((option) => option.eligible) ? (
+              <FormMessage>
+                {t('tournaments.registration.noEligibleTeam')}
+              </FormMessage>
+            ) : null}
+            {tournament.participant_type === 'solo' ? (
+              <Text variant="muted">
+                {selectedTeam
+                  ? t('tournaments.registration.soloWithTeam')
+                  : t('tournaments.registration.soloWithoutTeam')}
+              </Text>
+            ) : null}
             <Button
-              variant="outline"
+              disabled={
+                busy ||
+                (tournament.participant_type === 'team' &&
+                  (!selectedTeam ||
+                    !data.teamOptions.some(
+                      (option) =>
+                        option.team.id === selectedTeam && option.eligible,
+                    )))
+              }
               onPress={() =>
-                router.push({
-                  pathname: '/(authenticated)/tournaments/[tournamentId]/teams',
-                  params: { tournamentId },
-                })
+                token &&
+                void mutate(
+                  () =>
+                    registerParticipant(
+                      token,
+                      tournamentId,
+                      selectedTeam ?? undefined,
+                    ),
+                  'tournaments.registration.success',
+                )
               }
             >
-              <Text>{t('teams.tournamentTeams')}</Text>
+              <Text>
+                {t(
+                  tournament.participant_type === 'team'
+                    ? 'tournaments.registerTeam'
+                    : 'tournaments.register',
+                )}
+              </Text>
             </Button>
-          ) : null}
-          <Button
-            disabled={
-              busy || (tournament.participant_type === 'team' && !selectedTeam)
-            }
-            onPress={() =>
-              token &&
-              void mutate(() =>
-                registerParticipant(
-                  token,
-                  tournamentId,
-                  selectedTeam ?? undefined,
-                ),
-              )
-            }
-          >
-            <Text>{t('tournaments.register')}</Text>
-          </Button>
-        </View>
+          </CardContent>
+        </Card>
       ) : null}
       <FlatList
         data={participants}
@@ -290,8 +441,9 @@ export default function TournamentParticipantsScreen() {
                     disabled={busy}
                     onPress={() =>
                       token &&
-                      void mutate(() =>
-                        checkInParticipant(token, tournamentId, item.id),
+                      void mutate(
+                        () => checkInParticipant(token, tournamentId, item.id),
+                        'tournaments.registration.checkedIn',
                       )
                     }
                   >

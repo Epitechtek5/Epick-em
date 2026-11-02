@@ -88,7 +88,8 @@ beforeEach(async () => {
 it('shows a paginated catalog and navigates to the selected tournament', async () => {
   await render(<TournamentsScreen />);
   expect(screen.getByText('Counter-Strike')).toBeTruthy();
-  expect(screen.getByText('Draft · Solo')).toBeTruthy();
+  expect(screen.getByText('Draft')).toBeTruthy();
+  expect(screen.getByText('Solo')).toBeTruthy();
   expect(screen.queryByText('Create tournament')).toBeNull();
   fireEvent.press(screen.getByLabelText('Open Open'));
   expect(router.push).toHaveBeenCalledWith({
@@ -99,7 +100,13 @@ it('shows a paginated catalog and navigates to the selected tournament', async (
 
 it('hides lifecycle and delete controls from regular users', async () => {
   jest.mocked(useGameResource).mockReturnValue({
-    data: tournament,
+    data: {
+      tournament,
+      gameName: 'Counter-Strike',
+      participants: [],
+      teamRegistrations: [],
+      loadedAt: Date.now(),
+    },
     loading: false,
     refreshing: false,
     error: '',
@@ -112,10 +119,59 @@ it('hides lifecycle and delete controls from regular users', async () => {
   expect(screen.queryByText('Delete')).toBeNull();
 });
 
+it('shows a registered team member their enrollment without owner actions', async () => {
+  const participant = {
+    id,
+    tournament_id: id,
+    user_id: null,
+    tournament_team_id: '44444444-4444-4444-8444-444444444444',
+    status: 'registered' as const,
+    registered_at: '',
+  };
+  jest.mocked(useGameResource).mockReturnValue({
+    data: {
+      tournament: {
+        ...tournament,
+        status: 'registration',
+        participant_type: 'team',
+        team_size: 2,
+      },
+      gameName: 'Counter-Strike',
+      participants: [participant],
+      teamRegistrations: [
+        {
+          team: {
+            id: participant.tournament_team_id,
+            tournament_id: id,
+            team_id: null,
+            name: 'Blue',
+            tag: null,
+            picture_url: null,
+            owner_id: '55555555-5555-4555-8555-555555555555',
+            created_at: '',
+          },
+          members: [{ user_id: id, role: 'member' }],
+        },
+      ],
+      loadedAt: Date.now(),
+    },
+    loading: false,
+    refreshing: false,
+    error: '',
+    reload: jest.fn(),
+    setData: jest.fn(),
+  });
+  await render(<TournamentDetailsScreen />);
+  expect(screen.getByText('View my registration')).toBeTruthy();
+  expect(screen.queryByText('Check in')).toBeNull();
+  expect(screen.queryByText('Withdraw')).toBeNull();
+});
+
 it('localizes tournament status in French', async () => {
   await i18n.changeLanguage('fr');
   await render(<TournamentsScreen />);
-  expect(screen.getByText('Brouillon · Solo')).toBeTruthy();
+  expect(screen.getByText('Brouillon')).toBeTruthy();
+  expect(screen.getByText('Solo')).toBeTruthy();
 });
 
 it('shows backend ranks and points without calculating standings', async () => {
@@ -182,8 +238,9 @@ it('checks in the signed-in participant through the API', async () => {
     data: {
       tournament: { ...tournament, status: 'registration' },
       participants: [participant],
+      allParticipants: [participant],
       teams: [],
-      eligibleTeams: [],
+      teamOptions: [],
       referencedTeams: [],
       names: ['alice'],
       loadedAt: Date.now(),
@@ -205,6 +262,89 @@ it('checks in the signed-in participant through the API', async () => {
       id,
     ),
   );
+});
+
+it('registers the current solo player without requiring a team', async () => {
+  const reload = jest.fn().mockResolvedValue(undefined);
+  jest.mocked(tournamentApi.registerParticipant).mockResolvedValue({
+    id,
+    tournament_id: id,
+    user_id: id,
+    tournament_team_id: null,
+    status: 'registered',
+    registered_at: '',
+  });
+  jest.mocked(useGameResource).mockReturnValue({
+    data: {
+      tournament: { ...tournament, status: 'registration' },
+      participants: [],
+      allParticipants: [],
+      teams: [],
+      teamOptions: [],
+      referencedTeams: [],
+      names: [],
+      loadedAt: Date.now(),
+    },
+    loading: false,
+    refreshing: false,
+    error: '',
+    reload,
+    setData: jest.fn(),
+  });
+  await render(<TournamentParticipantsScreen />);
+  expect(
+    screen.getByText(
+      'Your account will be registered without a team affiliation.',
+    ),
+  ).toBeTruthy();
+  await act(async () => fireEvent.press(screen.getByText('Register')));
+  expect(tournamentApi.registerParticipant).toHaveBeenCalledWith(
+    'token',
+    id,
+    undefined,
+  );
+});
+
+it('explains why an owned team with the wrong starter count is ineligible', async () => {
+  const team = {
+    id: '44444444-4444-4444-8444-444444444444',
+    tournament_id: id,
+    team_id: null,
+    name: 'Blue',
+    tag: null,
+    picture_url: null,
+    owner_id: id,
+    created_at: '',
+  };
+  jest.mocked(useGameResource).mockReturnValue({
+    data: {
+      tournament: {
+        ...tournament,
+        status: 'registration',
+        participant_type: 'team',
+        team_size: 3,
+      },
+      participants: [],
+      allParticipants: [],
+      teams: [team],
+      teamOptions: [{ team, members: [], starters: 0, eligible: false }],
+      referencedTeams: [],
+      names: [],
+      loadedAt: Date.now(),
+    },
+    loading: false,
+    refreshing: false,
+    error: '',
+    reload: jest.fn(),
+    setData: jest.fn(),
+  });
+  await render(<TournamentParticipantsScreen />);
+  expect(screen.getByText(/No eligible team is available/)).toBeTruthy();
+  expect(
+    screen
+      .getAllByText('Register a team')
+      .find((node) => Boolean(node.parent?.props.accessibilityState))?.parent,
+  ).toBeDisabled();
 });
 
 it('blocks transfer controls for a regular account', async () => {

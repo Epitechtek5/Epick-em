@@ -121,6 +121,10 @@ function Editor({ tournament }: { tournament?: Tournament }) {
         contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
       >
         {error ? <FormMessage>{t(error)}</FormMessage> : null}
+        <SectionTitle
+          title={t('tournaments.editor.general')}
+          description={t('tournaments.editor.generalHelp')}
+        />
         {tournament ? (
           <Text variant="muted">
             {t('tournaments.fields.game')}:{' '}
@@ -154,6 +158,10 @@ function Editor({ tournament }: { tournament?: Tournament }) {
           onChangeText={(value) => change('description', value)}
           multiline
         />
+        <SectionTitle
+          title={t('tournaments.editor.dates')}
+          description={t('tournaments.editor.datesHelp')}
+        />
         <TournamentDateField
           label={t('tournaments.fields.startDate')}
           value={values.start_date}
@@ -169,6 +177,12 @@ function Editor({ tournament }: { tournament?: Tournament }) {
           value={values.registration_open_at}
           onChange={(value) => change('registration_open_at', value)}
           optional
+        />
+        <SectionTitle
+          title={t('tournaments.editor.participants')}
+          description={t(
+            `tournaments.editor.${values.participant_type}Participants`,
+          )}
         />
         <TournamentDateField
           label={t('tournaments.fields.registrationClose')}
@@ -190,6 +204,7 @@ function Editor({ tournament }: { tournament?: Tournament }) {
         {values.participant_type === 'team' ? (
           <Field
             label={t('tournaments.fields.teamSize')}
+            hint={t('tournaments.editor.teamSizeHelp')}
             value={String(values.team_size ?? '')}
             onChangeText={(value) =>
               change('team_size', value ? Number(value) : null)
@@ -200,31 +215,48 @@ function Editor({ tournament }: { tournament?: Tournament }) {
         ) : null}
         <Field
           label={t('tournaments.fields.maxParticipants')}
+          hint={t(
+            values.participant_type === 'team'
+              ? 'tournaments.editor.teamCapacityHelp'
+              : 'tournaments.editor.soloCapacityHelp',
+          )}
           value={String(values.max_participants)}
           onChangeText={(value) => change('max_participants', Number(value))}
           keyboardType="number-pad"
           editable={!locked}
         />
-        <Choice
-          label={t('tournaments.fields.teamScoringMode')}
-          values={['none', 'sum', 'best', 'top_n'] as const}
-          selected={values.team_scoring_mode}
-          labelFor={(value) => t(`tournaments.teamScoring.${value}`)}
-          onSelect={(value: TeamScoringMode) =>
-            change('team_scoring_mode', value)
-          }
-          disabled={locked}
-        />
-        {values.team_scoring_mode === 'top_n' ? (
-          <Field
-            label={t('tournaments.fields.teamScoringN')}
-            value={String(values.team_scoring_n ?? '')}
-            onChangeText={(value) =>
-              change('team_scoring_n', value ? Number(value) : null)
-            }
-            keyboardType="number-pad"
-            editable={!locked}
-          />
+        {values.participant_type === 'solo' ? (
+          <>
+            <SectionTitle
+              title={t('tournaments.editor.scoring')}
+              description={t('tournaments.editor.scoringHelp')}
+            />
+            <Choice
+              label={t('tournaments.fields.teamScoringMode')}
+              values={['none', 'sum', 'best', 'top_n'] as const}
+              selected={values.team_scoring_mode}
+              labelFor={(value) => t(`tournaments.teamScoring.${value}`)}
+              descriptionFor={(value) =>
+                t(`tournaments.teamScoringHelp.${value}`)
+              }
+              onSelect={(value: TeamScoringMode) =>
+                change('team_scoring_mode', value)
+              }
+              disabled={locked}
+            />
+            {values.team_scoring_mode === 'top_n' ? (
+              <Field
+                label={t('tournaments.fields.teamScoringN')}
+                hint={t('tournaments.editor.topNHelp')}
+                value={String(values.team_scoring_n ?? '')}
+                onChangeText={(value) =>
+                  change('team_scoring_n', value ? Number(value) : null)
+                }
+                keyboardType="number-pad"
+                editable={!locked}
+              />
+            ) : null}
+          </>
         ) : null}
         <Button disabled={busy} onPress={() => void save()}>
           <Text>{t('common.save')}</Text>
@@ -253,6 +285,7 @@ function Choice<T extends string>({
   values,
   selected,
   labelFor,
+  descriptionFor,
   onSelect,
   disabled,
 }: {
@@ -260,6 +293,7 @@ function Choice<T extends string>({
   values: readonly T[];
   selected: T;
   labelFor: (value: T) => string;
+  descriptionFor?: (value: T) => string;
   onSelect: (value: T) => void;
   disabled?: boolean;
 }) {
@@ -279,6 +313,24 @@ function Choice<T extends string>({
           </Button>
         ))}
       </View>
+      {descriptionFor ? (
+        <Text variant="muted">{descriptionFor(selected)}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function SectionTitle({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <View className="gap-1 border-t border-border pt-4 first:border-t-0 first:pt-0">
+      <Text className="text-lg font-semibold">{title}</Text>
+      <Text variant="muted">{description}</Text>
     </View>
   );
 }
