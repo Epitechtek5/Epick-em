@@ -204,14 +204,12 @@ it('preserves HTTP authorization and conflict errors', async () => {
   expect(
     tournamentErrorKey(new ApiError(409, 'Conflict', 'tournament_full')),
   ).toBe('tournaments.errors.full');
-  jest
-    .mocked(fetch)
-    .mockResolvedValue(
-      response(400, {
-        error: 'invalid_request',
-        errors: { tournament_team_id: 'Invalid team' },
-      }),
-    );
+  jest.mocked(fetch).mockResolvedValue(
+    response(400, {
+      error: 'invalid_request',
+      errors: { tournament_team_id: 'Invalid team' },
+    }),
+  );
   await expect(registerParticipant('token', id, other)).rejects.toMatchObject({
     fields: ['tournament_team_id'],
   });
