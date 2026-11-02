@@ -7,6 +7,7 @@ mod games;
 mod memory;
 mod postgres;
 mod stats;
+mod steps;
 mod teams;
 mod tournaments;
 
@@ -14,6 +15,10 @@ pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
+pub use self::steps::{
+    MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
+    StepParticipant, StepParticipantStatus, StepStart, StepStatus,
+};
 pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
     MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
@@ -128,6 +133,10 @@ pub enum StoreError {
     AlreadyParticipant,
     /// Le tournoi a atteint son nombre maximum de participants.
     TournamentFull,
+    /// Une étape occupe déjà cette position dans le tournoi.
+    StepPositionTaken,
+    /// L'étape n'est pas dans l'état attendu pour cette opération.
+    StepState,
     Other(String),
 }
 
@@ -150,6 +159,8 @@ impl fmt::Display for StoreError {
             }
             StoreError::AlreadyParticipant => f.write_str("participant déjà inscrit au tournoi"),
             StoreError::TournamentFull => f.write_str("tournoi complet"),
+            StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
+            StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -484,13 +495,60 @@ pub trait AuthStore: Send + Sync {
     /// Supprime l'inscription ; `false` si elle n'existait pas.
     async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError>;
 
-    /// Points de chaque inscrit (par identifiant d'inscription) ; un inscrit absent n'a aucun
-    /// point. Les points viennent des résultats des étapes (#52) : tant qu'aucun résultat n'est
-    /// enregistré, la table est vide.
+    /// Points de chaque inscrit (par identifiant d'inscription), somme de ses points dans les
+    /// étapes du tournoi ; un inscrit absent d'une étape n'a aucun point.
     async fn participant_points(
         &self,
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError>;
+
+    /// Étapes du tournoi par position.
+    async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError>;
+
+    async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError>;
+
+    /// Crée l'étape au statut `pending` ; `None` si le tournoi n'existe pas,
+    /// [`StoreError::StepPositionTaken`] si la position est prise.
+    async fn create_step(&self, step: StepInput) -> Result<Option<Step>, StoreError>;
+
+    /// Remplace les réglages de l'étape ; `None` si elle n'existe pas,
+    /// [`StoreError::StepPositionTaken`] si la position est prise.
+    async fn replace_step(
+        &self,
+        id: Uuid,
+        definition: StepDefinition,
+    ) -> Result<Option<Step>, StoreError>;
+
+    /// Supprime l'étape, ses groupes et ses participants ; `false` si elle n'existait pas.
+    async fn delete_step(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Groupes de l'étape par rang.
+    async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError>;
+
+    /// Participants de l'étape, par groupe puis par inscrit.
+    async fn list_step_participants(
+        &self,
+        step_id: Uuid,
+    ) -> Result<Vec<StepParticipant>, StoreError>;
+
+    /// Passe l'étape `pending` en `ongoing` et crée ses groupes et ses participants, en une
+    /// seule opération ; `None` si elle n'existe pas, [`StoreError::StepState`] si elle n'est pas
+    /// `pending`. Les inscrits appartiennent au tournoi de l'étape.
+    async fn start_step(&self, start: StepStart) -> Result<Option<Step>, StoreError>;
+
+    /// Passe l'étape `ongoing` en `finished`, enregistre l'issue de chaque participant et lance
+    /// l'étape suivante si `next` est renseigné, en une seule opération ; `None` si elle n'existe
+    /// pas, [`StoreError::StepState`] si elle n'est pas `ongoing`.
+    async fn close_step(&self, closing: StepClosing) -> Result<Option<Step>, StoreError>;
+
+    /// Fixe le total de points d'un participant dans l'étape (renseigné par la saisie des
+    /// résultats des matchs) ; `false` s'il n'y participe pas.
+    async fn set_step_points(
+        &self,
+        step_id: Uuid,
+        participant_id: Uuid,
+        points: f64,
+    ) -> Result<bool, StoreError>;
     /// Crée ou met à jour (par jeu et nom, sans tenir compte de la casse) les tournois donnés,
     /// en une seule opération : en cas d'erreur, aucun n'est modifié. Le barème d'un tournoi
     /// existant est **remplacé** ; ses inscrits, ses équipes, ses étapes et ses matchs sont

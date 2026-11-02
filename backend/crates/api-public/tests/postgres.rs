@@ -1,13 +1,17 @@
 //! `PgStore` contre un vrai PostgreSQL migré (image `db/`), ignoré par défaut :
 //! `DATABASE_URL=… cargo test -p api-public --test postgres -- --ignored`
 
+use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, MemberImport, ParticipantImport, ParticipantInput,
+    AuthStore, GameInput, GameUpdate, MatchType, MemberImport, ParticipantImport, ParticipantInput,
     ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
-    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StoreError, TeamImport,
-    TeamInput, TeamRole, TeamScoringMode, TeamUpdate, TournamentImport, TournamentInput,
-    TournamentStatus, TournamentTeamInput, TournamentUpdate, UserUpdate,
+    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
+    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
+    StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
+    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
+    UserUpdate,
 };
+use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1511,4 +1515,482 @@ fn tournament_input_named(game_id: Uuid, name: &str) -> TournamentInput {
         name: name.to_string(),
         ..tournament_input(game_id)
     }
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn step_tables_enforce_their_constraints() {
+    let store = store().await;
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    let game_id = game(&store).await;
+    let alice = user(&store, "alice").await;
+    let first = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let second = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let participant = store
+        .add_participant(ParticipantInput {
+            tournament_id: first.id,
+            user_id: Some(alice),
+            tournament_team_id: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    let insert_step = |tournament: Uuid, position: i32, format: &str, groups: i32, advance: i32| {
+        let pool = pool.clone();
+        let format = format.to_string();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO step (tournament_id, position, format, match_type, group_count, \
+                 group_size, matches_per_group, advance_per_group) \
+                 VALUES ($1, $2, $3, 'ffa', $4, 4, 3, $5) RETURNING id",
+            )
+            .bind(tournament)
+            .bind(position)
+            .bind(format)
+            .bind(groups)
+            .bind(advance)
+            .fetch_one(&pool)
+            .await
+        }
+    };
+
+    let step = insert_step(first.id, 1, "pool", 2, 2).await.unwrap();
+    // Position unique par tournoi, qualifiés au plus égaux à la taille du groupe, un seul groupe
+    // hors `pool`, format connu.
+    assert!(insert_step(first.id, 1, "pool", 2, 2).await.is_err());
+    assert!(insert_step(first.id, 2, "pool", 2, 5).await.is_err());
+    assert!(insert_step(first.id, 2, "swiss", 2, 2).await.is_err());
+    assert!(insert_step(first.id, 2, "ladder", 1, 2).await.is_err());
+    assert!(insert_step(first.id, 2, "swiss", 1, 2).await.is_ok());
+
+    let group = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO step_group (step_id, index) VALUES ($1, 1) RETURNING id",
+    )
+    .bind(step)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query("INSERT INTO step_group (step_id, index) VALUES ($1, 1)")
+            .bind(step)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+
+    let enroll = |tournament: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO step_participant (step_id, tournament_id, participant_id, group_id) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(step)
+            .bind(tournament)
+            .bind(participant.id)
+            .bind(group)
+            .execute(&pool)
+            .await
+        }
+    };
+    // L'inscrit doit appartenir au tournoi de l'étape.
+    assert!(enroll(second.id).await.is_err());
+    enroll(first.id).await.unwrap();
+    assert!(enroll(first.id).await.is_err());
+    let (points, status): (f64, String) =
+        sqlx::query_as("SELECT points::float8, status FROM step_participant WHERE step_id = $1")
+            .bind(step)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((points, status.as_str()), (0.0, "in"));
+    assert!(
+        sqlx::query("UPDATE step_participant SET final_rank = 0")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+
+    // Supprimer le tournoi emporte ses étapes.
+    sqlx::query("DELETE FROM tournaments WHERE id = $1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM step WHERE id = $1")
+        .bind(step)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
+fn step_definition(
+    position: i32,
+    group_count: i32,
+    group_size: i32,
+    advance: i32,
+) -> StepDefinition {
+    StepDefinition {
+        position,
+        format: StepFormat::Pool,
+        match_type: MatchType::Ffa,
+        group_count,
+        group_size,
+        matches_per_group: 3,
+        advance_per_group: advance,
+        tiebreak: serde_json::json!(["wins"]),
+    }
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn steps_start_close_and_open_the_next_one_atomically() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+
+    let create = |input: StepDefinition| {
+        store.create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: input,
+        })
+    };
+    let first = create(step_definition(1, 1, 4, 2)).await.unwrap().unwrap();
+    let last = create(step_definition(2, 1, 2, 1)).await.unwrap().unwrap();
+    assert_eq!(first.status, StepStatus::Pending);
+    assert_eq!(first.tiebreak, serde_json::json!(["wins"]));
+    assert!(matches!(
+        create(step_definition(1, 1, 4, 2)).await,
+        Err(StoreError::StepPositionTaken)
+    ));
+    assert!(
+        store
+            .create_step(StepInput {
+                tournament_id: Uuid::new_v4(),
+                definition: step_definition(1, 1, 4, 2),
+            })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let listed = store.list_steps(tournament.id).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|s| s.position).collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let replaced = store
+        .replace_step(last.id, step_definition(2, 1, 3, 1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replaced.group_size, 3);
+    assert!(matches!(
+        store
+            .replace_step(last.id, step_definition(1, 1, 3, 1))
+            .await,
+        Err(StoreError::StepPositionTaken)
+    ));
+
+    // Lancement : groupes et participants créés avec l'étape, une seule fois.
+    let started = store
+        .start_step(StepStart {
+            step_id: first.id,
+            groups: vec![players.clone()],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(started.status, StepStatus::Ongoing);
+    assert!(matches!(
+        store
+            .start_step(StepStart {
+                step_id: first.id,
+                groups: vec![players.clone()],
+            })
+            .await,
+        Err(StoreError::StepState)
+    ));
+    assert!(
+        store
+            .start_step(StepStart {
+                step_id: Uuid::new_v4(),
+                groups: vec![],
+            })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let groups = store.list_step_groups(first.id).await.unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].index, 1);
+    let members = store.list_step_participants(first.id).await.unwrap();
+    assert_eq!(members.len(), 4);
+    assert!(
+        members
+            .iter()
+            .all(|m| m.points == 0.0 && m.final_rank.is_none())
+    );
+
+    assert!(
+        store
+            .set_step_points(first.id, players[0], 12.5)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_step_points(first.id, Uuid::new_v4(), 1.0)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .participant_points(tournament.id)
+            .await
+            .unwrap()
+            .get(&players[0]),
+        Some(&12.5)
+    );
+
+    // Clôture : l'étape suivante s'ouvre avec les deux qualifiés, dans la même transaction.
+    let outcomes: Vec<StepOutcome> = players
+        .iter()
+        .zip(1..)
+        .map(|(id, rank)| StepOutcome {
+            participant_id: *id,
+            final_rank: rank,
+            status: if rank <= 2 {
+                StepParticipantStatus::Qualified
+            } else {
+                StepParticipantStatus::Eliminated
+            },
+        })
+        .collect();
+    // Un inscrit étranger au tournoi fait échouer l'ouverture : rien ne change.
+    assert!(
+        store
+            .close_step(StepClosing {
+                step_id: first.id,
+                outcomes: outcomes.clone(),
+                next: Some(StepStart {
+                    step_id: last.id,
+                    groups: vec![vec![Uuid::new_v4()]],
+                }),
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.find_step(first.id).await.unwrap().unwrap().status,
+        StepStatus::Ongoing
+    );
+    assert!(store.list_step_groups(last.id).await.unwrap().is_empty());
+
+    let finished = store
+        .close_step(StepClosing {
+            step_id: first.id,
+            outcomes,
+            next: Some(StepStart {
+                step_id: last.id,
+                groups: vec![vec![players[0], players[1]]],
+            }),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.status, StepStatus::Finished);
+    assert_eq!(
+        store.find_step(last.id).await.unwrap().unwrap().status,
+        StepStatus::Ongoing
+    );
+    let members = store.list_step_participants(first.id).await.unwrap();
+    assert_eq!(
+        members
+            .iter()
+            .filter(|m| m.status == StepParticipantStatus::Qualified)
+            .count(),
+        2
+    );
+    assert!(members.iter().all(|m| m.final_rank.is_some()));
+    assert_eq!(
+        store.list_step_participants(last.id).await.unwrap().len(),
+        2
+    );
+    assert!(matches!(
+        store
+            .close_step(StepClosing {
+                step_id: first.id,
+                outcomes: vec![],
+                next: None,
+            })
+            .await,
+        Err(StoreError::StepState)
+    ));
+
+    // Retirer un inscrit retire sa participation aux étapes ; supprimer une étape, ses groupes.
+    assert!(store.delete_participant(players[3]).await.unwrap());
+    assert_eq!(
+        store.list_step_participants(first.id).await.unwrap().len(),
+        3
+    );
+    assert!(store.delete_step(last.id).await.unwrap());
+    assert!(!store.delete_step(last.id).await.unwrap());
+    assert!(
+        store
+            .list_step_participants(last.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.delete_tournament(tournament.id).await.unwrap());
+    assert!(store.find_step(first.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn steps_export_and_reimport_into_another_tournament() {
+    let store = Arc::new(store().await);
+    let game_id = game(&store).await;
+    let new_tournament = || {
+        store.create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+    };
+    let (source, copy) = (
+        new_tournament().await.unwrap(),
+        new_tournament().await.unwrap(),
+    );
+    let mut users = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        users.push(user(&store, name).await);
+    }
+    let enroll = |tournament: Uuid, user_id: Uuid| {
+        let store = store.clone();
+        async move {
+            store
+                .add_participant(ParticipantInput {
+                    tournament_id: tournament,
+                    user_id: Some(user_id),
+                    tournament_team_id: None,
+                })
+                .await
+                .unwrap()
+                .unwrap()
+                .id
+        }
+    };
+    let mut players = Vec::new();
+    for user_id in &users {
+        players.push(enroll(source.id, *user_id).await);
+        enroll(copy.id, *user_id).await;
+    }
+    let create = |position: i32, size: i32, advance: i32| {
+        store.create_step(StepInput {
+            tournament_id: source.id,
+            definition: step_definition(position, 1, size, advance),
+        })
+    };
+    let first = create(1, 4, 2).await.unwrap().unwrap();
+    let last = create(2, 2, 1).await.unwrap().unwrap();
+    store
+        .start_step(StepStart {
+            step_id: first.id,
+            groups: vec![players.clone()],
+        })
+        .await
+        .unwrap();
+    for (player, points) in players.iter().zip([9.0, 7.5, 4.0, 1.0]) {
+        store
+            .set_step_points(first.id, *player, points)
+            .await
+            .unwrap();
+    }
+    let outcomes = players
+        .iter()
+        .zip(1..)
+        .map(|(id, rank)| StepOutcome {
+            participant_id: *id,
+            final_rank: rank,
+            status: if rank <= 2 {
+                StepParticipantStatus::Qualified
+            } else {
+                StepParticipantStatus::Eliminated
+            },
+        })
+        .collect();
+    store
+        .close_step(StepClosing {
+            step_id: first.id,
+            outcomes,
+            next: Some(StepStart {
+                step_id: last.id,
+                groups: vec![vec![players[0], players[1]]],
+            }),
+        })
+        .await
+        .unwrap();
+
+    let steps = StoreSteps::new(store.clone());
+    let exported = steps.export_in(source.id, &[]).await.unwrap();
+    assert_eq!(exported.len(), 2);
+    let items: Vec<serde_json::Value> = exported.iter().map(|(_, item)| item.clone()).collect();
+    assert_eq!(items[0]["status"], "finished");
+    assert_eq!(items[1]["status"], "ongoing");
+
+    let mut scope = FileScope::default();
+    for user_id in &users {
+        let profile = store.find_profile(*user_id).await.unwrap().unwrap();
+        scope.users.insert(profile.username.to_lowercase());
+    }
+    assert_eq!(
+        steps.validate_in(game_id, &items, &scope).await.unwrap(),
+        None
+    );
+    steps.import_in(copy.id, items.clone(), &[]).await.unwrap();
+    let again: Vec<serde_json::Value> = steps
+        .export_in(copy.id, &[])
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, item)| item)
+        .collect();
+    assert_eq!(again, items);
+
+    // Réimporter remplace : les étapes de la copie repartent du fichier.
+    steps
+        .import_in(copy.id, vec![items[0].clone()], &[])
+        .await
+        .unwrap();
+    assert_eq!(store.list_steps(copy.id).await.unwrap().len(), 1);
+    let totals = store.participant_points(copy.id).await.unwrap();
+    assert_eq!(totals.values().copied().fold(0.0, f64::max), 9.0);
 }
