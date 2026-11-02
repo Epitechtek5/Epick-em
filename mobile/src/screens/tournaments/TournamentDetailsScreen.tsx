@@ -208,6 +208,7 @@ export default function TournamentDetailsScreen() {
     participants: '/(authenticated)/tournaments/[tournamentId]/participants',
     ranking: '/(authenticated)/tournaments/[tournamentId]/ranking',
     scoring: '/(authenticated)/tournaments/[tournamentId]/scoring',
+    steps: '/(authenticated)/tournaments/[tournamentId]/steps',
     teams: '/(authenticated)/tournaments/[tournamentId]/teams',
     edit: '/(authenticated)/tournaments/[tournamentId]/edit',
   } as const;
@@ -395,6 +396,13 @@ export default function TournamentDetailsScreen() {
               onPress={() => open('ranking')}
             >
               <Text>{t('tournaments.ranking')}</Text>
+            </Button>
+            <Button
+              className="flex-1"
+              variant="outline"
+              onPress={() => open('steps')}
+            >
+              <Text>{t('steps.title')}</Text>
             </Button>
           </View>
         </CardContent>

@@ -114,6 +114,12 @@ it('hides lifecycle and delete controls from regular users', async () => {
     setData: jest.fn(),
   });
   await render(<TournamentDetailsScreen />);
+  fireEvent.press(screen.getByText('Tournament stages'));
+  expect(router.push).toHaveBeenCalledWith({
+    pathname: '/(authenticated)/tournaments/[tournamentId]/steps',
+    params: { tournamentId: id },
+  });
+
   expect(screen.getByText('Participants')).toBeTruthy();
   expect(screen.queryByText('Move to Registration')).toBeNull();
   expect(screen.queryByText('Delete')).toBeNull();
