@@ -18,6 +18,7 @@ import {
   updateTournament,
 } from '../src/features/tournaments/api';
 import { ApiError, configureSessionRequest } from '../src/lib/api';
+import { tournamentErrorKey } from '../src/features/tournaments/errors';
 
 const id = '22222222-2222-4222-8222-222222222222';
 const other = '33333333-3333-4333-8333-333333333333';
@@ -200,4 +201,18 @@ it('preserves HTTP authorization and conflict errors', async () => {
   await expect(registerParticipant('token', id)).rejects.toBeInstanceOf(
     ApiError,
   );
+  expect(
+    tournamentErrorKey(new ApiError(409, 'Conflict', 'tournament_full')),
+  ).toBe('tournaments.errors.full');
+  jest
+    .mocked(fetch)
+    .mockResolvedValue(
+      response(400, {
+        error: 'invalid_request',
+        errors: { tournament_team_id: 'Invalid team' },
+      }),
+    );
+  await expect(registerParticipant('token', id, other)).rejects.toMatchObject({
+    fields: ['tournament_team_id'],
+  });
 });
