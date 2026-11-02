@@ -113,9 +113,9 @@ export function GameFilterSelect({
         <Text className="text-sm font-medium">
           {label ?? t('teams.filterByGame')}
         </Text>
-        <Pressable
-          className="min-h-12 flex-row items-center gap-3 rounded-md border border-input bg-background px-3 py-3"
-          accessibilityRole="button"
+        <Button
+          className="w-full justify-between"
+          variant="outline"
           accessibilityLabel={t(
             includeAllGames ? 'teams.filterSelection' : 'teams.gameSelection',
             {
@@ -127,12 +127,12 @@ export function GameFilterSelect({
           accessibilityState={{ expanded: open }}
           onPress={showOptions}
         >
-          <Text className="min-w-0 flex-1" numberOfLines={1}>
+          <Text className="min-w-0 flex-1 text-left" numberOfLines={1}>
             {selectedGame?.name ??
               t(includeAllGames ? 'teams.allGames' : 'teams.selectGame')}
           </Text>
           <Icon icon={ArrowDown01Icon} tone="foreground" size={18} />
-        </Pressable>
+        </Button>
       </View>
 
       <Modal
