@@ -1,7 +1,7 @@
 import { ApiError } from '@/lib/api/http'
 import type { GameChanges, GameFieldErrors, GameValues } from './types'
 
-export const MAX_IMPORT_BYTES = 256 * 1024
+export { MAX_IMPORT_BYTES } from '@/lib/api/files'
 export const MAX_IMAGES = 10
 export const NAME_MAX = 64
 export const DESCRIPTION_MAX = 2000

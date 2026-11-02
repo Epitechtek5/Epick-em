@@ -39,6 +39,17 @@ describe('GamesPage', () => {
     expect(screen.getByRole('link', { name: 'Importer / Exporter' })).toBeInTheDocument()
   })
 
+  it('aligne les trois actions d\'administration sur une seule rangée (dès sm)', async () => {
+    signInAs('admin')
+    mockFetch(jsonResponse(200, [GAME_A]))
+    renderApp('/games')
+    const group = await screen.findByRole('group', { name: 'Actions d’administration' })
+    expect(group).toHaveClass('sm:flex-nowrap')
+    expect(within(group).getByRole('button', { name: 'Actualiser les jeux' })).toBeInTheDocument()
+    expect(within(group).getByRole('link', { name: 'Importer / Exporter' })).toBeInTheDocument()
+    expect(within(group).getByRole('link', { name: 'Créer un jeu' })).toBeInTheDocument()
+  })
+
   it('affiche l\'état vide', async () => {
     signInAs('user')
     mockFetch(jsonResponse(200, []))
