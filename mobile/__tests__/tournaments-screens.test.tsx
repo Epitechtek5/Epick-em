@@ -171,8 +171,7 @@ it('shows a registered team member their enrollment without owner actions', asyn
   expect(screen.getByText('View my registration')).toBeTruthy();
   fireEvent.press(screen.getByText('View my registration'));
   expect(router.push).toHaveBeenCalledWith({
-    pathname:
-      '/(authenticated)/tournaments/[tournamentId]/participants',
+    pathname: '/(authenticated)/tournaments/[tournamentId]/participants',
     params: { tournamentId: id, participantId: participant.id },
   });
 

@@ -64,7 +64,9 @@ export function TournamentTeamSelect({
           />
         ) : null}
         <View className="min-w-0 flex-1 items-start gap-0.5">
-          <Text className={selected ? 'font-semibold' : 'text-muted-foreground'}>
+          <Text
+            className={selected ? 'font-semibold' : 'text-muted-foreground'}
+          >
             {selected?.name ?? selectedId ?? t('tournaments.chooseTeam')}
           </Text>
           {selected?.tag ? (
@@ -115,9 +117,7 @@ export function TournamentTeamSelect({
               renderItem={({ item }) => (
                 <Button
                   className={`min-h-20 justify-start px-4 py-3 ${
-                    item.id === selectedId
-                      ? 'bg-primary/10'
-                      : 'bg-muted/40'
+                    item.id === selectedId ? 'bg-primary/10' : 'bg-muted/40'
                   }`}
                   variant="ghost"
                   disabled={disabledIds.has(item.id)}
@@ -126,7 +126,11 @@ export function TournamentTeamSelect({
                     setOpen(false);
                   }}
                 >
-                  <TeamImage uri={item.picture_url} name={item.name} size="sm" />
+                  <TeamImage
+                    uri={item.picture_url}
+                    name={item.name}
+                    size="sm"
+                  />
                   <View className="min-w-0 flex-1 gap-1">
                     <Text className="font-semibold">{item.name}</Text>
                     {item.tag ? (

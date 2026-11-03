@@ -19,13 +19,11 @@ const STATUS_TONES: Record<string, { container: string; text: string }> = {
     text: 'text-violet-700 dark:text-violet-300',
   },
   ongoing: {
-    container:
-      'border-sky-200 bg-sky-100 dark:border-sky-800 dark:bg-sky-950',
+    container: 'border-sky-200 bg-sky-100 dark:border-sky-800 dark:bg-sky-950',
     text: 'text-sky-700 dark:text-sky-300',
   },
   in: {
-    container:
-      'border-sky-200 bg-sky-100 dark:border-sky-800 dark:bg-sky-950',
+    container: 'border-sky-200 bg-sky-100 dark:border-sky-800 dark:bg-sky-950',
     text: 'text-sky-700 dark:text-sky-300',
   },
   pending: {
@@ -49,18 +47,15 @@ const STATUS_TONES: Record<string, { container: string; text: string }> = {
     text: 'text-emerald-700 dark:text-emerald-300',
   },
   cancelled: {
-    container:
-      'border-red-200 bg-red-100 dark:border-red-900 dark:bg-red-950',
+    container: 'border-red-200 bg-red-100 dark:border-red-900 dark:bg-red-950',
     text: 'text-red-700 dark:text-red-300',
   },
   disqualified: {
-    container:
-      'border-red-200 bg-red-100 dark:border-red-900 dark:bg-red-950',
+    container: 'border-red-200 bg-red-100 dark:border-red-900 dark:bg-red-950',
     text: 'text-red-700 dark:text-red-300',
   },
   eliminated: {
-    container:
-      'border-red-200 bg-red-100 dark:border-red-900 dark:bg-red-950',
+    container: 'border-red-200 bg-red-100 dark:border-red-900 dark:bg-red-950',
     text: 'text-red-700 dark:text-red-300',
   },
   withdrawn: {

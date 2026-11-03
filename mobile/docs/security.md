@@ -1,5 +1,22 @@
 # Dependency security
 
+## npm advisory range correction: 2026-11-03
+
+GitHub's aggregated advisory for
+[`minimatch` GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)
+currently reports every version below 11.0.1 as affected. The
+[maintainer advisory](https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249)
+identifies only version 10.2.6 and describes optimizer code that is absent from
+the installed 3.1.5 and 5.1.9 releases. The existing override already resolves
+modern dependency branches to 11.0.4.
+
+The audit gate therefore checks every `minimatch` node reported by npm against
+`package-lock.json`. It accepts this advisory only when all reported nodes have
+known installed versions and none is 10.2.6. Missing lockfile evidence or an
+installed 10.2.6 continues to fail CI. A global override to minimatch 11 was not
+used because legacy consumers call the pre-v9 CommonJS function export, which
+minimatch 11 no longer provides.
+
 ## Current audit snapshot: 2026-10-28
 
 The raw npm reports contain 15 affected packages in the full tree and 13 in the production tree; every entry propagates the same low-severity `deepmerge` advisory. The strict gate temporarily accepts only `deepmerge` / `GHSA-gcqx-w48m-w2h4` through the November 28, 2026 review deadline. Raw `npm audit` still exits with status 1. The mobile security job succeeds only if both reports are valid, all findings match existing exceptions, and no exception has expired.

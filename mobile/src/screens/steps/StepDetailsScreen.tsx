@@ -268,7 +268,9 @@ export default function StepDetailsScreen() {
                       </Text>
                       <StatusBadge
                         status={participant.status}
-                        label={t(`steps.participantStatus.${participant.status}`)}
+                        label={t(
+                          `steps.participantStatus.${participant.status}`,
+                        )}
                       />
                     </View>
                     <Text>

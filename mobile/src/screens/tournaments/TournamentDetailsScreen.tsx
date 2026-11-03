@@ -392,22 +392,13 @@ export default function TournamentDetailsScreen() {
             {t('tournaments.detailsSections.explore')}
           </Text>
           <View className="gap-2">
-            <Button
-              variant="default"
-              onPress={() => open('participants')}
-            >
+            <Button variant="default" onPress={() => open('participants')}>
               <Text numberOfLines={1}>{t('tournaments.participants')}</Text>
             </Button>
-            <Button
-              variant="default"
-              onPress={() => open('ranking')}
-            >
+            <Button variant="default" onPress={() => open('ranking')}>
               <Text numberOfLines={1}>{t('tournaments.ranking')}</Text>
             </Button>
-            <Button
-              variant="default"
-              onPress={() => open('steps')}
-            >
+            <Button variant="default" onPress={() => open('steps')}>
               <Text numberOfLines={1}>{t('steps.title')}</Text>
             </Button>
           </View>
