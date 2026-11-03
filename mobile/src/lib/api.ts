@@ -79,6 +79,16 @@ export async function apiRequest<T>(
               'coefficient',
               'points_table',
               'status',
+              'position',
+              'format',
+              'match_type',
+              'group_count',
+              'group_size',
+              'matches_per_group',
+              'advance_per_group',
+              'tiebreak',
+              'steps',
+              'participants',
             ].includes(field),
           )
         : [];

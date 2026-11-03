@@ -64,6 +64,22 @@ export default function AuthenticatedLayout() {
         options={{ title: t('tournaments.ranking') }}
       />
       <Stack.Screen
+        name="tournaments/[tournamentId]/steps/index"
+        options={{ title: t('steps.title') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/steps/create"
+        options={{ title: t('steps.create') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/steps/[stepId]/index"
+        options={{ title: t('steps.details') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/steps/[stepId]/edit"
+        options={{ title: t('steps.edit') }}
+      />
+      <Stack.Screen
         name="teams/create"
         options={{ title: t('teams.create') }}
       />
