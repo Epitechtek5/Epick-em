@@ -35,11 +35,11 @@ async fn users_are_unique_whatever_the_case() {
     let store = store().await;
     let name = unique("Alice");
 
-    let user = store.create_user(&name, "hash").await.unwrap();
+    let user = store.create_user(&name, None, "hash").await.unwrap();
     assert_eq!(user.username, name);
     assert_eq!(user.role, Role::User);
     assert!(matches!(
-        store.create_user(&name.to_lowercase(), "autre").await,
+        store.create_user(&name.to_lowercase(), None, "autre").await,
         Err(StoreError::UsernameTaken)
     ));
 
@@ -72,7 +72,10 @@ async fn users_are_unique_whatever_the_case() {
 #[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
 async fn refresh_tokens_rotate_once_and_can_be_revoked() {
     let store = store().await;
-    let user = store.create_user(&unique("rot"), "hash").await.unwrap();
+    let user = store
+        .create_user(&unique("rot"), None, "hash")
+        .await
+        .unwrap();
     let ttl = Duration::from_secs(60);
     let (a, b, c) = (unique("a"), unique("b"), unique("c"));
 
@@ -120,7 +123,10 @@ async fn refresh_tokens_rotate_once_and_can_be_revoked() {
 #[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
 async fn expired_refresh_tokens_are_refused() {
     let store = store().await;
-    let user = store.create_user(&unique("exp"), "hash").await.unwrap();
+    let user = store
+        .create_user(&unique("exp"), None, "hash")
+        .await
+        .unwrap();
     let (a, b) = (unique("a"), unique("b"));
 
     store
@@ -140,7 +146,10 @@ async fn expired_refresh_tokens_are_refused() {
 #[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
 async fn concurrent_rotations_of_one_token_have_a_single_winner() {
     let store = std::sync::Arc::new(store().await);
-    let user = store.create_user(&unique("race"), "hash").await.unwrap();
+    let user = store
+        .create_user(&unique("race"), None, "hash")
+        .await
+        .unwrap();
     let ttl = Duration::from_secs(60);
     let old = unique("old");
     store
@@ -170,7 +179,7 @@ async fn concurrent_rotations_of_one_token_have_a_single_winner() {
 async fn profiles_are_updated_and_the_cache_follows() {
     let store = store().await;
     let name = unique("prof");
-    let user = store.create_user(&name, "hash").await.unwrap();
+    let user = store.create_user(&name, None, "hash").await.unwrap();
 
     // Première lecture : mise en cache. La modification doit l'invalider.
     let before = store.find_profile(user.id).await.unwrap().unwrap();
@@ -202,7 +211,10 @@ async fn profiles_are_updated_and_the_cache_follows() {
     let record = store.find_user_by_id(user.id).await.unwrap().unwrap();
     assert_eq!(record.password_hash, "hash");
 
-    let other = store.create_user(&unique("other"), "hash").await.unwrap();
+    let other = store
+        .create_user(&unique("other"), None, "hash")
+        .await
+        .unwrap();
     assert!(matches!(
         store
             .update_user(
@@ -228,7 +240,10 @@ async fn profiles_are_updated_and_the_cache_follows() {
 #[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
 async fn deleting_a_user_clears_the_cache_and_the_refresh_tokens() {
     let store = store().await;
-    let user = store.create_user(&unique("del"), "hash").await.unwrap();
+    let user = store
+        .create_user(&unique("del"), None, "hash")
+        .await
+        .unwrap();
     let token = unique("tok");
     store
         .insert_refresh_token(user.id, &token, Duration::from_secs(60))
@@ -251,7 +266,10 @@ async fn deleting_a_user_clears_the_cache_and_the_refresh_tokens() {
 #[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
 async fn the_watcher_role_is_accepted_by_the_database() {
     let store = store().await;
-    let user = store.create_user(&unique("watch"), "hash").await.unwrap();
+    let user = store
+        .create_user(&unique("watch"), None, "hash")
+        .await
+        .unwrap();
     let updated = store
         .update_user(
             user.id,
@@ -551,7 +569,11 @@ async fn stats_are_upserted_by_key_and_links_are_replaced() {
 }
 
 async fn user(store: &PgStore, prefix: &str) -> Uuid {
-    store.create_user(&unique(prefix), "hash").await.unwrap().id
+    store
+        .create_user(&unique(prefix), None, "hash")
+        .await
+        .unwrap()
+        .id
 }
 
 async fn game(store: &PgStore) -> Uuid {
@@ -2521,5 +2543,154 @@ async fn matches_are_stored_scored_and_finished_atomically() {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn emails_are_unique_and_found() {
+    let store = store().await;
+    let email = format!("{}@example.com", unique("mail"));
+    let user = store
+        .create_user(&unique("mail"), Some(&email), "hash")
+        .await
+        .unwrap();
+    assert_eq!(user.email.as_deref(), Some(email.as_str()));
+    assert!(matches!(
+        store
+            .create_user(&unique("mail"), Some(&email), "hash")
+            .await,
+        Err(StoreError::EmailTaken)
+    ));
+    store
+        .create_user(&unique("none"), None, "hash")
+        .await
+        .unwrap();
+    store
+        .create_user(&unique("none"), None, "hash")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.find_user_by_email(&email).await.unwrap().unwrap().id,
+        user.id
+    );
+    assert!(
+        store
+            .find_user_by_email("unknown@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let other = store
+        .create_user(&unique("mail"), None, "hash")
+        .await
+        .unwrap();
+    let taken = store
+        .update_user(
+            other.id,
+            UserUpdate {
+                email: Some(email),
+                ..UserUpdate::default()
+            },
+        )
+        .await;
+    assert!(matches!(taken, Err(StoreError::EmailTaken)));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn password_reset_tokens_work_once_and_end_sessions() {
+    let store = store().await;
+    let user = store
+        .create_user(&unique("reset"), None, "old")
+        .await
+        .unwrap();
+    let ttl = Duration::from_secs(60);
+    let hash_a = format!("{:0>64}", unique("tok-a"));
+    let hash_b = format!("{:0>64}", unique("tok-b"));
+    let session = format!("{:0>64}", unique("rt"));
+    store
+        .insert_refresh_token(user.id, &session, ttl)
+        .await
+        .unwrap();
+
+    store
+        .insert_password_reset_token(user.id, &hash_a, ttl)
+        .await
+        .unwrap();
+    store
+        .insert_password_reset_token(user.id, &hash_b, ttl)
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .consume_password_reset_token(&hash_a, "unused")
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .consume_password_reset_token(&hash_b, "new")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .consume_password_reset_token(&hash_b, "reused")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .find_user_by_id(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        "new"
+    );
+    assert!(
+        !store
+            .rotate_refresh_token(
+                user.id,
+                &session,
+                &format!("{:0>64}", unique("new-rt")),
+                ttl,
+            )
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn expired_password_reset_tokens_are_refused() {
+    let store = store().await;
+    let user = store
+        .create_user(&unique("rexp"), None, "old")
+        .await
+        .unwrap();
+    let hash = format!("{:0>64}", unique("exp"));
+    store
+        .insert_password_reset_token(user.id, &hash, Duration::from_millis(50))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !store
+            .consume_password_reset_token(&hash, "new")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .find_user_by_id(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        "old"
     );
 }

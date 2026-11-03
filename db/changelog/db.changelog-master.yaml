@@ -26,3 +26,5 @@ databaseChangeLog:
       file: changelog/0012-create-matches.yaml
   - include:
       file: changelog/0013-match-in-step.yaml
+  - include:
+      file: changelog/0014-password-reset.yaml

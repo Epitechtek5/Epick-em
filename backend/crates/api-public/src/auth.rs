@@ -14,6 +14,8 @@ use crate::game_io::GameStats;
 use crate::match_io::InSteps;
 use crate::stat_io::StoreStats;
 use crate::step_io::StoreSteps;
+use crate::mail::{Mailer, NoopMailer};
+use crate::password_reset::{email_error, normalize_email};
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
 use crate::tournament_io::TournamentChild;
 use crate::tournament_team_io::StoreTournamentTeams;
@@ -36,6 +38,7 @@ pub const USERNAME_MIN: usize = 3;
 pub const USERNAME_MAX: usize = 32;
 pub const PASSWORD_MIN: usize = 8;
 pub const PASSWORD_MAX: usize = 128;
+const DEFAULT_PUBLIC_URL: &str = "http://localhost:3000";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -56,6 +59,10 @@ pub struct AppState {
     pub(crate) matches: Arc<dyn TournamentChild>,
     /// Cache des fichiers d'export ([`export_cache`](crate::export_cache)). Par défaut en mémoire.
     pub(crate) cache: Arc<dyn Cache>,
+    /// Envoi des e-mails ; par défaut [`NoopMailer`] (Resend n'est pas branché).
+    pub(crate) mailer: Arc<dyn Mailer>,
+    /// Origine publique du site, début des liens envoyés par e-mail.
+    pub(crate) public_url: Arc<str>,
 }
 
 impl AppState {
@@ -73,6 +80,8 @@ impl AppState {
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
+            mailer: Arc::new(NoopMailer),
+            public_url: DEFAULT_PUBLIC_URL.into(),
         })
     }
 
@@ -105,6 +114,14 @@ impl AppState {
         self.stats = stats;
         self
     }
+
+    /// Branche l'envoi des e-mails ; `public_url` est l'origine publique du site (ex.
+    /// `https://epickem.app`) : le lien de réinitialisation du mot de passe en est déduit.
+    pub fn with_mailer(mut self, mailer: Arc<dyn Mailer>, public_url: &str) -> Self {
+        self.mailer = mailer;
+        self.public_url = public_url.into();
+        self
+    }
 }
 
 /// Routes d'authentification, avec leur documentation OpenAPI.
@@ -121,6 +138,17 @@ struct Credentials {
     username: String,
     #[schema(min_length = 8, max_length = 128, format = Password)]
     password: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+struct RegisterRequest {
+    #[schema(min_length = 3, max_length = 32, example = "alice")]
+    username: String,
+    #[schema(min_length = 8, max_length = 128, format = Password)]
+    password: String,
+    /// Facultative ; sert à réinitialiser le mot de passe.
+    #[schema(max_length = 254, format = Email, example = "alice@example.com")]
+    email: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -183,28 +211,30 @@ fn decode_claims(token: &str, secret: &str, check_expiry: bool) -> Option<Claims
     post,
     path = "/register",
     tag = "auth",
-    request_body = Credentials,
+    request_body = RegisterRequest,
     responses(
         (status = 201, description = "Compte créé", body = RegisterResponse),
         (status = 400, description = "Requête invalide", body = ErrorResponse),
-        (status = 409, description = "Nom d'utilisateur déjà pris", body = ErrorResponse),
+        (status = 409, description = "Nom d'utilisateur ou adresse e-mail déjà pris", body = ErrorResponse),
     ),
 )]
 #[post("/register")]
 async fn register(
     state: web::Data<AppState>,
-    credentials: web::Json<Credentials>,
+    request: web::Json<RegisterRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    let credentials = credentials.into_inner();
-    validate_registration(&credentials)?;
+    let request = request.into_inner();
+    validate_registration(&request)?;
+    let email = request.email.as_deref().map(normalize_email);
 
-    let password_hash = hash_password_blocking(credentials.password).await?;
+    let password_hash = hash_password_blocking(request.password).await?;
     let user = state
         .store
-        .create_user(&credentials.username, &password_hash)
+        .create_user(&request.username, email.as_deref(), &password_hash)
         .await
         .map_err(|err| match err {
             StoreError::UsernameTaken => ApiError::Conflict,
+            StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?;
     Ok(HttpResponse::Created().json(RegisterResponse {
@@ -260,7 +290,7 @@ async fn login(
         .map_err(ApiError::internal)?;
     match user {
         Some(user) if verified => {
-            let refresh_token = new_refresh_token();
+            let refresh_token = new_token();
             state
                 .store
                 .insert_refresh_token(
@@ -296,7 +326,7 @@ async fn refresh(
     claims: web::ReqData<Claims>,
     request: web::Json<RefreshRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    let new_token = new_refresh_token();
+    let new_token = new_token();
     let rotated = state
         .store
         .rotate_refresh_token(
@@ -347,13 +377,20 @@ async fn logout(
     Ok(HttpResponse::NoContent().finish())
 }
 
-fn validate_registration(credentials: &Credentials) -> Result<(), ApiError> {
+fn validate_registration(request: &RegisterRequest) -> Result<(), ApiError> {
     let mut errors = Vec::new();
-    if let Some(message) = username_error(&credentials.username) {
+    if let Some(message) = username_error(&request.username) {
         errors.push(("username", message));
     }
-    if let Some(message) = password_error(&credentials.password) {
+    if let Some(message) = password_error(&request.password) {
         errors.push(("password", message));
+    }
+    if let Some(message) = request
+        .email
+        .as_deref()
+        .and_then(|email| email_error(&normalize_email(email)))
+    {
+        errors.push(("email", message));
     }
     if errors.is_empty() {
         Ok(())
@@ -439,14 +476,14 @@ fn verify_password(password: &str, hash: &str) -> bool {
 }
 
 /// 256 bits d'aléa, en hexadécimal.
-fn new_refresh_token() -> String {
+pub(crate) fn new_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     hex(&bytes)
 }
 
 /// Empreinte stockée en base : une fuite de la table ne donne pas de jeton utilisable.
-fn hash_token(token: &str) -> String {
+pub(crate) fn hash_token(token: &str) -> String {
     hex(&Sha256::digest(token.as_bytes()))
 }
 
@@ -473,7 +510,7 @@ mod tests {
 
     #[test]
     fn refresh_tokens_are_random_and_hashed_deterministically() {
-        let (a, b) = (new_refresh_token(), new_refresh_token());
+        let (a, b) = (new_token(), new_token());
         assert_eq!(a.len(), 64);
         assert_ne!(a, b);
         assert_eq!(hash_token(&a), hash_token(&a));
@@ -496,6 +533,7 @@ mod tests {
             username: "alice".into(),
             password_hash: String::new(),
             role: Role::Admin,
+            email: None,
         };
         let response = token_response(&config, &user, "r".into()).unwrap();
         let claims = decode_access_token(&response.access_token, secret).unwrap();

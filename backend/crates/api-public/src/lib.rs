@@ -1,5 +1,6 @@
-//! API publique : authentification (inscription, connexion, rafraîchissement, déconnexion),
-//! gestion des comptes, des jeux, des statistiques, des équipes et des tournois.
+//! API publique : authentification (inscription, connexion, rafraîchissement, déconnexion,
+//! mot de passe oublié), gestion des comptes, des jeux, des statistiques, des équipes et des
+//! tournois.
 //! La documentation OpenAPI est servie sur `/docs` (Swagger UI) et `/openapi.json`.
 //!
 //! Les routes sont exposées sans préfixe : le front les appelle en `/api/*` et nginx (ou le
@@ -14,7 +15,9 @@ pub mod games;
 pub mod guard;
 pub mod match_io;
 pub mod matches;
+pub mod mail;
 pub mod openapi;
+pub mod password_reset;
 pub mod ranking;
 pub mod router;
 pub mod stat_io;

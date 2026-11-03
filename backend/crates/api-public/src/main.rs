@@ -2,6 +2,7 @@
 
 use actix_web::HttpServer;
 use api_public::config::AuthConfig;
+use api_public::mail::{MailConfig, ResendMailer};
 use api_public::store::PgStore;
 use api_public::{AppState, app};
 use std::error::Error;
@@ -30,6 +31,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
         .with_cache(cache);
+    let state = match MailConfig::from_env() {
+        Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
+        None => {
+            eprintln!("api-public : RESEND_API_KEY absente, les e-mails ne seront pas envoyés");
+            state
+        }
+    };
 
     let server = HttpServer::new(move || app(state.clone())).bind(format!("0.0.0.0:{port}"))?;
     println!(

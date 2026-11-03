@@ -62,6 +62,10 @@ pub enum ApiError {
     RegistrationClosed,
     /// Changement de statut impossible depuis le statut actuel.
     InvalidTransition,
+    /// Adresse e-mail déjà utilisée par un autre compte.
+    EmailTaken,
+    /// Lien de réinitialisation du mot de passe inconnu, expiré ou déjà utilisé.
+    InvalidResetToken,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -164,6 +168,16 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "invalid_status_transition",
                 "Ce changement de statut n'est pas possible depuis le statut actuel",
+            ),
+            ApiError::EmailTaken => (
+                StatusCode::CONFLICT,
+                "email_taken",
+                "Cette adresse e-mail est déjà utilisée",
+            ),
+            ApiError::InvalidResetToken => (
+                StatusCode::BAD_REQUEST,
+                "invalid_reset_token",
+                "Lien de réinitialisation invalide ou expiré",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
