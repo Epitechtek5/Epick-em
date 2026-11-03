@@ -33,7 +33,9 @@ export default function MatchEditorScreen() {
     return <ScreenState message={t('errors.forbidden')} />;
   }
 
-  return <ScheduleForm key={match?.id ?? step.id} token={token} data={state.data} />;
+  return (
+    <ScheduleForm key={match?.id ?? step.id} token={token} data={state.data} />
+  );
 }
 
 function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
@@ -52,8 +54,10 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
   const [search, setSearch] = useState('');
   const action = useMatchAction();
 
-  const editableParticipants = (!match || match.status === 'scheduled') && !!group;
-  const groupMembers = groups.find((item) => item.group_id === group)?.participants ?? [];
+  const editableParticipants =
+    (!match || match.status === 'scheduled') && !!group;
+  const groupMembers =
+    groups.find((item) => item.group_id === group)?.participants ?? [];
   const nextOptions = data.matches.filter((item) => item.id !== match?.id);
 
   function save() {
@@ -66,7 +70,13 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
       participant_ids: ids,
     };
 
-    const problem = scheduleProblem(input, step, groups, data.matches, match ?? undefined);
+    const problem = scheduleProblem(
+      input,
+      step,
+      groups,
+      data.matches,
+      match ?? undefined,
+    );
     if (problem) {
       action.setError('matches.validation.' + problem);
       return;
@@ -78,7 +88,12 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
         const participantChanged =
           editableParticipants &&
           (ids.length !== match.participants.length ||
-            ids.some((id) => !match.participants.some((participant) => participant.participant_id === id)));
+            ids.some(
+              (id) =>
+                !match.participants.some(
+                  (participant) => participant.participant_id === id,
+                ),
+            ));
         const changes = {
           ...(input.round !== match.round && { round: input.round }),
           ...(input.bracket !== match.bracket && { bracket: input.bracket }),
@@ -98,7 +113,8 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
 
       const created = await api.create(input);
       router.replace({
-        pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]',
+        pathname:
+          '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]',
         params: {
           tournamentId: step.tournament_id,
           stepId: step.id,
@@ -118,9 +134,13 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
           disabled={!!match}
           value={group}
           options={groups.map((item) => item.group_id)}
-          labelFor={(id) => id
-            ? t('steps.group', { index: groups.find((item) => item.group_id === id)?.index })
-            : t('matches.unset')}
+          labelFor={(id) =>
+            id
+              ? t('steps.group', {
+                  index: groups.find((item) => item.group_id === id)?.index,
+                })
+              : t('matches.unset')
+          }
           onSelect={(id) => {
             setGroup(id);
             setIds([]);
@@ -142,9 +162,9 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
             label={t('matches.bracket')}
             value={bracket}
             options={['', ...brackets]}
-            labelFor={(value) => value
-              ? t('matches.region.' + value)
-              : t('matches.unset')}
+            labelFor={(value) =>
+              value ? t('matches.region.' + value) : t('matches.unset')
+            }
             onSelect={setBracket}
           />
         ) : null}
@@ -155,11 +175,14 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
               label={t('matches.next')}
               value={next}
               options={['', ...nextOptions.map((item) => item.id)]}
-              labelFor={(id) => id
-                ? t('matches.number', {
-                    number: data.matches.findIndex((item) => item.id === id) + 1,
-                  })
-                : t('matches.noNext')}
+              labelFor={(id) =>
+                id
+                  ? t('matches.number', {
+                      number:
+                        data.matches.findIndex((item) => item.id === id) + 1,
+                    })
+                  : t('matches.noNext')
+              }
               onSelect={setNext}
             />
             <Text variant="muted">{t('matches.nextHelp')}</Text>
@@ -176,7 +199,9 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
 
       {editableParticipants ? (
         <View className="gap-3 rounded-xl border border-border bg-card p-4">
-          <Text className="text-lg font-semibold">{t('matches.participants')}</Text>
+          <Text className="text-lg font-semibold">
+            {t('matches.participants')}
+          </Text>
           <Input
             accessibilityLabel={t('matches.search')}
             placeholder={t('matches.search')}
@@ -185,8 +210,12 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
           />
           {groupMembers
             .filter((participant) => {
-              const name = data.names[participant.participant_id] ?? t('steps.unknownParticipant');
-              return name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase());
+              const name =
+                data.names[participant.participant_id] ??
+                t('steps.unknownParticipant');
+              return name
+                .toLocaleLowerCase()
+                .includes(search.trim().toLocaleLowerCase());
             })
             .map((participant) => {
               const id = participant.participant_id;
@@ -197,9 +226,13 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
                   role="checkbox"
                   accessibilityState={{ checked: selected }}
                   variant={selected ? 'secondary' : 'outline'}
-                  onPress={() => setIds((previous) => selected
-                    ? previous.filter((item) => item !== id)
-                    : [...previous, id])}
+                  onPress={() =>
+                    setIds((previous) =>
+                      selected
+                        ? previous.filter((item) => item !== id)
+                        : [...previous, id],
+                    )
+                  }
                 >
                   <Text>
                     {selected ? '✓ ' : ''}

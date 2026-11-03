@@ -9,7 +9,10 @@ import { matchApi } from '@/features/matches/api';
 import { playable } from '@/features/matches/validation';
 import type { TournamentStep } from '@/features/steps/types';
 import { MatchPage, MatchState } from '@/components/matches/MatchPage';
-import { MatchScoreboard, ParticipantStats } from '@/components/matches/MatchScoreboard';
+import {
+  MatchScoreboard,
+  ParticipantStats,
+} from '@/components/matches/MatchScoreboard';
 import { matchNumber } from '@/components/matches/MatchCard';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
@@ -39,7 +42,8 @@ export default function MatchDetailsScreen() {
 
   function openDetails(matchId: string) {
     router.push({
-      pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]',
+      pathname:
+        '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]',
       params: { ...params, matchId },
     });
   }
@@ -51,13 +55,17 @@ export default function MatchDetailsScreen() {
       { text: t('common.cancel'), style: 'cancel' },
       {
         text: label,
-        style: target === 'cancelled' || target === 'delete' ? 'destructive' : 'default',
+        style:
+          target === 'cancelled' || target === 'delete'
+            ? 'destructive'
+            : 'default',
         onPress: () => {
           void action.run(async () => {
             if (target === 'delete') {
               await api.remove(id);
               router.replace({
-                pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches',
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches',
                 params: { tournamentId, stepId },
               });
               return;
@@ -65,7 +73,9 @@ export default function MatchDetailsScreen() {
 
             const outcome = await api.transition(id, target);
             setNextStep(outcome.step_closed?.next_step ?? null);
-            setNotice(outcome.step_closed ? 'matches.closed' : 'matches.updated');
+            setNotice(
+              outcome.step_closed ? 'matches.closed' : 'matches.updated',
+            );
             await state.reload();
           });
         },
@@ -81,9 +91,13 @@ export default function MatchDetailsScreen() {
       <MatchScoreboard match={match} data={data} />
 
       {match.next_match_id ? (
-        <Button variant="outline" onPress={() => openDetails(match.next_match_id!)}>
+        <Button
+          variant="outline"
+          onPress={() => openDetails(match.next_match_id!)}
+        >
           <Text>
-            {t('matches.next')} · {t('matches.number', {
+            {t('matches.next')} ·{' '}
+            {t('matches.number', {
               number: matchNumber(data.matches, match.next_match_id) ?? '?',
             })}
           </Text>
@@ -93,10 +107,13 @@ export default function MatchDetailsScreen() {
       {nextStep ? (
         <Button
           variant="outline"
-          onPress={() => router.push({
-            pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]',
-            params: { tournamentId, stepId: nextStep.id },
-          })}
+          onPress={() =>
+            router.push({
+              pathname:
+                '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]',
+              params: { tournamentId, stepId: nextStep.id },
+            })
+          }
         >
           <Text>
             {t('steps.position', { position: nextStep.position })} ·{' '}
@@ -110,7 +127,10 @@ export default function MatchDetailsScreen() {
           <Text className="text-base font-semibold">{t('matches.manage')}</Text>
 
           {match.status === 'scheduled' ? (
-            <Button disabled={action.busy || !canPlay} onPress={() => confirm('ongoing')}>
+            <Button
+              disabled={action.busy || !canPlay}
+              onPress={() => confirm('ongoing')}
+            >
               <Text>{t('matches.action.ongoing')}</Text>
             </Button>
           ) : null}
@@ -118,10 +138,13 @@ export default function MatchDetailsScreen() {
           <Button
             disabled={action.busy || match.participants.length === 0}
             variant={match.status === 'scheduled' ? 'outline' : 'default'}
-            onPress={() => router.push({
-              pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/results',
-              params,
-            })}
+            onPress={() =>
+              router.push({
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/results',
+                params,
+              })
+            }
           >
             <Text>{t('matches.results')}</Text>
           </Button>
@@ -138,11 +161,17 @@ export default function MatchDetailsScreen() {
         </View>
       ) : null}
 
-      {match.participants.some((participant) => Object.keys(participant.stats).length > 0) ? (
+      {match.participants.some(
+        (participant) => Object.keys(participant.stats).length > 0,
+      ) ? (
         <View className="gap-3">
           <Text className="text-lg font-semibold">{t('matches.stats')}</Text>
           {match.participants.map((score) => (
-            <ParticipantStats key={score.participant_id} score={score} data={data} />
+            <ParticipantStats
+              key={score.participant_id}
+              score={score}
+              data={data}
+            />
           ))}
         </View>
       ) : null}
@@ -154,7 +183,9 @@ export default function MatchDetailsScreen() {
             accessibilityState={{ expanded: showManagement }}
             onPress={() => setShowManagement(!showManagement)}
           >
-            <Text>{t('matches.manage')} {showManagement ? '−' : '+'}</Text>
+            <Text>
+              {t('matches.manage')} {showManagement ? '−' : '+'}
+            </Text>
           </Button>
 
           {showManagement ? (
@@ -163,10 +194,13 @@ export default function MatchDetailsScreen() {
                 <Button
                   variant="outline"
                   disabled={action.busy}
-                  onPress={() => router.push({
-                    pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/edit',
-                    params,
-                  })}
+                  onPress={() =>
+                    router.push({
+                      pathname:
+                        '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/edit',
+                      params,
+                    })
+                  }
                 >
                   <Text>{t('matches.edit')}</Text>
                 </Button>
@@ -183,12 +217,20 @@ export default function MatchDetailsScreen() {
               ) : null}
 
               {isOpen ? (
-                <Button variant="outline" disabled={action.busy} onPress={() => confirm('cancelled')}>
+                <Button
+                  variant="outline"
+                  disabled={action.busy}
+                  onPress={() => confirm('cancelled')}
+                >
                   <Text>{t('matches.action.cancelled')}</Text>
                 </Button>
               ) : null}
 
-              <Button variant="destructive" disabled={action.busy} onPress={() => confirm('delete')}>
+              <Button
+                variant="destructive"
+                disabled={action.busy}
+                onPress={() => confirm('delete')}
+              >
                 <Text>{t('matches.action.delete')}</Text>
               </Button>
             </View>

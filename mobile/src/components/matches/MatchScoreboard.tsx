@@ -10,7 +10,13 @@ import { detailed } from '@/features/matches/validation';
 import { formatTournamentDate } from '@/features/tournaments/presentation';
 import { matchNumber } from './MatchCard';
 
-export function MatchScoreboard({ match, data }: { match: Match; data: MatchContext }) {
+export function MatchScoreboard({
+  match,
+  data,
+}: {
+  match: Match;
+  data: MatchContext;
+}) {
   const { t, i18n } = useTranslation();
   const number = matchNumber(data.matches, match.id);
   const group = data.groups.find((item) => item.group_id === match.group_id);
@@ -29,7 +35,10 @@ export function MatchScoreboard({ match, data }: { match: Match; data: MatchCont
         <Text className="text-lg font-semibold">
           {number ? t('matches.number', { number }) : t('matches.detail')}
         </Text>
-        <StatusBadge status={match.status} label={t('matches.status.' + match.status)} />
+        <StatusBadge
+          status={match.status}
+          label={t('matches.status.' + match.status)}
+        />
       </View>
 
       {metadata.length > 0 ? (
@@ -37,7 +46,9 @@ export function MatchScoreboard({ match, data }: { match: Match; data: MatchCont
       ) : null}
 
       {match.scheduled_at ? (
-        <Text variant="muted">{formatTournamentDate(match.scheduled_at, i18n.language)}</Text>
+        <Text variant="muted">
+          {formatTournamentDate(match.scheduled_at, i18n.language)}
+        </Text>
       ) : null}
 
       <View className="overflow-hidden rounded-lg border border-border">
@@ -61,14 +72,20 @@ export function MatchScoreboard({ match, data }: { match: Match; data: MatchCont
               <View className="min-w-0 flex-1 gap-1">
                 <Text className="font-semibold">
                   {participant.rank !== null ? `#${participant.rank}  ` : ''}
-                  {data.names[participant.participant_id] ?? t('steps.unknownParticipant')}
+                  {data.names[participant.participant_id] ??
+                    t('steps.unknownParticipant')}
                 </Text>
                 {participant.result ? (
-                  <Text variant="muted">{t('matches.outcome.' + participant.result)}</Text>
+                  <Text variant="muted">
+                    {t('matches.outcome.' + participant.result)}
+                  </Text>
                 ) : null}
               </View>
 
-              <Text className="shrink-0 text-right font-semibold" variant={hasResult ? 'default' : 'muted'}>
+              <Text
+                className="shrink-0 text-right font-semibold"
+                variant={hasResult ? 'default' : 'muted'}
+              >
                 {hasResult
                   ? t('steps.points', { points: participant.points })
                   : t('matches.noResults')}
@@ -94,12 +111,20 @@ function StatLine({ values, data }: { values: FlatStats; data: MatchContext }) {
   return (
     <View className="flex-row flex-wrap gap-2">
       {entries.map(([key, value]) => {
-        const definition = data.statDefinitions.find((stat) => stat.key === key);
+        const definition = data.statDefinitions.find(
+          (stat) => stat.key === key,
+        );
         return (
-          <View key={key} className="min-w-24 grow gap-1 rounded-lg bg-muted px-3 py-2">
-            <Text variant="muted">{definition?.name ?? key.replaceAll('_', ' ')}</Text>
+          <View
+            key={key}
+            className="min-w-24 grow gap-1 rounded-lg bg-muted px-3 py-2"
+          >
+            <Text variant="muted">
+              {definition?.name ?? key.replaceAll('_', ' ')}
+            </Text>
             <Text className="text-base font-semibold">
-              {value}{definition?.type === 'percent' ? ' %' : ''}
+              {value}
+              {definition?.type === 'percent' ? ' %' : ''}
             </Text>
           </View>
         );
@@ -130,10 +155,17 @@ export function ParticipantStats({
         <Text className="text-base font-semibold">
           {data.names[score.participant_id] ?? t('steps.unknownParticipant')}
         </Text>
-        {score.result ? <StatusBadge status={score.result} label={t('matches.outcome.' + score.result)} /> : null}
+        {score.result ? (
+          <StatusBadge
+            status={score.result}
+            label={t('matches.outcome.' + score.result)}
+          />
+        ) : null}
       </View>
 
-      <Text variant="muted">{t(players.length ? 'matches.teamTotals' : 'matches.stats')}</Text>
+      <Text variant="muted">
+        {t(players.length ? 'matches.teamTotals' : 'matches.stats')}
+      </Text>
       <StatLine values={total} data={data} />
 
       {players.length > 0 ? (
@@ -143,19 +175,23 @@ export function ParticipantStats({
           onPress={() => setExpanded(!expanded)}
         >
           <Text>
-            {t(expanded ? 'matches.hidePlayers' : 'matches.showPlayers', { count: players.length })}
+            {t(expanded ? 'matches.hidePlayers' : 'matches.showPlayers', {
+              count: players.length,
+            })}
           </Text>
         </Button>
       ) : null}
 
-      {expanded ? players.map(([id, values]) => (
-        <View key={id} className="gap-2 border-t border-border pt-3">
-          <Text className="font-medium">
-            {data.playerNames[id] ?? t('steps.unknownParticipant')}
-          </Text>
-          <StatLine values={values} data={data} />
-        </View>
-      )) : null}
+      {expanded
+        ? players.map(([id, values]) => (
+            <View key={id} className="gap-2 border-t border-border pt-3">
+              <Text className="font-medium">
+                {data.playerNames[id] ?? t('steps.unknownParticipant')}
+              </Text>
+              <StatLine values={values} data={data} />
+            </View>
+          ))
+        : null}
     </View>
   );
 }
