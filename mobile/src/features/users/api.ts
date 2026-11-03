@@ -1,4 +1,4 @@
-import type { User } from '@/features/auth/types';
+import type { AccountUser, User } from '@/features/auth/types';
 import { authenticatedRequest } from '@/lib/api';
 
 export type UserRole = User['role'];
@@ -6,6 +6,7 @@ export type UserRole = User['role'];
 export interface UpdateAccountRequest {
   username?: string;
   password?: string;
+  email?: string;
 }
 
 export interface UpdateUserRequest extends UpdateAccountRequest {
@@ -53,8 +54,8 @@ export function getUser(token: string, id: string): Promise<User> {
 export function updateMe(
   token: string,
   changes: UpdateAccountRequest,
-): Promise<User> {
-  return authenticatedRequest<User>('/me/update', {
+): Promise<AccountUser> {
+  return authenticatedRequest<AccountUser>('/me/update', {
     method: 'PATCH',
     headers: authenticatedHeaders(token),
     body: JSON.stringify(changes),

@@ -34,6 +34,10 @@ it('centers confirmation and explanation in both languages while preserving regi
     true,
   );
   await fireEvent.changeText(screen.getByLabelText('Username'), '  alice  ');
+  await fireEvent.changeText(
+    screen.getByHintText(en.register.emailHint),
+    ' Alice@Example.COM ',
+  );
   await fireEvent.changeText(screen.getByLabelText('Password'), 'Password1!');
   await fireEvent.changeText(
     screen.getByLabelText('Confirm password'),
@@ -43,6 +47,7 @@ it('centers confirmation and explanation in both languages while preserving regi
   expect(register).toHaveBeenCalledWith({
     username: 'alice',
     password: 'Password1!',
+    email: 'alice@example.com',
   });
   expect(
     (await screen.findByText(en.register.success)).props.className,

@@ -53,7 +53,7 @@ it('does not surface server-controlled credentials in errors', async () => {
     login({ username: 'alice', password: 'wrong' }),
   ).rejects.toMatchObject({ status: 401, message: 'HTTP error 401' });
 });
-it('restores storage and obtains authoritative profile using subject UUID', async () => {
+it('restores storage and obtains the private self profile', async () => {
   jest
     .mocked(SecureStore.getItemAsync)
     .mockResolvedValue(
@@ -63,7 +63,7 @@ it('restores storage and obtains authoritative profile using subject UUID', asyn
   jest.mocked(fetch).mockResolvedValue(response(200, profile));
   expect(await client.currentUser()).toEqual(profile);
   expect(fetch).toHaveBeenCalledWith(
-    `http://localhost:8080/user/${id}`,
+    'http://localhost:8080/me',
     expect.objectContaining({
       headers: expect.objectContaining({ Authorization: `Bearer ${access}` }),
     }),

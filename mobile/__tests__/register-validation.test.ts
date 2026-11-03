@@ -3,6 +3,7 @@ import { validateRegisterForm } from '../src/features/auth/validation';
 describe('Registration form validation', () => {
   const validForm = {
     username: 'TestMobile01',
+    email: '',
     password: 'Password123!',
     confirmPassword: 'Password123!',
   };
@@ -48,6 +49,16 @@ describe('Registration form validation', () => {
     expect(
       validateRegisterForm({ ...validForm, username: '  TestMobile01  ' }),
     ).toEqual({});
+  });
+
+  it('accepts an omitted email and validates a supplied one', () => {
+    expect(validateRegisterForm(validForm)).toEqual({});
+    expect(
+      validateRegisterForm({ ...validForm, email: 'alice@example.com' }),
+    ).toEqual({});
+    expect(
+      validateRegisterForm({ ...validForm, email: 'not-an-email' }).email,
+    ).toBe('validation.email');
   });
 
   it('rejects mismatched passwords', () => {

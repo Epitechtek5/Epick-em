@@ -1,24 +1,27 @@
 import type { UserRole } from './api';
 import {
   normalizeUsername,
+  validateEmail,
   validateNewPassword,
   validateUsername,
 } from '@/features/auth/validation';
 
 export interface UserFormValues {
   username: string;
+  email: string;
   password: string;
   confirmPassword: string;
   role: UserRole;
 }
 
 export type UserFormErrors = Partial<
-  Record<'username' | 'password' | 'confirmPassword', string>
+  Record<'username' | 'email' | 'password' | 'confirmPassword', string>
 >;
 
 export function validateUserForm(
   form: UserFormValues,
   originalUsername: string,
+  originalEmail?: string | null,
 ): UserFormErrors {
   const errors: UserFormErrors = {};
 
@@ -26,6 +29,13 @@ export function validateUserForm(
   if (username !== originalUsername) {
     const usernameError = validateUsername(username);
     if (usernameError) errors.username = usernameError;
+  }
+
+  if (form.email.trim()) {
+    const emailError = validateEmail(form.email);
+    if (emailError) errors.email = emailError;
+  } else if (originalEmail) {
+    errors.email = 'validation.emailRemovalUnsupported';
   }
 
   if (form.password) {

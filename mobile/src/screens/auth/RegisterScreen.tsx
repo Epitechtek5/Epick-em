@@ -17,6 +17,7 @@ import { ApiError } from '@/lib/api';
 import { register } from '@/features/auth/register';
 import {
   validateRegisterForm,
+  normalizeEmail,
   normalizeUsername,
   type RegisterErrors,
   type RegisterForm,
@@ -26,6 +27,7 @@ import { AuthHeader } from '@/components/auth-header';
 
 const INITIAL_FORM: RegisterForm = {
   username: '',
+  email: '',
   password: '',
   confirmPassword: '',
 };
@@ -57,15 +59,19 @@ export default function RegisterScreen() {
     setIsSubmitting(true);
 
     try {
+      const email = normalizeEmail(form.email);
       await register({
         username: normalizeUsername(form.username),
         password: form.password,
+        ...(email ? { email } : {}),
       });
 
       setCreated(true);
       setForm(INITIAL_FORM);
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
+      if (error instanceof ApiError && error.code === 'email_taken') {
+        setErrors({ email: 'errors.emailConflict' });
+      } else if (error instanceof ApiError && error.status === 409) {
         setErrors({ username: 'errors.conflict' });
       } else if (error instanceof ApiError) {
         setServerError(
@@ -116,6 +122,30 @@ export default function RegisterScreen() {
         </Card>
       ) : (
         <View className="gap-5">
+          <View className="gap-2">
+            <Text
+              className="text-sm font-medium"
+              nativeID="register-email-label"
+            >
+              {t('common.emailOptional')}
+            </Text>
+            <Input
+              accessibilityLabel={t('common.email')}
+              accessibilityLabelledBy="register-email-label"
+              accessibilityHint={t('register.emailHint')}
+              invalid={Boolean(errors.email)}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="email"
+              keyboardType="email-address"
+              value={form.email}
+              onChangeText={(value) => updateField('email', value)}
+              editable={!isSubmitting}
+            />
+            <Text variant="muted">{t('register.emailHint')}</Text>
+            {errors.email ? <FormMessage>{t(errors.email)}</FormMessage> : null}
+          </View>
+
           <View className="gap-2">
             <Text
               className="text-sm font-medium"

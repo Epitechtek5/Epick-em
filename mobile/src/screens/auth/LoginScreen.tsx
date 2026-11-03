@@ -99,6 +99,11 @@ export default function LoginScreen() {
               if (!initializing) void submit();
             }}
           />
+          <Link href="/forgot-password" className="self-end">
+            <Text className="text-sm font-semibold text-primary">
+              {t('login.forgotPassword')}
+            </Text>
+          </Link>
         </View>
 
         <Button

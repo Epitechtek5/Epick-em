@@ -46,7 +46,7 @@ Keep exactly one local `.env`, at the repository root (copy the root `.env.examp
 EXPO_PUBLIC_API_URL=http://10.0.2.2:8080
 ```
 
-`app.config.js` and Metro load only this public value, without overriding shell/CI values. Docker credentials are never copied into Expo config or the client. CI and Jest skip the personal root file. Do not create `mobile/.env*`. The API client uses Expo's statically inlined `process.env.EXPO_PUBLIC_API_URL`; changing it requires restarting Metro with `npm start -- --clear` and fully reloading the app (or rebuilding a standalone APK).
+`app.config.js` and Metro load only `EXPO_PUBLIC_API_URL` and the non-secret `PUBLIC_URL`, without overriding shell/CI values. Docker credentials are never copied into Expo config or the client. CI and Jest skip the personal root file. Do not create `mobile/.env*`. The API client uses Expo's statically inlined `process.env.EXPO_PUBLIC_API_URL`; changing it requires restarting Metro with `npm start -- --clear` and fully reloading the app (or rebuilding a standalone APK).
 
 ```sh
 # From mobile/, with backend Compose services running on port 8080:
@@ -80,3 +80,54 @@ For an iOS simulator, use the existing root configuration with `EXPO_PUBLIC_API_
 Settings provides Account, Appearance, Language and Session sections. Theme and language selections apply without restarting and persist independently of authentication. The first language comes from the device (`fr` uses French; unsupported languages use English), while the initial theme follows the system. To change copy, edit the matching keys in both bundled files under `src/i18n/locales/`; do not add language conditionals to screens or translate backend role values.
 
 Expo Localization is a native dependency and config plugin. Rebuild the native app after installing these changes; Fast Refresh alone cannot install the native module. The existing API URL configuration, backend connectivity and release build commands are unchanged.
+
+## Password reset links
+
+The backend sends `PUBLIC_URL/reset-password?token=...`. The same HTTPS origin must serve the web fallback and the platform association files. Production builds require an HTTPS `PUBLIC_URL` without a path or trailing slash. Expo config registers `/reset-password` as an Android App Link and iOS Universal Link for that host; changing the host requires rebuilding the native applications.
+
+The web server for the configured host must expose both files without redirects and with an appropriate JSON content type:
+
+- `/.well-known/assetlinks.json` must authorize package `com.epickem.mobile` with relation `delegate_permission/common.handle_all_urls` and the SHA-256 fingerprint of every certificate that signs an installed production build. Use the Play Console App Integrity certificate for Play App Signing, or obtain the fingerprint from the actual keystore with `keytool -list -v`. A debug fingerprint does not verify a release application.
+- `/.well-known/apple-app-site-association` must authorize `<APPLE_TEAM_ID>.com.epickem.mobile` for the `/reset-password` path under the `applinks` service. Replace the placeholder with the Apple team that signs the application. The file has no `.json` suffix.
+
+Minimal payload shapes are:
+
+```json
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.epickem.mobile",
+      "sha256_cert_fingerprints": ["<RELEASE_SHA256>"]
+    }
+  }
+]
+```
+
+```json
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["<APPLE_TEAM_ID>.com.epickem.mobile"],
+        "components": [
+          { "/": "/reset-password", "comment": "Password reset links" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Verify these files from the public internet, then test a signed installed build with the application both closed and already open. Expo Router delivers the initial and subsequent URLs to the same public route. The application never logs or persists the query token; submitting a successful reset clears any local session.
+
+For controlled Android development, a development build can exercise routing with the custom scheme:
+
+```sh
+adb shell am start -W -a android.intent.action.VIEW -d 'epickem://reset-password?token=TEST_TOKEN' com.epickem.mobile
+```
+
+This checks route handling only. To test HTTPS verification, use a test HTTPS domain with a real `assetlinks.json` containing the installed build certificate, rebuild with that domain as `PUBLIC_URL`, and invoke `adb shell am start -W -a android.intent.action.VIEW -d 'https://test.example/reset-password?token=TEST_TOKEN'`. A custom-scheme success is not evidence that production App Links or Universal Links are verified. Never use a real reset token in shell history or test logs.
+
+`RESEND_API_KEY`, `MAIL_FROM`, and `PUBLIC_URL` remain backend configuration. The mobile application contains no Resend credential or SDK. The backend generates inline HTML and plain-text bodies; no Resend-hosted template is selected. In local development without Resend, verify the reset lifecycle through backend tests or a controlled test mailer rather than exposing reset tokens through user-facing API responses.

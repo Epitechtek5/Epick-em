@@ -3,7 +3,7 @@ import UserCircleIcon from '@hugeicons/core-free-icons/UserCircleIcon';
 import ShieldUserIcon from '@hugeicons/core-free-icons/ShieldUserIcon';
 import UserIcon from '@hugeicons/core-free-icons/UserIcon';
 import EyeIcon from '@hugeicons/core-free-icons/EyeIcon';
-import type { User } from '@/features/auth/types';
+import type { AccountUser, User } from '@/features/auth/types';
 import { useTranslation } from '@/i18n';
 import { Card, CardContent } from './ui/card';
 import { Icon } from './ui/icon';
@@ -26,7 +26,7 @@ export function RoleBadge({ role }: { role: User['role'] }) {
   );
 }
 
-export function AccountSummary({ user }: { user: User }) {
+export function AccountSummary({ user }: { user: AccountUser }) {
   const { t } = useTranslation();
   return (
     <Card className="gap-4 py-4">
@@ -41,6 +41,12 @@ export function AccountSummary({ user }: { user: User }) {
             </Text>
             <RoleBadge role={user.role} />
           </View>
+        </View>
+        <View className="gap-1 border-t border-border pt-3">
+          <Text variant="muted">{t('account.recoveryEmail')}</Text>
+          <Text className="text-sm text-foreground" selectable>
+            {user.email ?? t('account.recoveryEmailMissing')}
+          </Text>
         </View>
         <View className="gap-1 border-t border-border pt-3">
           <Text variant="muted">{t('account.identifier')}</Text>

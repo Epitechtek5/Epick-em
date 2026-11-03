@@ -62,6 +62,11 @@ export default function ProfileScreen() {
 
     try {
       const updated = await updateMe(token, changes);
+      if (changes.password) {
+        await clearSession().catch(() => undefined);
+        router.replace('/login');
+        return;
+      }
       updateCurrentUser(updated);
       await refreshUser();
     } catch (caught) {
@@ -111,7 +116,7 @@ export default function ProfileScreen() {
         </Text>
         <AccountSummary user={user} />
         <AccountEditor>
-          <UserForm user={user} onSave={saveProfile} />
+          <UserForm user={user} allowEmailEdit onSave={saveProfile} />
         </AccountEditor>
         <View className="gap-3 pt-1">
           <Text variant="muted">{t('account.irreversible')}</Text>

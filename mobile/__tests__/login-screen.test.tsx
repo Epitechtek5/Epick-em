@@ -23,6 +23,7 @@ beforeEach(() => {
 });
 it('validates missing credentials without making a login request', async () => {
   await render(<LoginScreen />);
+  expect(screen.getByText('Forgot password?')).toBeOnTheScreen();
   await fireEvent.press(screen.getByLabelText('Sign in'));
   expect(
     screen.getByText('Enter your username and password.'),

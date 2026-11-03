@@ -1,6 +1,7 @@
 export interface RegisterRequest {
   username: string;
   password: string;
+  email?: string;
 }
 
 export interface User {
@@ -8,6 +9,11 @@ export interface User {
   id: string;
   username: string;
   role: 'user' | 'admin' | 'watcher';
+}
+
+/** Private account data returned only by authenticated self-service routes. */
+export interface AccountUser extends User {
+  email?: string | null;
 }
 
 /** Registration creates an account without authenticating it. */

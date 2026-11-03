@@ -5,6 +5,7 @@ const { join } = require('node:path');
 const {
   loadRootEnvironment,
   validateApiEnvironment,
+  validatePublicUrl,
 } = require('../config/environment');
 
 describe('mobile environment', () => {
@@ -20,10 +21,22 @@ describe('mobile environment', () => {
   });
   afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
-  it('loads only the public API URL from the root file', () => {
+  it('loads only mobile-safe public URLs from the root file', () => {
     const env = {};
     loadRootEnvironment({ env, filename });
     expect(env).toEqual({ EXPO_PUBLIC_API_URL: 'http://10.0.2.2:8080' });
+  });
+  it('loads PUBLIC_URL for native link configuration without importing secrets', () => {
+    writeFileSync(
+      filename,
+      'EXPO_PUBLIC_API_URL=https://api.example.test\nPUBLIC_URL=https://app.example.test\nRESEND_API_KEY=secret\n',
+    );
+    const env = {};
+    loadRootEnvironment({ env, filename });
+    expect(env).toEqual({
+      EXPO_PUBLIC_API_URL: 'https://api.example.test',
+      PUBLIC_URL: 'https://app.example.test',
+    });
   });
   it.each([
     { CI: '1' },
@@ -82,5 +95,22 @@ describe('mobile environment', () => {
     expect(() =>
       validateApiEnvironment({ EXPO_PUBLIC_API_URL: value }),
     ).toThrow();
+  });
+  it('accepts only an HTTPS origin for verified app links', () => {
+    expect(validatePublicUrl({ PUBLIC_URL: 'https://app.example.test' })).toBe(
+      'app.example.test',
+    );
+    expect(
+      validatePublicUrl({ PUBLIC_URL: 'http://localhost:3000' }),
+    ).toBeNull();
+    expect(() =>
+      validatePublicUrl(
+        { PUBLIC_URL: 'http://localhost:3000' },
+        { required: true },
+      ),
+    ).toThrow('HTTPS');
+    expect(() =>
+      validatePublicUrl({ PUBLIC_URL: 'https://app.example.test/reset' }),
+    ).toThrow('origin');
   });
 });

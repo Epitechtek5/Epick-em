@@ -9,22 +9,22 @@ import {
 import { AppState } from 'react-native';
 import { configureSessionRequest } from '@/lib/api';
 import { SessionClient } from './client';
-import type { RegisterRequest, User } from './types';
+import type { AccountUser, RegisterRequest } from './types';
 
 interface AuthSession {
   token: string | null;
-  user: User | null;
+  user: AccountUser | null;
   initializing: boolean;
   signIn: (credentials: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
-  updateCurrentUser: (user: User) => void;
+  updateCurrentUser: (user: AccountUser) => void;
   clearSession: () => Promise<void>;
 }
 const AuthContext = createContext<AuthSession | null>(null);
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AccountUser | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [, rerender] = useState(0);
   const [client] = useState(

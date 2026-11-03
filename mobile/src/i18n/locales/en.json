@@ -2,6 +2,8 @@
   "common": {
     "username": "Username",
     "password": "Password",
+    "email": "Email address",
+    "emailOptional": "Email address (optional)",
     "confirmPassword": "Confirm password",
     "newPassword": "New password",
     "confirmNewPassword": "Confirm new password",
@@ -28,7 +30,8 @@
     "create": "Create one",
     "missing": "Enter your username and password.",
     "invalid": "Invalid username or password.",
-    "failed": "Unable to sign in. Please try again."
+    "failed": "Unable to sign in. Please try again.",
+    "forgotPassword": "Forgot password?"
   },
   "register": {
     "title": "Create an account",
@@ -40,7 +43,8 @@
     "hasAccount": "Already have an account?",
     "failed": "Unable to create account. Please try again.",
     "completeTitle": "Account created",
-    "completeDescription": "Your next prediction starts here."
+    "completeDescription": "Your next prediction starts here.",
+    "emailHint": "Add an email address to recover your account if you forget your password."
   },
   "settings": {
     "title": "Settings",
@@ -59,7 +63,7 @@
     "localLogout": "Signed out locally",
     "logoutFailed": "Server logout could not be confirmed. Please check your connection.",
     "storageFailed": "Unable to save preferences. Please try again.",
-    "editDescription": "Username and password"
+    "editDescription": "Username, recovery email and password"
   },
   "account": {
     "id": "Account ID: {{id}}",
@@ -71,7 +75,10 @@
     "deleteMine": "Delete my account",
     "deleteWarning": "This action is permanent. Your account will be deleted.",
     "irreversible": "Deleting your account cannot be undone.",
-    "identifier": "Account UUID"
+    "identifier": "Account UUID",
+    "recoveryEmail": "Recovery email",
+    "recoveryEmailMissing": "No recovery email configured",
+    "recoveryEmailHint": "Used only to send password reset links."
   },
   "users": {
     "title": "Users",
@@ -108,7 +115,9 @@
     "passwordDigit": "Password must contain at least one digit.",
     "passwordUppercase": "Password must contain at least one uppercase letter.",
     "passwordSpecial": "Password must contain at least one special character.",
-    "match": "Passwords do not match."
+    "match": "Passwords do not match.",
+    "email": "Enter a valid email address.",
+    "emailRemovalUnsupported": "A recovery email cannot currently be removed."
   },
   "form": {
     "noChanges": "No changes to save.",
@@ -122,8 +131,26 @@
     "forbidden": "You do not have permission to perform this action.",
     "notFound": "The requested user could not be found.",
     "conflict": "This username is already taken.",
+    "emailConflict": "This email address is already used by another account.",
     "network": "Unable to contact the server. Please try again.",
     "server": "The server could not complete this request. Please try again."
+  },
+  "recovery": {
+    "forgotTitle": "Forgot password?",
+    "forgotDescription": "Enter your recovery email address.",
+    "sendLink": "Send reset link",
+    "neutralConfirmation": "If an account uses this email address, a reset link will be sent.",
+    "requestFailed": "Unable to request a reset link. Check your connection and try again.",
+    "backToLogin": "Back to login",
+    "resetTitle": "Choose a new password",
+    "resetDescription": "This one-time link is valid for 15 minutes.",
+    "resetSubmit": "Reset password",
+    "resetFailed": "Unable to reset the password. Please try again.",
+    "invalidTitle": "Reset link unavailable",
+    "invalidToken": "This reset link is invalid, expired or has already been used.",
+    "requestAnother": "Request another link",
+    "successTitle": "Password changed",
+    "successDescription": "Your password has been changed. Sign in with your new password."
   },
   "welcome": {
     "ready": "The mobile application is ready for development."
