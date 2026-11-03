@@ -89,6 +89,13 @@ export async function apiRequest<T>(
               'tiebreak',
               'steps',
               'participants',
+              'group_id',
+              'round',
+              'bracket',
+              'next_match_id',
+              'scheduled_at',
+              'participant_ids',
+              'results',
             ].includes(field),
           )
         : [];
