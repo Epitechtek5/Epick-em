@@ -73,7 +73,7 @@ export default function AdminUserScreen() {
     }, [loadUser, refreshUser]),
   );
 
-  if (!isAdmin) return <Redirect href="/(authenticated)/(tabs)/users" />;
+  if (!isAdmin) return <Redirect href="/(authenticated)/(tabs)/games" />;
 
   async function saveUser(changes: UpdateUserRequest) {
     if (!token || currentUser?.role !== 'admin') {

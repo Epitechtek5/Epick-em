@@ -11,44 +11,140 @@ defaults:
     working-directory: mobile
 
 env:
-  CI: '1'
-  EXPO_NO_TELEMETRY: '1'
+  CI: "1"
+  EXPO_NO_TELEMETRY: "1"
 
 jobs:
   check:
+    name: Mobile — Code Quality & Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version-file: mobile/.node-version
           cache: npm
           cache-dependency-path: mobile/package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run format:check
-      - run: npm run typecheck
-      - run: npm test -- --watch=false
-      - run: npx expo install --check
-      - run: npx expo-doctor@1.21.5
-      - run: npm run config:check
-      - run: npm run build
-      - name: Validate Docker environment
+      - name: Install locked mobile dependencies
+        id: install
+        run: npm ci
+      - name: Check ESLint rules
+        id: lint
+        run: npm run lint
+      - name: Check Prettier formatting
+        id: format
+        run: npm run format:check
+      - name: Validate TypeScript types
+        id: typecheck
+        run: npm run typecheck
+      - name: Run mobile unit and integration tests
+        id: tests
+        run: npm test -- --watch=false
+      - name: Verify Expo SDK dependency compatibility
+        id: expo-install
+        run: npx expo install --check
+      - name: Check Expo project configuration
+        id: expo-doctor
+        run: npx expo-doctor@1.21.5
+      - name: Validate native project configuration
+        id: config
+        run: npm run config:check
+      - name: Build Android and iOS JavaScript bundles
+        id: build
+        run: npm run build
+      - name: Build mobile Docker image
+        id: docker-build
+        run: docker build -t epickem-mobile .
+      - name: Run mobile Docker smoke check
+        id: docker-run
+        run: docker run --rm epickem-mobile
+      - name: Summarize mobile check results
+        if: always()
+        env:
+          INSTALL: ${{ steps.install.outcome || 'skipped' }}
+          LINT: ${{ steps.lint.outcome || 'skipped' }}
+          FORMAT: ${{ steps.format.outcome || 'skipped' }}
+          TYPECHECK: ${{ steps.typecheck.outcome || 'skipped' }}
+          TESTS: ${{ steps.tests.outcome || 'skipped' }}
+          EXPO_INSTALL: ${{ steps.expo-install.outcome || 'skipped' }}
+          EXPO_DOCTOR: ${{ steps.expo-doctor.outcome || 'skipped' }}
+          CONFIG: ${{ steps.config.outcome || 'skipped' }}
+          BUILD: ${{ steps.build.outcome || 'skipped' }}
+          DOCKER_BUILD: ${{ steps.docker-build.outcome || 'skipped' }}
+          DOCKER_RUN: ${{ steps.docker-run.outcome || 'skipped' }}
         run: |
-          docker build -t epickem-mobile .
-          docker run --rm epickem-mobile
+          result_label() {
+            case "$1" in
+              success) echo "Passed" ;;
+              failure) echo "Failed" ;;
+              skipped) echo "Skipped / not applicable" ;;
+              cancelled) echo "Cancelled" ;;
+              *) echo "Unknown ($1)" ;;
+            esac
+          }
+          {
+            echo '## Mobile code quality and tests'
+            echo
+            echo '| Check | Result |'
+            echo '| --- | --- |'
+            echo "| Locked dependency install | $(result_label "$INSTALL") |"
+            echo "| ESLint | $(result_label "$LINT") |"
+            echo "| Prettier | $(result_label "$FORMAT") |"
+            echo "| TypeScript | $(result_label "$TYPECHECK") |"
+            echo "| Unit and integration tests | $(result_label "$TESTS") |"
+            echo "| Expo SDK compatibility | $(result_label "$EXPO_INSTALL") |"
+            echo "| Expo project check | $(result_label "$EXPO_DOCTOR") |"
+            echo "| Native configuration | $(result_label "$CONFIG") |"
+            echo "| Android and iOS bundle build | $(result_label "$BUILD") |"
+            echo "| Docker image build | $(result_label "$DOCKER_BUILD") |"
+            echo "| Docker smoke check | $(result_label "$DOCKER_RUN") |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   security:
+    name: Mobile — Dependency Security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version-file: mobile/.node-version
           cache: npm
           cache-dependency-path: mobile/package-lock.json
-      - run: npm ci
+      - name: Install locked mobile dependencies
+        id: install
+        run: npm ci
       - name: Test security audit policy
+        id: policy
         run: node --test scripts/audit-security.test.mjs
-      - name: Audit dependencies with strict temporary exceptions
+      - name: Audit development and production dependencies
+        id: audit
         run: node scripts/audit-security.mjs
+      - name: Summarize mobile dependency security
+        if: always()
+        env:
+          INSTALL: ${{ steps.install.outcome || 'skipped' }}
+          POLICY: ${{ steps.policy.outcome || 'skipped' }}
+          AUDIT: ${{ steps.audit.outcome || 'skipped' }}
+        run: |
+          result_label() {
+            case "$1" in
+              success) echo "Passed" ;;
+              failure) echo "Failed" ;;
+              skipped) echo "Skipped / not applicable" ;;
+              cancelled) echo "Cancelled" ;;
+              *) echo "Unknown ($1)" ;;
+            esac
+          }
+          {
+            echo '## Mobile dependency security'
+            echo
+            echo '| Check | Result |'
+            echo '| --- | --- |'
+            echo "| Locked dependency install | $(result_label "$INSTALL") |"
+            echo "| Strict audit policy tests | $(result_label "$POLICY") |"
+            echo "| Full-tree and production audits | $(result_label "$AUDIT") |"
+          } >> "$GITHUB_STEP_SUMMARY"

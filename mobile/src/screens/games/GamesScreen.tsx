@@ -3,6 +3,7 @@ import { FlatList, RefreshControl, View } from 'react-native';
 import { router } from 'expo-router';
 import Add01Icon from '@hugeicons/core-free-icons/Add01Icon';
 import Exchange01Icon from '@hugeicons/core-free-icons/Exchange01Icon';
+import Chart01Icon from '@hugeicons/core-free-icons/Chart01Icon';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { Icon } from '@/components/ui/icon';
@@ -32,19 +33,53 @@ export default function GamesScreen() {
       <View className="mb-4 gap-4">
         <Text variant="muted">{t('games.description')}</Text>
         {user?.role === 'admin' ? (
-          <View className="flex-row flex-wrap gap-3">
+          <View className="flex-row gap-2" testID="games-admin-actions">
             <Button
+              size="sm"
+              className="min-h-14 min-w-0 flex-1 flex-col gap-1 px-1 py-2"
+              accessibilityLabel={t('games.create')}
               onPress={() => router.push('/(authenticated)/games/create')}
             >
-              <Icon icon={Add01Icon} tone="primary-foreground" />
-              <Text>{t('games.create')}</Text>
+              <Icon icon={Add01Icon} tone="primary-foreground" size={18} />
+              <Text
+                className="w-full text-center text-xs"
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {t('games.actions.create')}
+              </Text>
             </Button>
             <Button
               variant="outline"
+              size="sm"
+              className="min-h-14 min-w-0 flex-1 flex-col gap-1 px-1 py-2"
+              accessibilityLabel={t('games.transfer')}
               onPress={() => router.push('/(authenticated)/games/transfer')}
             >
-              <Icon icon={Exchange01Icon} />
-              <Text>{t('games.transfer')}</Text>
+              <Icon icon={Exchange01Icon} size={18} />
+              <Text
+                className="w-full text-center text-xs"
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {t('games.actions.transfer')}
+              </Text>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-14 min-w-0 flex-1 flex-col gap-1 px-1 py-2"
+              accessibilityLabel={t('stats.title')}
+              onPress={() => router.push('/(authenticated)/stats')}
+            >
+              <Icon icon={Chart01Icon} size={18} />
+              <Text
+                className="w-full text-center text-xs"
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {t('games.actions.stats')}
+              </Text>
             </Button>
           </View>
         ) : null}
