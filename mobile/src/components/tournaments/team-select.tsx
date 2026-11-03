@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '@/components/ui/button';
+import { TeamImage } from '@/components/teams/team-image';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 import type { TournamentTeam } from '@/features/teams/types';
@@ -48,15 +49,30 @@ export function TournamentTeamSelect({
       <Text className="font-medium">{t('tournaments.fields.team')}</Text>
       <Button
         variant="outline"
+        className="min-h-16 justify-start border-primary/20 px-3 py-2"
         accessibilityLabel={t('tournaments.selectTeam')}
         onPress={() => {
           setSearch('');
           setOpen(true);
         }}
       >
-        <Text>
-          {selected?.name ?? selectedId ?? t('tournaments.chooseTeam')}
-        </Text>
+        {selected ? (
+          <TeamImage
+            uri={selected.picture_url}
+            name={selected.name}
+            size="sm"
+          />
+        ) : null}
+        <View className="min-w-0 flex-1 items-start gap-0.5">
+          <Text
+            className={selected ? 'font-semibold' : 'text-muted-foreground'}
+          >
+            {selected?.name ?? selectedId ?? t('tournaments.chooseTeam')}
+          </Text>
+          {selected?.tag ? (
+            <Text className="text-xs text-primary">#{selected.tag}</Text>
+          ) : null}
+        </View>
       </Button>
       <Modal
         visible={open}
@@ -69,11 +85,17 @@ export function TournamentTeamSelect({
         >
           <View
             className="flex-1 gap-3 px-5 pt-5"
-            style={{ paddingBottom: insets.bottom + 20 }}
+            style={{
+              paddingTop: insets.top + 20,
+              paddingBottom: insets.bottom + 20,
+            }}
           >
-            <Text className="text-xl font-semibold">
-              {t('tournaments.selectTeam')}
-            </Text>
+            <View className="gap-1">
+              <Text className="text-xl font-semibold">
+                {t('tournaments.registration.chooseTeamTitle')}
+              </Text>
+              <Text variant="muted">{t('tournaments.selectTeam')}</Text>
+            </View>
             <Input
               accessibilityLabel={t('tournaments.searchTeams')}
               placeholder={t('tournaments.searchTeams')}
@@ -84,23 +106,38 @@ export function TournamentTeamSelect({
               data={filtered}
               keyExtractor={(team) => team.id}
               keyboardShouldPersistTaps="handled"
-              contentContainerClassName="gap-2"
+              contentContainerClassName="gap-3 py-1"
               ListEmptyComponent={
-                <Text variant="muted">{t('tournaments.noTeams')}</Text>
+                <View className="rounded-xl bg-muted/40 px-6 py-10">
+                  <Text className="text-center" variant="muted">
+                    {t('tournaments.noTeams')}
+                  </Text>
+                </View>
               }
               renderItem={({ item }) => (
                 <Button
-                  variant={item.id === selectedId ? 'default' : 'outline'}
+                  className={`min-h-20 justify-start px-4 py-3 ${
+                    item.id === selectedId ? 'bg-primary/10' : 'bg-muted/40'
+                  }`}
+                  variant="ghost"
                   disabled={disabledIds.has(item.id)}
                   onPress={() => {
                     onSelect(item.id);
                     setOpen(false);
                   }}
                 >
-                  <View className="flex-1 gap-1">
-                    <Text>{item.name}</Text>
+                  <TeamImage
+                    uri={item.picture_url}
+                    name={item.name}
+                    size="sm"
+                  />
+                  <View className="min-w-0 flex-1 gap-1">
+                    <Text className="font-semibold">{item.name}</Text>
+                    {item.tag ? (
+                      <Text className="text-xs text-primary">#{item.tag}</Text>
+                    ) : null}
                     {descriptions[item.id] ? (
-                      <Text className="text-xs" variant="muted">
+                      <Text className="text-xs leading-4" variant="muted">
                         {descriptions[item.id]}
                       </Text>
                     ) : null}
@@ -127,10 +164,10 @@ export function TournamentTeamSelect({
                 <Text>{t('users.next')}</Text>
               </Button>
             </View>
-            <View className="flex-row gap-2">
+            <View className="gap-2">
               {allowNoTeam ? (
                 <Button
-                  className="flex-1"
+                  className="w-full"
                   variant="outline"
                   onPress={() => {
                     onSelect(null);
@@ -140,7 +177,7 @@ export function TournamentTeamSelect({
                   <Text>{t('tournaments.noTeam')}</Text>
                 </Button>
               ) : null}
-              <Button className="flex-1" onPress={() => setOpen(false)}>
+              <Button className="w-full" onPress={() => setOpen(false)}>
                 <Text>{t('common.cancel')}</Text>
               </Button>
             </View>

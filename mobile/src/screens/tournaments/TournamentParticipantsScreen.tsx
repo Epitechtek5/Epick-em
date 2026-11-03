@@ -3,9 +3,11 @@ import { Alert, FlatList, RefreshControl, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { TeamImage } from '@/components/teams/team-image';
 import { TournamentTeamSelect } from '@/components/tournaments/team-select';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Text } from '@/components/ui/text';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { useAuth } from '@/features/auth/session';
 import { useGameResource } from '@/features/games/use-game-resource';
 import {
@@ -35,12 +37,16 @@ const PAGE_SIZE = 20;
 export default function TournamentParticipantsScreen() {
   const { t } = useTranslation();
   const { token, user } = useAuth();
-  const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
+  const { tournamentId, participantId } = useLocalSearchParams<{
+    tournamentId: string;
+    participantId?: string;
+  }>();
   const [page, setPage] = useState(0);
   const [teamPage, setTeamPage] = useState(0);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [success, setSuccess] = useState(false);
   const load = useCallback(
     async (accessToken: string) => {
       const [tournament, allParticipants, teams] = await Promise.all([
@@ -51,10 +57,11 @@ export default function TournamentParticipantsScreen() {
           offset: teamPage * PAGE_SIZE,
         }),
       ]);
-      const participants = allParticipants.slice(
-        page * PAGE_SIZE,
-        (page + 1) * PAGE_SIZE,
-      );
+      const participants = participantId
+        ? allParticipants.filter(
+            (participant) => participant.id === participantId,
+          )
+        : allParticipants.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
       const names = await Promise.all(
         participants.map(async (participant) => {
           if (!participant.user_id) return null;
@@ -167,7 +174,7 @@ export default function TournamentParticipantsScreen() {
         ),
       };
     },
-    [tournamentId, page, teamPage, user?.id, user?.role],
+    [participantId, tournamentId, page, teamPage, user?.id, user?.role],
   );
   const { data, loading, refreshing, error, reload } = useGameResource(
     load,
@@ -181,9 +188,14 @@ export default function TournamentParticipantsScreen() {
     try {
       await operation();
       await reload();
-      if (success) setMessage(success);
+      setSuccess(false);
+      if (success) {
+        setSuccess(true);
+        setMessage(success);
+      }
     } catch (caught) {
       setMessage(tournamentErrorKey(caught));
+      setSuccess(false);
     } finally {
       setBusy(false);
     }
@@ -266,7 +278,30 @@ export default function TournamentParticipantsScreen() {
 
   return (
     <View className="flex-1 bg-background px-5 pt-5">
-      {message ? <FormMessage>{t(message)}</FormMessage> : null}
+      {message ? (
+        <FormMessage success={success}>{t(message)}</FormMessage>
+      ) : null}
+      <View className="mb-4 flex-row items-center gap-3 px-1 py-2">
+        <View className="min-w-0 flex-1 gap-1">
+          <Text className="text-lg font-semibold">
+            {t(
+              participantId
+                ? 'tournaments.viewRegistration'
+                : 'tournaments.participants',
+            )}
+          </Text>
+          <Text variant="muted">
+            {t('tournaments.registration.participantCount', {
+              count: activeCount,
+              capacity: tournament.max_participants,
+            })}
+          </Text>
+        </View>
+        <StatusBadge
+          status={tournament.status}
+          label={t(`tournaments.status.${tournament.status}`)}
+        />
+      </View>
       {error ? <FormMessage>{t(error)}</FormMessage> : null}
       {!registerable && !hasRegistration ? (
         <Card className="mb-4">
@@ -417,22 +452,42 @@ export default function TournamentParticipantsScreen() {
             item.user_id === user?.id ||
             (item.user_id === null && team?.owner_id === user?.id);
           return (
-            <Card>
-              <CardContent className="gap-2 pt-5">
-                <Text className="font-semibold">
-                  {names[index] ??
-                    team?.name ??
-                    item.user_id ??
-                    item.tournament_team_id}
-                </Text>
-                {item.user_id && team ? (
-                  <Text variant="muted">
-                    {t('tournaments.fields.team')}: {team.name}
-                  </Text>
-                ) : null}
-                <Text variant="muted">
-                  {t(`tournaments.participantStatus.${item.status}`)}
-                </Text>
+            <Card className="p-4">
+              <CardContent className="gap-4 px-0">
+                <View className="flex-row items-center gap-3">
+                  <TeamImage
+                    uri={team?.picture_url ?? null}
+                    name={
+                      team?.name ??
+                      names[index] ??
+                      t('tournaments.participants')
+                    }
+                    size="sm"
+                  />
+                  <View className="min-w-0 flex-1 gap-1">
+                    <Text className="font-semibold">
+                      {names[index] ??
+                        team?.name ??
+                        item.user_id ??
+                        item.tournament_team_id}
+                    </Text>
+                    {team ? (
+                      <Text className="text-sm text-primary">
+                        {team.tag
+                          ? `#${team.tag}`
+                          : t('tournaments.participantType.team')}
+                      </Text>
+                    ) : (
+                      <Text variant="muted">
+                        {t('tournaments.participantType.solo')}
+                      </Text>
+                    )}
+                  </View>
+                  <StatusBadge
+                    status={item.status}
+                    label={t(`tournaments.participantStatus.${item.status}`)}
+                  />
+                </View>
                 {actor &&
                 item.status === 'registered' &&
                 tournament.status === 'registration' ? (
@@ -459,7 +514,9 @@ export default function TournamentParticipantsScreen() {
                     disabled={busy}
                     onPress={() => withdraw(item)}
                   >
-                    <Text>{t('tournaments.withdraw')}</Text>
+                    <Text className="text-destructive">
+                      {t('tournaments.withdraw')}
+                    </Text>
                   </Button>
                 ) : null}
                 {user?.role === 'admin' ? (
@@ -477,7 +534,7 @@ export default function TournamentParticipantsScreen() {
                         <Button
                           key={status}
                           size="sm"
-                          variant="outline"
+                          variant="secondary"
                           disabled={busy}
                           onPress={() =>
                             token &&
@@ -503,25 +560,27 @@ export default function TournamentParticipantsScreen() {
           );
         }}
       />
-      <View className="flex-row items-center justify-between border-t border-border py-4">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={page === 0}
-          onPress={() => setPage((value) => value - 1)}
-        >
-          <Text>{t('users.previous')}</Text>
-        </Button>
-        <Text variant="muted">{t('users.page', { page: page + 1 })}</Text>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={participants.length < PAGE_SIZE}
-          onPress={() => setPage((value) => value + 1)}
-        >
-          <Text>{t('users.next')}</Text>
-        </Button>
-      </View>
+      {!participantId ? (
+        <View className="flex-row items-center justify-between border-t border-border py-4">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page === 0}
+            onPress={() => setPage((value) => value - 1)}
+          >
+            <Text>{t('users.previous')}</Text>
+          </Button>
+          <Text variant="muted">{t('users.page', { page: page + 1 })}</Text>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={participants.length < PAGE_SIZE}
+            onPress={() => setPage((value) => value + 1)}
+          >
+            <Text>{t('users.next')}</Text>
+          </Button>
+        </View>
+      ) : null}
     </View>
   );
 }
