@@ -17,6 +17,7 @@ import { ApiError } from '@/lib/api';
 import { register } from '@/features/auth/register';
 import {
   validateRegisterForm,
+  normalizeUsername,
   type RegisterErrors,
   type RegisterForm,
 } from '@/features/auth/validation';
@@ -57,7 +58,7 @@ export default function RegisterScreen() {
 
     try {
       await register({
-        username: form.username,
+        username: normalizeUsername(form.username),
         password: form.password,
       });
 

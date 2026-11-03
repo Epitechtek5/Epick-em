@@ -2,8 +2,9 @@ import { Tabs } from 'expo-router';
 import { TabIcon } from '@/components/ui/tab-icon';
 import { colors as themeColors } from '@/theme/colors';
 import Settings01Icon from '@hugeicons/core-free-icons/Settings01Icon';
-import UserGroupIcon from '@hugeicons/core-free-icons/UserGroupIcon';
+import TeamWorkIcon from '@hugeicons/core-free-icons/TeamWorkIcon';
 import GameController03Icon from '@hugeicons/core-free-icons/GameController03Icon';
+import TrophyIcon from '@hugeicons/core-free-icons/TrophyIcon';
 import { useReducedMotionPreference } from '@/lib/motion';
 import { useTheme } from '@react-navigation/native';
 import { useTranslation } from '@/i18n';
@@ -52,6 +53,36 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="tournaments"
+        options={{
+          title: t('tournaments.title'),
+          tabBarAccessibilityLabel: t('tournaments.title'),
+          tabBarIcon: ({ focused, size }) => (
+            <TabIcon
+              icon={TrophyIcon}
+              size={size}
+              focused={focused}
+              testID="tournaments-tab-icon"
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="teams"
+        options={{
+          title: t('teams.title'),
+          tabBarAccessibilityLabel: t('teams.title'),
+          tabBarIcon: ({ focused, size }) => (
+            <TabIcon
+              icon={TeamWorkIcon}
+              size={size}
+              focused={focused}
+              testID="teams-tab-icon"
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: t('settings.title'),
@@ -66,21 +97,7 @@ export default function TabsLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="users"
-        options={{
-          title: t('users.title'),
-          tabBarAccessibilityLabel: t('users.title'),
-          tabBarIcon: ({ focused, size }) => (
-            <TabIcon
-              icon={UserGroupIcon}
-              size={size}
-              focused={focused}
-              testID="users-tab-icon"
-            />
-          ),
-        }}
-      />
+      <Tabs.Screen name="users" options={{ href: null }} />
     </Tabs>
   );
 }

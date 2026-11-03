@@ -7,10 +7,10 @@ import {
   act,
 } from '@testing-library/react-native';
 import { Alert } from 'react-native';
-import ProfileScreen from '../src/screens/ProfileScreen';
-import UsersScreen from '../src/screens/UsersScreen';
-import AdminUserScreen from '../src/screens/AdminUserScreen';
-import UserDetailsScreen from '../src/screens/UserDetailsScreen';
+import ProfileScreen from '../src/screens/account/ProfileScreen';
+import UsersScreen from '../src/screens/users/UsersScreen';
+import AdminUserScreen from '../src/screens/users/AdminUserScreen';
+import UserDetailsScreen from '../src/screens/users/UserDetailsScreen';
 import { useAuth } from '../src/features/auth/session';
 import * as accounts from '../src/features/users/api';
 import { router } from 'expo-router';
