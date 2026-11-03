@@ -12,6 +12,7 @@ const NAV_ITEMS: Array<{ to: string; label: MessageKey }> = [
   { to: '/games', label: 'nav.games' },
   { to: '/stats', label: 'nav.stats' },
   { to: '/teams', label: 'nav.teams' },
+  { to: '/tournaments', label: 'nav.tournaments' },
 ]
 
 // En-tête commun. Pour un utilisateur connecté : navigation principale, nom du

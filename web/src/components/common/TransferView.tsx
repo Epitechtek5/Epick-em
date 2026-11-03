@@ -3,6 +3,15 @@ import { useState, type ChangeEvent } from 'react'
 import { Link } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Label } from '@/components/ui/label'
@@ -40,6 +49,15 @@ interface TransferViewProps {
   onExport: (format: FileFormat) => Promise<ExportedFile>
   onImport: (format: FileFormat, bytes: Uint8Array) => Promise<{ created: number; updated: number }>
   errorKey: (error: unknown, context?: 'default' | 'file') => MessageKey
+  // Avertissement affiché avant l'envoi d'un fichier : l'import n'a lieu qu'après confirmation
+  // explicite (ex. tournois, dont l'import remplace des données existantes).
+  importConfirmation?: { title: string; description: string; confirmLabel: string; warning?: string }
+}
+
+interface PendingImport {
+  name: string
+  format: FileFormat
+  bytes: Uint8Array
 }
 
 // Écran d'import / export JSON et CSV, réservé aux administrateurs. Partagé par les
@@ -50,6 +68,7 @@ export function TransferView(props: TransferViewProps) {
   const { refreshRole } = useAuth()
   const [busy, setBusy] = useState<'import' | FileFormat | null>(null)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const [pending, setPending] = useState<PendingImport | null>(null)
   const fileId = `${props.idPrefix}-import-file`
 
   async function runExport(format: FileFormat) {
@@ -67,14 +86,10 @@ export function TransferView(props: TransferViewProps) {
     }
   }
 
-  async function onFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
+  async function runImport(format: FileFormat, bytes: Uint8Array) {
     setBusy('import')
     setFeedback(null)
     try {
-      const { format, bytes } = await prepareImport(file)
       const report = await props.onImport(format, bytes)
       setFeedback({
         kind: 'success',
@@ -82,17 +97,31 @@ export function TransferView(props: TransferViewProps) {
         params: { created: report.created, updated: report.updated },
       })
     } catch (error) {
-      if (error instanceof GameFileError) {
-        setFeedback({ kind: 'error', key: error.key })
-      } else {
-        if (error instanceof ApiError && error.status === 403) void refreshRole()
-        const detail =
-          error instanceof ApiError ? getFieldErrors(error.body, ['file']).file : undefined
-        setFeedback({ kind: 'error', key: props.errorKey(error, 'file'), detail })
-      }
+      if (error instanceof ApiError && error.status === 403) void refreshRole()
+      const detail = error instanceof ApiError ? getFieldErrors(error.body, ['file']).file : undefined
+      setFeedback({ kind: 'error', key: props.errorKey(error, 'file'), detail })
     } finally {
       setBusy(null)
     }
+  }
+
+  async function onFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setFeedback(null)
+    let prepared: Awaited<ReturnType<typeof prepareImport>>
+    try {
+      prepared = await prepareImport(file)
+    } catch (error) {
+      setFeedback({ kind: 'error', key: error instanceof GameFileError ? error.key : props.errorKey(error, 'file') })
+      return
+    }
+    if (props.importConfirmation) {
+      setPending({ name: file.name, ...prepared })
+      return
+    }
+    await runImport(prepared.format, prepared.bytes)
   }
 
   return (
@@ -142,6 +171,12 @@ export function TransferView(props: TransferViewProps) {
         <h2 id={`${props.idPrefix}-import-title`} className="text-lg font-semibold">
           {props.importTitle}
         </h2>
+        {props.importConfirmation?.warning ? (
+          <p className="rounded-lg border border-destructive p-3 text-sm">
+            <span className="font-medium text-destructive">{t('common.warning')}</span>{' '}
+            {props.importConfirmation.warning}
+          </p>
+        ) : null}
         {props.importHints.map((hint) => (
           <p key={hint} className="text-sm text-muted-foreground">
             {hint}
@@ -164,6 +199,35 @@ export function TransferView(props: TransferViewProps) {
           ) : null}
         </div>
       </section>
+
+      {props.importConfirmation ? (
+        <AlertDialog open={pending !== null} onOpenChange={(open) => (open ? undefined : setPending(null))}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{props.importConfirmation.title}</AlertDialogTitle>
+              <AlertDialogDescription>{props.importConfirmation.description}</AlertDialogDescription>
+            </AlertDialogHeader>
+            {pending ? (
+              <p className="text-sm">
+                {t('common.selectedFile')} <span className="font-mono break-all">{pending.name}</span>
+              </p>
+            ) : null}
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  const next = pending
+                  setPending(null)
+                  if (next) void runImport(next.format, next.bytes)
+                }}
+              >
+                {props.importConfirmation.confirmLabel}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
     </div>
   )
 }

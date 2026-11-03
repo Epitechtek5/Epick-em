@@ -23,6 +23,10 @@ import TournamentTeamCopyPage from '@/pages/TournamentTeamCopyPage'
 import TournamentTeamDetailsPage from '@/pages/TournamentTeamDetailsPage'
 import TournamentTeamEditorPage from '@/pages/TournamentTeamEditorPage'
 import TournamentTeamsPage from '@/pages/TournamentTeamsPage'
+import TournamentDetailsPage from '@/pages/TournamentDetailsPage'
+import TournamentEditorPage from '@/pages/TournamentEditorPage'
+import TournamentTransferPage from '@/pages/TournamentTransferPage'
+import TournamentsPage from '@/pages/TournamentsPage'
 
 export default function App() {
   return (
@@ -44,6 +48,9 @@ export default function App() {
             <Route path="/stats/transfer" element={<StatTransferPage />} />
             <Route path="/stats/:id/edit" element={<StatEditorPage />} />
             <Route path="/teams/transfer" element={<TeamTransferPage />} />
+            <Route path="/tournaments/new" element={<TournamentEditorPage />} />
+            <Route path="/tournaments/transfer" element={<TournamentTransferPage />} />
+            <Route path="/tournaments/:id/edit" element={<TournamentEditorPage />} />
           </Route>
           <Route path="/games/:id" element={<GameDetailsPage />} />
           <Route path="/stats" element={<StatsPage />} />
@@ -52,6 +59,9 @@ export default function App() {
           <Route path="/teams/new" element={<TeamEditorPage />} />
           <Route path="/teams/:id" element={<TeamDetailsPage />} />
           <Route path="/teams/:id/edit" element={<TeamEditorPage />} />
+          {/* Tournois : consultation et inscription ouvertes à tout compte connecté. */}
+          <Route path="/tournaments" element={<TournamentsPage />} />
+          <Route path="/tournaments/:id" element={<TournamentDetailsPage />} />
           {/* Équipes de tournoi : l'UUID du tournoi vient de l'URL. */}
           <Route path="/tournaments/:tournamentId/teams" element={<TournamentTeamsPage />} />
           <Route path="/tournaments/:tournamentId/teams/new" element={<TournamentTeamEditorPage />} />
