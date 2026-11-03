@@ -15,6 +15,14 @@ import RegisterPage from '@/pages/RegisterPage'
 import StatEditorPage from '@/pages/StatEditorPage'
 import StatTransferPage from '@/pages/StatTransferPage'
 import StatsPage from '@/pages/StatsPage'
+import TeamDetailsPage from '@/pages/TeamDetailsPage'
+import TeamEditorPage from '@/pages/TeamEditorPage'
+import TeamTransferPage from '@/pages/TeamTransferPage'
+import TeamsPage from '@/pages/TeamsPage'
+import TournamentTeamCopyPage from '@/pages/TournamentTeamCopyPage'
+import TournamentTeamDetailsPage from '@/pages/TournamentTeamDetailsPage'
+import TournamentTeamEditorPage from '@/pages/TournamentTeamEditorPage'
+import TournamentTeamsPage from '@/pages/TournamentTeamsPage'
 
 export default function App() {
   return (
@@ -35,9 +43,21 @@ export default function App() {
             <Route path="/stats/new" element={<StatEditorPage />} />
             <Route path="/stats/transfer" element={<StatTransferPage />} />
             <Route path="/stats/:id/edit" element={<StatEditorPage />} />
+            <Route path="/teams/transfer" element={<TeamTransferPage />} />
           </Route>
           <Route path="/games/:id" element={<GameDetailsPage />} />
           <Route path="/stats" element={<StatsPage />} />
+          {/* Équipes globales : création ouverte à tout compte, gestion réservée au propriétaire. */}
+          <Route path="/teams" element={<TeamsPage />} />
+          <Route path="/teams/new" element={<TeamEditorPage />} />
+          <Route path="/teams/:id" element={<TeamDetailsPage />} />
+          <Route path="/teams/:id/edit" element={<TeamEditorPage />} />
+          {/* Équipes de tournoi : l'UUID du tournoi vient de l'URL. */}
+          <Route path="/tournaments/:tournamentId/teams" element={<TournamentTeamsPage />} />
+          <Route path="/tournaments/:tournamentId/teams/new" element={<TournamentTeamEditorPage />} />
+          <Route path="/tournaments/:tournamentId/teams/copy" element={<TournamentTeamCopyPage />} />
+          <Route path="/tournament-teams/:id" element={<TournamentTeamDetailsPage />} />
+          <Route path="/tournament-teams/:id/edit" element={<TournamentTeamEditorPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>
