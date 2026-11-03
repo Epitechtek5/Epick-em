@@ -333,3 +333,15 @@ it('shows an advancing winner only after the server supplies the successor parti
   expect(screen.getByText('Falcons · No results yet')).toBeTruthy();
   expect(screen.getByText('#1 Falcons · Win · 3 pts')).toBeTruthy();
 });
+
+it('displays imported points even when the match has no statistic entries or placement', async () => {
+  const imported = {
+    ...groupMatch,
+    participants: groupMatch.participants.map((p) => ({ ...p, stats: {} })),
+  };
+  jest
+    .mocked(useMatchContext)
+    .mockReturnValue(resource({ ...context, match: imported }));
+  await render(<MatchDetailsScreen />);
+  expect(screen.getByText('Falcons · 3 pts')).toBeTruthy();
+});

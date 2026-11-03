@@ -188,6 +188,37 @@ export default function StepDetailsScreen() {
 
       <Card>
         <CardContent className="gap-2 pt-5">
+          <Text className="font-semibold">{t('steps.matches.title')}</Text>
+          <Text variant="muted">{t('steps.matches.limitation')}</Text>
+          {matches && (
+            <Text>
+              {statuses
+                .map(
+                  (status) =>
+                    t('matches.status.' + status) +
+                    ' ' +
+                    matches.filter((m) => m.status === status).length,
+                )
+                .join(' · ')}
+            </Text>
+          )}
+          <Button
+            variant="outline"
+            onPress={() =>
+              router.push({
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches',
+                params: { tournamentId, stepId },
+              })
+            }
+          >
+            <Text>{t('matches.title')}</Text>
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="gap-2 pt-5">
           <Text className="font-semibold">{t('steps.configuration')}</Text>
           <InfoRow
             label={t('steps.fields.groupCount')}
@@ -267,37 +298,6 @@ export default function StepDetailsScreen() {
           <ScreenState message={t('steps.noGroups')} />
         )}
       </View>
-
-      <Card>
-        <CardContent className="gap-2 pt-5">
-          <Text className="font-semibold">{t('steps.matches.title')}</Text>
-          <Text variant="muted">{t('steps.matches.limitation')}</Text>
-          {matches && (
-            <Text>
-              {statuses
-                .map(
-                  (status) =>
-                    t('matches.status.' + status) +
-                    ' ' +
-                    matches.filter((m) => m.status === status).length,
-                )
-                .join(' · ')}
-            </Text>
-          )}
-          <Button
-            variant="outline"
-            onPress={() =>
-              router.push({
-                pathname:
-                  '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches',
-                params: { tournamentId, stepId },
-              })
-            }
-          >
-            <Text>{t('matches.title')}</Text>
-          </Button>
-        </CardContent>
-      </Card>
 
       {user?.role === 'admin' ? (
         <View className="gap-2">

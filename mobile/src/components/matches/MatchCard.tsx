@@ -49,6 +49,7 @@ export function MatchCard({
             {' · '}
             {p.result && t('matches.outcome.' + p.result) + ' · '}
             {Object.keys(p.stats).length ||
+            p.points !== 0 ||
             p.rank ||
             p.result ||
             match.status === 'finished'
