@@ -13,15 +13,18 @@ import { PreferencesProvider } from '@/features/preferences/provider';
 import { StatusBar } from 'expo-status-bar';
 import { PortalHost } from '@rn-primitives/portal';
 import { useColorScheme, vars } from 'nativewind';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider } from '@/features/auth/session';
 import { colors } from '@/theme/colors';
 
 export default function RootLayout() {
   return (
-    <PreferencesProvider>
-      <ThemedLayout />
-    </PreferencesProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <PreferencesProvider>
+        <ThemedLayout />
+      </PreferencesProvider>
+    </GestureHandlerRootView>
   );
 }
 

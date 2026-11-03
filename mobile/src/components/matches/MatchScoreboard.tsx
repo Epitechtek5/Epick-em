@@ -10,13 +10,7 @@ import { detailed } from '@/features/matches/validation';
 import { formatTournamentDate } from '@/features/tournaments/presentation';
 import { matchNumber } from './MatchCard';
 
-export function MatchScoreboard({
-  match,
-  data,
-}: {
-  match: Match;
-  data: MatchContext;
-}) {
+export function MatchScoreboard({ match, data }: { match: Match; data: MatchContext }) {
   const { t, i18n } = useTranslation();
   const number = matchNumber(data.matches, match.id);
   const group = data.groups.find((item) => item.group_id === match.group_id);
@@ -25,95 +19,87 @@ export function MatchScoreboard({
     match.round && t('matches.roundNumber', { round: match.round }),
     match.bracket && t('matches.region.' + match.bracket),
   ].filter(Boolean);
+  const participants = [...match.participants].sort(
+    (a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity),
+  );
+
   return (
-    <View className="gap-3 rounded-xl border border-border bg-card p-4">
+    <View className="gap-4 rounded-xl border border-border bg-card p-4">
       <View className="flex-row flex-wrap items-center justify-between gap-2">
-        <Text className="text-xl font-semibold">
+        <Text className="text-lg font-semibold">
           {number ? t('matches.number', { number }) : t('matches.detail')}
         </Text>
-        <StatusBadge
-          status={match.status}
-          label={t('matches.status.' + match.status)}
-        />
+        <StatusBadge status={match.status} label={t('matches.status.' + match.status)} />
       </View>
-      {metadata.length > 0 && (
+
+      {metadata.length > 0 ? (
         <Text variant="muted">{metadata.join(' · ')}</Text>
-      )}
-      {match.scheduled_at && (
-        <Text variant="muted">
-          {formatTournamentDate(match.scheduled_at, i18n.language)}
-        </Text>
-      )}
-      {[...match.participants]
-        .sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity))
-        .map((p) => {
-          const hasScore =
-            p.rank !== null ||
-            p.result !== null ||
-            p.points !== 0 ||
-            Object.keys(p.stats).length > 0 ||
+      ) : null}
+
+      {match.scheduled_at ? (
+        <Text variant="muted">{formatTournamentDate(match.scheduled_at, i18n.language)}</Text>
+      ) : null}
+
+      <View className="overflow-hidden rounded-lg border border-border">
+        {participants.map((participant, index) => {
+          const hasResult =
+            participant.rank !== null ||
+            participant.result !== null ||
+            participant.points !== 0 ||
+            Object.keys(participant.stats).length > 0 ||
             match.status === 'finished';
+
           return (
             <View
-              key={p.participant_id}
-              className="flex-row items-center justify-between gap-3 border-t border-border pt-3"
+              key={participant.participant_id}
+              className={[
+                'flex-row items-center justify-between gap-3 px-3 py-4',
+                index > 0 ? 'border-t border-border' : '',
+                participant.result === 'win' ? 'bg-primary/5' : '',
+              ].join(' ')}
             >
               <View className="min-w-0 flex-1 gap-1">
                 <Text className="font-semibold">
-                  {p.rank ? '#' + p.rank + '  ' : ''}
-                  {data.names[p.participant_id] ??
-                    t('steps.unknownParticipant')}
+                  {participant.rank !== null ? `#${participant.rank}  ` : ''}
+                  {data.names[participant.participant_id] ?? t('steps.unknownParticipant')}
                 </Text>
-                {p.result && (
-                  <Text
-                    className={
-                      p.result === 'win'
-                        ? 'text-primary'
-                        : 'text-muted-foreground'
-                    }
-                  >
-                    {t('matches.outcome.' + p.result)}
-                  </Text>
-                )}
+                {participant.result ? (
+                  <Text variant="muted">{t('matches.outcome.' + participant.result)}</Text>
+                ) : null}
               </View>
-              <Text
-                className="shrink text-right"
-                variant={hasScore ? 'default' : 'muted'}
-              >
-                {hasScore
-                  ? t('steps.points', { points: p.points })
+
+              <Text className="shrink-0 text-right font-semibold" variant={hasResult ? 'default' : 'muted'}>
+                {hasResult
+                  ? t('steps.points', { points: participant.points })
                   : t('matches.noResults')}
               </Text>
             </View>
           );
         })}
-      {Array.from(
-        { length: Math.max(0, 2 - match.participants.length) },
-        (_, i) => (
-          <Text key={i} variant="muted">
-            {t('matches.awaiting')}
-          </Text>
-        ),
-      )}
+
+        {match.participants.length === 0 ? (
+          <View className="p-4">
+            <Text variant="muted">{t('matches.awaiting')}</Text>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
+
 function StatLine({ values, data }: { values: FlatStats; data: MatchContext }) {
+  const entries = Object.entries(values);
+  if (!entries.length) return null;
+
   return (
     <View className="flex-row flex-wrap gap-2">
-      {Object.entries(values).map(([key, value]) => {
-        const definition = data.statDefinitions.find((s) => s.key === key);
+      {entries.map(([key, value]) => {
+        const definition = data.statDefinitions.find((stat) => stat.key === key);
         return (
-          <View
-            key={key}
-            className="min-w-20 grow gap-1 rounded-md bg-muted px-3 py-2"
-          >
-            <Text variant="muted">
-              {definition?.name ?? key.replaceAll('_', ' ')}
-            </Text>
-            <Text className="font-semibold">
-              {value}
-              {definition?.type === 'percent' ? ' %' : ''}
+          <View key={key} className="min-w-24 grow gap-1 rounded-lg bg-muted px-3 py-2">
+            <Text variant="muted">{definition?.name ?? key.replaceAll('_', ' ')}</Text>
+            <Text className="text-base font-semibold">
+              {value}{definition?.type === 'percent' ? ' %' : ''}
             </Text>
           </View>
         );
@@ -121,6 +107,7 @@ function StatLine({ values, data }: { values: FlatStats; data: MatchContext }) {
     </View>
   );
 }
+
 export function ParticipantStats({
   score,
   data,
@@ -134,38 +121,41 @@ export function ParticipantStats({
   const players = detailed(score.stats)
     ? Object.entries(score.stats.players ?? {})
     : [];
+
   if (!Object.keys(total).length && !players.length) return null;
+
   return (
     <View className="gap-3 rounded-xl border border-border bg-card p-4">
-      <Text className="font-semibold">
-        {data.names[score.participant_id] ?? t('steps.unknownParticipant')}
-      </Text>
-      <Text variant="muted">
-        {t(players.length ? 'matches.teamTotals' : 'matches.stats')}
-      </Text>
+      <View className="flex-row flex-wrap items-center justify-between gap-2">
+        <Text className="text-base font-semibold">
+          {data.names[score.participant_id] ?? t('steps.unknownParticipant')}
+        </Text>
+        {score.result ? <StatusBadge status={score.result} label={t('matches.outcome.' + score.result)} /> : null}
+      </View>
+
+      <Text variant="muted">{t(players.length ? 'matches.teamTotals' : 'matches.stats')}</Text>
       <StatLine values={total} data={data} />
-      {players.length > 0 && (
+
+      {players.length > 0 ? (
         <Button
           variant="outline"
           accessibilityState={{ expanded }}
           onPress={() => setExpanded(!expanded)}
         >
           <Text>
-            {t(expanded ? 'matches.hidePlayers' : 'matches.showPlayers', {
-              count: players.length,
-            })}
+            {t(expanded ? 'matches.hidePlayers' : 'matches.showPlayers', { count: players.length })}
           </Text>
         </Button>
-      )}
-      {expanded &&
-        players.map(([id, values]) => (
-          <View key={id} className="gap-2 border-t border-border pt-2">
-            <Text className="font-medium">
-              {data.playerNames[id] ?? t('steps.unknownParticipant')}
-            </Text>
-            <StatLine values={values} data={data} />
-          </View>
-        ))}
+      ) : null}
+
+      {expanded ? players.map(([id, values]) => (
+        <View key={id} className="gap-2 border-t border-border pt-3">
+          <Text className="font-medium">
+            {data.playerNames[id] ?? t('steps.unknownParticipant')}
+          </Text>
+          <StatLine values={values} data={data} />
+        </View>
+      )) : null}
     </View>
   );
 }

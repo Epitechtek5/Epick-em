@@ -1,5 +1,5 @@
 import { matchApi } from '@/features/matches/api';
-import { layoutBracket } from '@/features/matches/bracket';
+import { fitBracketScale, layoutBracket } from '@/features/matches/bracket';
 import {
   numericStats,
   optionalRank,
@@ -198,7 +198,55 @@ it('validates game keys and numeric bounds including percent and optional ranks'
   expect(detailed({ total: 3 })).toBe(false);
   expect(detailed({ total: {}, players: {} })).toBe(true);
 });
-it('orders stored rounds and connects only real successors across bracket regions', () => {
+it('lays out real successor trees without overlap and centers their destination', () => {
+  const final = { ...sample, id: 'final', round: 2 };
+  const first = {
+    ...sample,
+    id: 'first',
+    round: 1,
+    next_match_id: final.id,
+  };
+  const second = {
+    ...sample,
+    id: 'second',
+    round: 1,
+    next_match_id: final.id,
+  };
+  const graph = layoutBracket([second, final, first]);
+  const byId = new Map(graph.nodes.map((node) => [node.match.id, node]));
+  const firstNode = byId.get(first.id)!;
+  const secondNode = byId.get(second.id)!;
+  const finalNode = byId.get(final.id)!;
+  const feederCenter =
+    (firstNode.y +
+      firstNode.height / 2 +
+      secondNode.y +
+      secondNode.height / 2) /
+    2;
+
+  expect(finalNode.y + finalNode.height / 2).toBe(feederCenter);
+  expect(firstNode.y + firstNode.height).toBeLessThanOrEqual(secondNode.y);
+  expect(finalNode.x).toBeGreaterThan(firstNode.x);
+  expect(graph.edges.map((edge) => [edge.from, edge.to])).toEqual([
+    ['first', 'final'],
+    ['second', 'final'],
+  ]);
+  const reordered = layoutBracket([first, second, final]);
+  expect(
+    reordered.nodes.map((node) => [node.match.id, node.x, node.y]),
+  ).toEqual(graph.nodes.map((node) => [node.match.id, node.x, node.y]));
+  for (const node of graph.nodes) {
+    expect(node.x + node.width).toBeLessThanOrEqual(graph.width);
+    expect(node.y + node.height).toBeLessThanOrEqual(graph.height);
+  }
+});
+
+it('fits the complete bracket without upscaling small content', () => {
+  expect(fitBracketScale(320, 480, 640, 1200)).toBe(0.4);
+  expect(fitBracketScale(1000, 1000, 320, 480)).toBe(1);
+});
+
+it('keeps incomplete double-elimination regions separate and uses only stored edges', () => {
   const matches: Match[] = [
     { ...sample, id: 'final', round: null, bracket: 'grand_final' },
     {
@@ -212,7 +260,7 @@ it('orders stored rounds and connects only real successors across bracket region
     { ...sample, id: 'a', round: 1, bracket: 'winners', next_match_id: 'b' },
     { ...sample, id: 'partial', round: 1 },
   ];
-  const graph = layoutBracket(matches, { a: 238 });
+  const graph = layoutBracket(matches);
   expect(graph.rounds).toEqual([1, 2, null]);
   expect(graph.regions.map((r) => r.region)).toEqual([
     'winners',
@@ -224,7 +272,7 @@ it('orders stored rounds and connects only real successors across bracket region
     ['a', 'b'],
     ['b', 'final'],
   ]);
-  expect(
-    layoutBracket([{ ...sample, next_match_id: 'absent' }], {}).edges,
-  ).toEqual([]);
+  expect(layoutBracket([{ ...sample, next_match_id: 'absent' }]).edges).toEqual(
+    [],
+  );
 });

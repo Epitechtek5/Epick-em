@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { View } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/session';
 import { useMatchContext } from '@/features/matches/context';
 import { statuses, type MatchStatus } from '@/features/matches/types';
@@ -16,6 +17,7 @@ import { useTranslation } from '@/i18n';
 export default function MatchesScreen() {
   const { t } = useTranslation();
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const [list, setList] = useState(false);
   const [group, setGroup] = useState('');
   const [status, setStatus] = useState<MatchStatus | ''>('');
@@ -23,7 +25,9 @@ export default function MatchesScreen() {
   const { data, tournamentId, stepId } = state;
   if (!data) return <MatchState {...state} />;
   const params = { tournamentId, stepId };
-  const graph = elimination(data.step) && !list;
+  const bracketCompatible =
+    elimination(data.step) && data.step.match_type === 'duel';
+  const graph = bracketCompatible && !list;
   const open = (matchId: string) =>
     router.push({
       pathname:
@@ -55,6 +59,55 @@ export default function MatchesScreen() {
     items.push(match);
     sections.set(heading, items);
   }
+
+  if (graph) {
+    return (
+      <View
+        className="flex-1 gap-3 bg-background px-5 pt-5"
+        style={{ paddingBottom: insets.bottom + 12 }}
+      >
+        <View className="flex-row flex-wrap gap-2">
+          {user?.role === 'admin' && data.step.status === 'ongoing' ? (
+            <Button
+              size="sm"
+              onPress={() =>
+                router.push({
+                  pathname:
+                    '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/create',
+                  params,
+                })
+              }
+            >
+              <Text>{t('matches.create')}</Text>
+            </Button>
+          ) : null}
+          <Button variant="outline" size="sm" onPress={() => setList(true)}>
+            <Text>{t('matches.list')}</Text>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onPress={() =>
+              router.navigate({
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]',
+                params,
+              })
+            }
+          >
+            <Text>{t('steps.groups')}</Text>
+          </Button>
+        </View>
+        <Text variant="muted">{t('matches.bracketHelp')}</Text>
+        {data.matches.length ? (
+          <MatchBracket context={data} open={open} />
+        ) : (
+          <ScreenState message={t('matches.empty')} />
+        )}
+      </View>
+    );
+  }
+
   return (
     <MatchPage>
       {user?.role === 'admin' && data.step.status === 'ongoing' && (
@@ -70,7 +123,7 @@ export default function MatchesScreen() {
           <Text>{t('matches.create')}</Text>
         </Button>
       )}
-      {elimination(data.step) && (
+      {bracketCompatible && (
         <Button
           variant="outline"
           onPress={() => {
@@ -110,12 +163,6 @@ export default function MatchesScreen() {
       )}
       {!data.visible.length ? (
         <ScreenState message={t('matches.empty')} />
-      ) : null}
-      {graph && data.matches.length > 0 ? (
-        <>
-          <Text variant="muted">{t('matches.bracketHelp')}</Text>
-          <MatchBracket context={data} open={open} />
-        </>
       ) : null}
       {!graph &&
         [...sections].map(([heading, items]) => (

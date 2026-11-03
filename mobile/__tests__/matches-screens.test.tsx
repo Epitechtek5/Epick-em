@@ -6,6 +6,7 @@ import {
   waitFor,
 } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { router } from 'expo-router';
 import i18n from '@/i18n';
 import MatchEditorScreen from '@/screens/matches/MatchEditorScreen';
@@ -25,6 +26,27 @@ jest.mock('@/features/games/use-game-resource', () => ({
   useGameResource: jest.fn(),
 }));
 jest.mock('@/features/auth/session', () => ({ useAuth: jest.fn() }));
+jest.mock('react-native-gesture-handler', () => {
+  const { View } = jest.requireActual('react-native');
+  const gesture = () => {
+    const builder = {
+      minDistance: () => builder,
+      onBegin: () => builder,
+      onStart: () => builder,
+      onUpdate: () => builder,
+    };
+    return builder;
+  };
+  return {
+    Gesture: {
+      Pan: gesture,
+      Pinch: gesture,
+      Simultaneous: () => ({}),
+    },
+    GestureDetector: ({ children }: { children: React.ReactNode }) => children,
+    GestureHandlerRootView: View,
+  };
+});
 jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn(), back: jest.fn() },
 }));
@@ -112,6 +134,13 @@ function auth(role: 'admin' | 'user') {
     clearSession: jest.fn(),
   });
 }
+function matchesScreen() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <MatchesScreen />
+    </GestureHandlerRootView>
+  );
+}
 beforeEach(async () => {
   jest.clearAllMocks();
   await i18n.changeLanguage('en');
@@ -122,10 +151,14 @@ beforeEach(async () => {
 });
 afterEach(() => jest.restoreAllMocks());
 it('opens the same match from the graph and accessible list, including unresolved slots', async () => {
-  await render(<MatchesScreen />);
-  expect(screen.getAllByText('Awaiting participant')).toHaveLength(2);
+  await render(matchesScreen());
+  expect(screen.getAllByText('To be determined')).toHaveLength(2);
   expect(screen.queryByText('Schedule a match')).toBeNull();
-  await fireEvent.press(screen.getByText(/Match 1 · In progress/));
+  expect(screen.getByLabelText('Zoom out')).toBeTruthy();
+  expect(screen.getByLabelText('Zoom in')).toBeTruthy();
+  expect(screen.getByLabelText('Reset zoom to 100%')).toBeTruthy();
+  expect(screen.getByLabelText('Fit bracket to screen')).toBeTruthy();
+  await fireEvent.press(screen.getByLabelText(/^Match 1, In progress/));
   expect(router.push).toHaveBeenLastCalledWith(
     expect.objectContaining({ params: { tournamentId, stepId, matchId } }),
   );
@@ -134,14 +167,28 @@ it('opens the same match from the graph and accessible list, including unresolve
   await fireEvent.press(screen.getByText(/Match 1 · In progress/));
   expect(router.push).toHaveBeenCalledTimes(2);
 });
+it('keeps FFA elimination matches in the ranking-style list', async () => {
+  jest.mocked(useMatchContext).mockReturnValue(
+    resource({
+      ...context,
+      step: { ...context.step, match_type: 'ffa' },
+    }),
+  );
+
+  await render(matchesScreen());
+
+  expect(screen.queryByLabelText('Interactive tournament bracket')).toBeNull();
+  expect(screen.getByText(/Match 1 · In progress/)).toBeTruthy();
+  expect(screen.queryByText('Show match list')).toBeNull();
+});
 it('renders loading, retry and localized empty states', async () => {
   jest.mocked(useMatchContext).mockReturnValue(resource(null));
-  const view = await render(<MatchesScreen />);
+  const view = await render(matchesScreen());
   expect(screen.getByLabelText(i18n.t('steps.loading'))).toBeTruthy();
   jest
     .mocked(useMatchContext)
     .mockReturnValue(resource(null, 'errors.network'));
-  await view.rerender(<MatchesScreen />);
+  await view.rerender(matchesScreen());
   await fireEvent.press(screen.getByText('Retry'));
   expect(reload).toHaveBeenCalledTimes(1);
   await act(async () => {
@@ -151,7 +198,7 @@ it('renders loading, retry and localized empty states', async () => {
   jest
     .mocked(useMatchContext)
     .mockReturnValue(resource({ ...context, visible: [], matches: [] }));
-  await view.rerender(<MatchesScreen />);
+  await view.rerender(matchesScreen());
   expect(screen.getByText('Aucun match pour cette sélection.')).toBeTruthy();
   expect(screen.getByText('Programmer un match')).toBeTruthy();
 });
@@ -173,7 +220,7 @@ it('shows the server winner, points and a neutral missing identity to readers', 
   expect(
     screen.getByText('#2  ' + i18n.t('steps.unknownParticipant')),
   ).toBeTruthy();
-  expect(screen.getByText('Win')).toBeTruthy();
+  expect(screen.getAllByText('Win').length).toBeGreaterThan(0);
   expect(screen.getByText('3 pts')).toBeTruthy();
   expect(screen.queryByText('Enter results')).toBeNull();
   expect(screen.queryByText('Delete match')).toBeNull();
@@ -305,8 +352,9 @@ it('shows an advancing winner only after the server supplies the successor parti
     .mockReturnValue(
       resource({ ...context, matches: before, visible: before }),
     );
-  const view = await render(<MatchesScreen />);
-  expect(screen.getAllByText('Awaiting participant')).toHaveLength(2);
+  const view = await render(matchesScreen());
+  expect(screen.getByText('Winner of Match 1')).toBeTruthy();
+  expect(screen.getByText('To be determined')).toBeTruthy();
   const winner = { ...first.participants[0], rank: 1, result: 'win' as const };
   const updated = [
     {
@@ -333,10 +381,10 @@ it('shows an advancing winner only after the server supplies the successor parti
     .mockReturnValue(
       resource({ ...context, matches: updated, visible: updated }),
     );
-  await view.rerender(<MatchesScreen />);
-  expect(screen.getAllByText('Awaiting participant')).toHaveLength(1);
-  expect(screen.getByText('Falcons · No results yet')).toBeTruthy();
-  expect(screen.getByText('#1 Falcons · Win · 3 pts')).toBeTruthy();
+  await view.rerender(matchesScreen());
+  expect(screen.getAllByText('To be determined')).toHaveLength(1);
+  expect(screen.getAllByText('Falcons')).toHaveLength(2);
+  expect(screen.getByText('3 ★')).toBeTruthy();
 });
 
 it('displays imported points even when the match has no statistic entries or placement', async () => {
