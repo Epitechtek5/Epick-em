@@ -39,6 +39,31 @@ function addDeepmergeAdvisory(report, advisory = 'GHSA-gcqx-w48m-w2h4') {
   return report;
 }
 
+function addMinimatchAdvisory(report) {
+  report.vulnerabilities.minimatch = {
+    name: 'minimatch',
+    severity: 'moderate',
+    via: [
+      {
+        name: 'minimatch',
+        dependency: 'minimatch',
+        severity: 'moderate',
+        url: 'https://github.com/advisories/GHSA-g3hv-75wg-m249',
+        range: '<11.0.1',
+        title:
+          'minimatch has potential denial of service via globparts amplification',
+      },
+    ],
+    effects: [],
+    range: '<11.0.1',
+    nodes: ['node_modules/minimatch', 'node_modules/legacy/minimatch'],
+    fixAvailable: false,
+  };
+  report.metadata.vulnerabilities.moderate++;
+  report.metadata.vulnerabilities.total++;
+  return report;
+}
+
 test('accepts only the known advisories, including propagated dependencies in both trees', () => {
   for (const file of ['audit-full.json', 'audit-production.json']) {
     const findings = inspectAudit(result(fixture(file)));
@@ -147,6 +172,37 @@ test('rejects the deepmerge advisory after its review deadline', () => {
     /unexpected vulnerabilities detected/,
   );
   assert.equal(calls.length, 2);
+});
+
+test('accepts the overbroad minimatch advisory only when the installed versions are unaffected upstream', () => {
+  const report = addMinimatchAdvisory(fixture());
+  const findings = inspectAudit(result(report), {
+    lockPackages: {
+      'node_modules/minimatch': { version: '3.1.5' },
+      'node_modules/legacy/minimatch': { version: '5.1.9' },
+    },
+  });
+
+  assert.ok(findings.accepted.includes('minimatch: GHSA-g3hv-75wg-m249'));
+  assert.deepEqual(findings.unexpected, []);
+});
+
+test('rejects the minimatch advisory when 10.2.6 is installed or inventory evidence is missing', () => {
+  const report = addMinimatchAdvisory(fixture());
+  const vulnerable = inspectAudit(result(report), {
+    lockPackages: {
+      'node_modules/minimatch': { version: '3.1.5' },
+      'node_modules/legacy/minimatch': { version: '10.2.6' },
+    },
+  });
+  const missingInventory = inspectAudit(result(report), {
+    lockPackages: {
+      'node_modules/minimatch': { version: '3.1.5' },
+    },
+  });
+
+  assert.equal(vulnerable.unexpected[0].advisory, 'GHSA-g3hv-75wg-m249');
+  assert.equal(missingInventory.unexpected[0].advisory, 'GHSA-g3hv-75wg-m249');
 });
 
 test('rejects malformed JSON, error reports and incomplete reports', () => {
@@ -282,7 +338,10 @@ test('summarizes clean results, accepted exceptions and new or expired findings 
     {
       label: 'Full tree',
       findings: {
-        accepted: ['deepmerge: GHSA-gcqx-w48m-w2h4'],
+        accepted: [
+          'deepmerge: GHSA-gcqx-w48m-w2h4',
+          'minimatch: GHSA-g3hv-75wg-m249',
+        ],
         unexpected: [],
       },
     },
@@ -307,6 +366,10 @@ test('summarizes clean results, accepted exceptions and new or expired findings 
   assert.match(
     summary,
     /deepmerge GHSA-gcqx-w48m-w2h4 \(review by 2026-11-28\)/,
+  );
+  assert.match(
+    summary,
+    /minimatch GHSA-g3hv-75wg-m249 \(upstream range correction\)/,
   );
   assert.match(summary, /New or expired advisories require action/);
   assert.match(summary, /GHSA-xxxx-yyyy-zzzz/);

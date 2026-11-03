@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -11,11 +11,23 @@ const exceptions = new Map([
 const temporaryExceptions = new Map([
   ['GHSA-gcqx-w48m-w2h4', { package: 'deepmerge', reviewBy: '2026-11-28' }],
 ]);
+// npm currently expands this advisory to <11.0.1, while the maintainer's
+// advisory identifies only 10.2.6. Verify every reported lockfile node so an
+// actually affected version still fails closed.
+const upstreamAffectedVersions = new Map([
+  [
+    'GHSA-g3hv-75wg-m249',
+    { package: 'minimatch', versions: new Set(['10.2.6']) },
+  ],
+]);
 const severities = ['info', 'low', 'moderate', 'high', 'critical'];
 const isObject = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-export function inspectAudit(result, { now = new Date() } = {}) {
+export function inspectAudit(
+  result,
+  { now = new Date(), lockPackages = {} } = {},
+) {
   if (result.error || result.signal || ![0, 1].includes(result.status)) {
     throw new Error(
       `Audit execution failed: ${result.error?.message || result.signal || `exit ${result.status}`}`,
@@ -85,12 +97,28 @@ export function inspectAudit(result, { now = new Date() } = {}) {
           );
         const id = match?.[1];
         const temporaryException = temporaryExceptions.get(id);
+        const upstreamAffected = upstreamAffectedVersions.get(id);
         const exceptionPackage =
           exceptions.get(id) ?? temporaryException?.package;
         const expired =
           temporaryException !== undefined &&
           now.toISOString().slice(0, 10) > temporaryException.reviewBy;
-        if (
+        const installedVersions = Array.isArray(entry.nodes)
+          ? entry.nodes.map((node) => lockPackages[node]?.version)
+          : [];
+        const upstreamRangeCorrectionApplies =
+          upstreamAffected?.package === name &&
+          via.name === name &&
+          via.dependency === name &&
+          installedVersions.length > 0 &&
+          installedVersions.every(
+            (version) =>
+              typeof version === 'string' &&
+              !upstreamAffected.versions.has(version),
+          );
+        if (upstreamRangeCorrectionApplies) {
+          accepted.add(`${name}: ${id}`);
+        } else if (
           exceptionPackage === name &&
           via.name === name &&
           via.dependency === name
@@ -185,6 +213,12 @@ export function runAudits(
 ) {
   const failures = [];
   const auditResults = [];
+  const packageLock = JSON.parse(
+    readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'),
+  );
+  if (!isObject(packageLock.packages)) {
+    throw new Error('package-lock.json does not contain a packages inventory');
+  }
 
   for (const [label, args] of [
     ['Full tree', ['audit', '--json']],
@@ -197,13 +231,16 @@ export function runAudits(
         timeout: 120_000,
         maxBuffer: 16 * 1024 * 1024,
       });
-      const findings = inspectAudit(result, { now });
+      const findings = inspectAudit(result, {
+        now,
+        lockPackages: packageLock.packages,
+      });
       auditResults.push({ label, findings });
       log(
         `${label}: ${findings.accepted.length} accepted, ${findings.unexpected.length} unexpected advisories`,
       );
       for (const finding of findings.accepted) {
-        log(`  Temporary exception: ${finding}`);
+        log(`  Accepted policy finding: ${finding}`);
       }
       for (const finding of findings.unexpected) {
         const detail = [
@@ -267,9 +304,11 @@ export function formatAuditSummary(auditResults) {
           .map((entry) => {
             const [packageName, advisory] = entry.split(': ');
             const exception = temporaryExceptions.get(advisory);
-            const reviewNote = exception
-              ? ` (review by ${exception.reviewBy})`
-              : ' (existing exception)';
+            const reviewNote = upstreamAffectedVersions.has(advisory)
+              ? ' (upstream range correction)'
+              : exception
+                ? ` (review by ${exception.reviewBy})`
+                : ' (existing exception)';
             return `${packageName} ${advisory}${reviewNote}`;
           })
           .join('<br>')
