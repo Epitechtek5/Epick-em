@@ -18,10 +18,10 @@ import {
   startStep,
 } from '@/features/steps/api';
 import { stepErrorKey } from '@/features/steps/errors';
-import { getTournamentTeam } from '@/features/teams/api';
+import { loadIdentities } from '@/features/matches/context';
+import { matchApi } from '@/features/matches/api';
+import { statuses } from '@/features/matches/types';
 import { getTournament } from '@/features/tournaments/api';
-import { listAllTournamentParticipants } from '@/features/tournaments/catalog';
-import { getUser } from '@/features/users/api';
 import { useTranslation } from '@/i18n';
 
 export default function StepDetailsScreen() {
@@ -37,45 +37,27 @@ export default function StepDetailsScreen() {
   const [success, setSuccess] = useState(false);
   const load = useCallback(
     async (accessToken: string) => {
-      const [tournament, step, ranking, steps, participants] =
+      const [tournament, step, ranking, steps, identities, matches] =
         await Promise.all([
           getTournament(accessToken, tournamentId),
           getStep(accessToken, tournamentId, stepId),
           getStepRanking(accessToken, tournamentId, stepId),
           listSteps(accessToken, tournamentId),
-          listAllTournamentParticipants(accessToken, tournamentId),
+          loadIdentities(accessToken, tournamentId),
+          matchApi(accessToken, tournamentId, stepId)
+            .list()
+            .catch(() => null),
         ]);
-      const names = Object.fromEntries(
-        await Promise.all(
-          participants.map(async (participant) => {
-            try {
-              if (participant.user_id) {
-                const profile = await getUser(accessToken, participant.user_id);
-                return [participant.id, profile.username] as const;
-              }
-              if (participant.tournament_team_id) {
-                const team = await getTournamentTeam(
-                  accessToken,
-                  participant.tournament_team_id,
-                );
-                return [participant.id, team.name] as const;
-              }
-            } catch {
-              // The ranking remains usable when an identity was deleted.
-            }
-            return [participant.id, t('steps.unknownParticipant')] as const;
-          }),
-        ),
-      );
       return {
         tournament,
         step,
         ranking: [...ranking].sort((a, b) => a.index - b.index),
         steps,
-        names,
+        names: identities.names,
+        matches,
       };
     },
-    [stepId, t, tournamentId],
+    [stepId, tournamentId],
   );
   const { data, loading, error, reload } = useGameResource(load, stepErrorKey);
 
@@ -163,7 +145,7 @@ export default function StepDetailsScreen() {
     );
   }
 
-  const { tournament, step, ranking, names } = data;
+  const { tournament, step, ranking, names, matches } = data;
   const editable =
     user?.role === 'admin' &&
     ['draft', 'registration'].includes(tournament.status);
@@ -290,6 +272,30 @@ export default function StepDetailsScreen() {
         <CardContent className="gap-2 pt-5">
           <Text className="font-semibold">{t('steps.matches.title')}</Text>
           <Text variant="muted">{t('steps.matches.limitation')}</Text>
+          {matches && (
+            <Text>
+              {statuses
+                .map(
+                  (status) =>
+                    t('matches.status.' + status) +
+                    ' ' +
+                    matches.filter((m) => m.status === status).length,
+                )
+                .join(' · ')}
+            </Text>
+          )}
+          <Button
+            variant="outline"
+            onPress={() =>
+              router.push({
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches',
+                params: { tournamentId, stepId },
+              })
+            }
+          >
+            <Text>{t('matches.title')}</Text>
+          </Button>
         </CardContent>
       </Card>
 

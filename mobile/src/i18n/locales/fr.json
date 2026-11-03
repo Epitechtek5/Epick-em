@@ -544,6 +544,75 @@
     "filterSelection": "Filtre de jeu : {{game}}",
     "noGames": "Aucun jeu disponible."
   },
+  "matches": {
+    "title": "Voir les matchs",
+    "detail": "Détails du match",
+    "create": "Programmer un match",
+    "edit": "Modifier le match",
+    "results": "Saisir les résultats",
+    "group": "Groupe",
+    "all": "Tous",
+    "statusLabel": "Statut du match",
+    "bracket": "Tableau éliminatoire",
+    "list": "Afficher la liste des matchs",
+    "bracketHelp": "Balayez horizontalement pour suivre les tours. Les lignes relient chaque match à son successeur enregistré.",
+    "number": "Match {{number}}",
+    "roundNumber": "Tour {{round}}",
+    "unknownRound": "Tour non attribué",
+    "round": "Tour (1 à 1 000)",
+    "next": "Le vainqueur accède au match suivant",
+    "outside": "Match hors de cette vue",
+    "empty": "Aucun match pour cette sélection.",
+    "awaiting": "En attente d’un participant",
+    "noResults": "Aucun résultat saisi",
+    "unset": "Non renseigné",
+    "date": "Date et heure prévues",
+    "participants": "Participants",
+    "search": "Rechercher un participant",
+    "rank": "Place (facultatif)",
+    "outcomeLabel": "Issue du match (facultatif)",
+    "stats": "Statistiques",
+    "scored": "Compte dans le barème",
+    "saved": "Résultats enregistrés",
+    "updated": "Match mis à jour.",
+    "closed": "Match terminé. Le serveur a clôturé cette étape et mis à jour la progression du tournoi.",
+    "confirm": "Appliquer cette modification au match ?",
+    "conflict": "L’état du match ou de l’étape ne permet plus cette action. Rouvrez le match pour consulter son état actuel.",
+    "invalidRequest": "Vérifiez les participants, les liens du tableau et les résultats. Pour terminer, renseignez les résultats et des places cohérentes.",
+    "notFound": "Le match, l’étape ou le tournoi est introuvable.",
+    "invalidStats": "Utilisez les statistiques du jeu, entre −1 milliard et 1 milliard. Les pourcentages doivent être compris entre 0 et 100.",
+    "invalidRank": "Saisissez une place entière comprise entre 1 et le nombre de participants.",
+    "action": {
+      "ongoing": "Démarrer le match",
+      "finished": "Terminer le match",
+      "cancelled": "Annuler le match",
+      "delete": "Supprimer le match"
+    },
+    "region": {
+      "winners": "Tableau des gagnants",
+      "losers": "Tableau de repêchage",
+      "grand_final": "Grande finale"
+    },
+    "status": {
+      "scheduled": "Programmé",
+      "ongoing": "En cours",
+      "finished": "Terminé",
+      "cancelled": "Annulé"
+    },
+    "outcome": {
+      "win": "Victoire",
+      "loss": "Défaite",
+      "draw": "Égalité"
+    },
+    "validation": {
+      "group": "Choisissez un groupe de cette étape.",
+      "round": "Saisissez un numéro de tour entier entre 1 et 1 000.",
+      "date": "Choisissez une date et une heure valides.",
+      "bracket": "Les tableaux distincts nécessitent une double élimination.",
+      "next": "Choisissez un autre match de cette étape éliminatoire.",
+      "participants": "Sélectionnez des membres distincts du groupe dans la limite de capacité du match."
+    }
+  },
   "steps": {
     "title": "Étapes du tournoi",
     "details": "Détails de l’étape",

@@ -544,6 +544,75 @@
     "filterSelection": "Game filter: {{game}}",
     "noGames": "No games available."
   },
+  "matches": {
+    "title": "View matches",
+    "detail": "Match details",
+    "create": "Schedule a match",
+    "edit": "Edit match",
+    "results": "Enter results",
+    "group": "Group",
+    "all": "All",
+    "statusLabel": "Match status",
+    "bracket": "Elimination bracket",
+    "list": "Show match list",
+    "bracketHelp": "Swipe horizontally to follow rounds. Lines connect matches to their recorded successors.",
+    "number": "Match {{number}}",
+    "roundNumber": "Round {{round}}",
+    "unknownRound": "Round unassigned",
+    "round": "Round (1–1,000)",
+    "next": "Winner advances to",
+    "outside": "Match outside this view",
+    "empty": "No matches for this selection.",
+    "awaiting": "Awaiting participant",
+    "noResults": "No results yet",
+    "unset": "Unassigned",
+    "date": "Scheduled date and time",
+    "participants": "Participants",
+    "search": "Search participants",
+    "rank": "Placement (optional)",
+    "outcomeLabel": "Outcome (optional)",
+    "stats": "Statistics",
+    "scored": "Counts toward points",
+    "saved": "Results saved",
+    "updated": "Match updated.",
+    "closed": "Match finished. The server closed this stage and updated tournament progression.",
+    "confirm": "Apply this change to the match?",
+    "conflict": "The match or stage no longer allows this action. Reopen the match to see its current state.",
+    "invalidRequest": "Check the participants, bracket links and results. Finishing requires results and consistent ranks.",
+    "notFound": "The match, stage or tournament could not be found.",
+    "invalidStats": "Use registered statistics with finite values from −1 billion to 1 billion. Percentages must be between 0 and 100.",
+    "invalidRank": "Enter a whole placement between 1 and the number of participants.",
+    "action": {
+      "ongoing": "Start match",
+      "finished": "Finish match",
+      "cancelled": "Cancel match",
+      "delete": "Delete match"
+    },
+    "region": {
+      "winners": "Winners bracket",
+      "losers": "Losers bracket",
+      "grand_final": "Grand final"
+    },
+    "status": {
+      "scheduled": "Scheduled",
+      "ongoing": "In progress",
+      "finished": "Finished",
+      "cancelled": "Cancelled"
+    },
+    "outcome": {
+      "win": "Win",
+      "loss": "Loss",
+      "draw": "Draw"
+    },
+    "validation": {
+      "group": "Choose a group in this stage.",
+      "round": "Enter a whole round from 1 to 1,000.",
+      "date": "Choose a valid date and time.",
+      "bracket": "Bracket regions require double elimination.",
+      "next": "Select another match in this elimination stage.",
+      "participants": "Choose distinct group members within the match capacity."
+    }
+  },
   "steps": {
     "title": "Tournament stages",
     "details": "Stage details",
