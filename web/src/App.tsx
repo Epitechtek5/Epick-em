@@ -7,12 +7,14 @@ import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import RegisterPage from '@/pages/RegisterPage'
+import ResetPasswordPage from '@/pages/ResetPasswordPage'
 
 export default function App() {
   return (
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/app" replace />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route element={<GuestRoute />}>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />

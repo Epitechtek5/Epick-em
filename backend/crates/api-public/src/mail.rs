@@ -11,6 +11,7 @@ use std::time::Duration;
 
 const RESEND_ENDPOINT: &str = "https://api.resend.com/emails";
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_PASSWORD_RESET_TEMPLATE: &str = "password-reset";
 
 #[derive(Debug)]
 pub struct MailError(String);
@@ -38,6 +39,8 @@ pub struct MailConfig {
     /// Origine publique du site (ex. `https://epickem.app`), sans chemin : les liens des
     /// e-mails en sont déduits.
     pub public_url: String,
+    /// Published Resend template ID or alias.
+    pub password_reset_template: String,
 }
 
 // Écrit à la main pour ne jamais journaliser la clé d'API.
@@ -47,6 +50,7 @@ impl fmt::Debug for MailConfig {
             .field("api_key", &"<masqué>")
             .field("from", &self.from)
             .field("public_url", &self.public_url)
+            .field("password_reset_template", &self.password_reset_template)
             .finish()
     }
 }
@@ -64,6 +68,8 @@ impl MailConfig {
             api_key: get("RESEND_API_KEY")?,
             from: get("MAIL_FROM").unwrap_or_else(|| "Epick'em <onboarding@resend.dev>".into()),
             public_url: get("PUBLIC_URL").unwrap_or_else(|| "http://localhost:3000".into()),
+            password_reset_template: get("RESEND_PASSWORD_RESET_TEMPLATE")
+                .unwrap_or_else(|| DEFAULT_PASSWORD_RESET_TEMPLATE.into()),
         })
     }
 }
@@ -84,6 +90,7 @@ pub struct ResendMailer {
     client: reqwest::Client,
     api_key: String,
     from: String,
+    template: String,
     endpoint: String,
 }
 
@@ -102,6 +109,7 @@ impl ResendMailer {
             client,
             api_key: config.api_key.clone(),
             from: config.from.clone(),
+            template: config.password_reset_template.clone(),
             endpoint: endpoint.to_string(),
         })
     }
@@ -117,9 +125,10 @@ impl Mailer for ResendMailer {
             .json(&json!({
                 "from": self.from,
                 "to": [to],
-                "subject": "Réinitialisation de votre mot de passe Epick'em",
-                "html": reset_html(link),
-                "text": reset_text(link),
+                "template": {
+                    "id": self.template,
+                    "variables": { "RESET_URL": link },
+                },
             }))
             .send()
             .await
@@ -131,24 +140,6 @@ impl Mailer for ResendMailer {
             Err(MailError(format!("Resend a répondu {status}")))
         }
     }
-}
-
-fn reset_text(link: &str) -> String {
-    format!(
-        "Vous avez demandé à réinitialiser votre mot de passe Epick'em.\n\n\
-         Ouvrez ce lien pour en choisir un nouveau (valable 15 minutes) :\n{link}\n\n\
-         Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : \
-         votre mot de passe reste inchangé."
-    )
-}
-
-fn reset_html(link: &str) -> String {
-    format!(
-        "<p>Vous avez demandé à réinitialiser votre mot de passe Epick'em.</p>\
-         <p><a href=\"{link}\">Choisir un nouveau mot de passe</a> (lien valable 15 minutes).</p>\
-         <p>Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : \
-         votre mot de passe reste inchangé.</p>"
-    )
 }
 
 /// Resend n'est pas configuré : rien n'est envoyé.
@@ -214,6 +205,7 @@ mod tests {
         let config = config(&[("RESEND_API_KEY", "re_secret")]).unwrap();
         assert!(config.from.contains("resend.dev"));
         assert_eq!(config.public_url, "http://localhost:3000");
+        assert_eq!(config.password_reset_template, "password-reset");
         assert!(!format!("{config:?}").contains("re_secret"));
         let config = self::config(&[
             ("RESEND_API_KEY", "k"),
@@ -223,12 +215,12 @@ mod tests {
         .unwrap();
         assert_eq!(config.from, "a@b.fr");
         assert_eq!(config.public_url, "https://epickem.app");
-    }
-
-    #[test]
-    fn message_announces_the_validity() {
-        assert!(reset_text("l").contains("15 minutes"));
-        assert!(reset_html("l").contains("15 minutes"));
+        let custom = self::config(&[
+            ("RESEND_API_KEY", "k"),
+            ("RESEND_PASSWORD_RESET_TEMPLATE", "custom-reset"),
+        ])
+        .unwrap();
+        assert_eq!(custom.password_reset_template, "custom-reset");
     }
 
     #[test]

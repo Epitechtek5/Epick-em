@@ -367,6 +367,7 @@ fn mail_config() -> MailConfig {
         api_key: "re_test_key".into(),
         from: "Epick'em <no-reply@epickem.test>".into(),
         public_url: PUBLIC_URL.into(),
+        password_reset_template: "password-reset".into(),
     }
 }
 
@@ -389,18 +390,13 @@ async fn resend_mailer_posts_the_message_to_resend() {
     let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(body["from"], "Epick'em <no-reply@epickem.test>");
     assert_eq!(body["to"], json!(["alice@example.com"]));
-    assert!(
-        body["html"]
-            .as_str()
-            .unwrap()
-            .contains("https://x.test/r?token=abc")
+    assert_eq!(body["template"]["id"], "password-reset");
+    assert_eq!(
+        body["template"]["variables"]["RESET_URL"],
+        "https://x.test/r?token=abc"
     );
-    assert!(
-        body["text"]
-            .as_str()
-            .unwrap()
-            .contains("https://x.test/r?token=abc")
-    );
+    assert!(body.get("html").is_none());
+    assert!(body.get("text").is_none());
 }
 
 #[tokio::test]

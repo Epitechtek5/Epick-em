@@ -45,3 +45,13 @@ export async function logout(refreshToken: string): Promise<void> {
     body: { refresh_token: refreshToken },
   })
 }
+
+// POST /reset-password -> 204. Le jeton reste uniquement dans la mémoire de la page.
+export async function resetPassword(token: string, password: string): Promise<void> {
+  await apiRequest('/reset-password', {
+    method: 'POST',
+    body: { token, password },
+    skipAuth: true,
+    expectedStatus: 204,
+  })
+}
