@@ -44,3 +44,14 @@ export function exportGames(format: GameFormat) {
 export function importGames(format: GameFormat, bytes: Uint8Array) {
   return importFile<ImportReport>('/games/import', format, bytes)
 }
+
+// Tous les jeux, par pages de 100 (filtre et sélecteur de jeu des équipes).
+export async function listAllGames(signal?: AbortSignal): Promise<Game[]> {
+  const all: Game[] = []
+  for (let offset = 0; offset < 2000; offset += 100) {
+    const page = await listGames({ limit: 100, offset }, signal)
+    all.push(...page)
+    if (page.length < 100) break
+  }
+  return all
+}

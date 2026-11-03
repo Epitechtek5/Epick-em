@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {
       isAuthenticated: tokens !== null,
       username: tokens ? (claims?.username ?? loginName ?? '') : null,
+      userId: tokens ? (claims?.sub ?? null) : null,
       role,
       isAdmin: role === 'admin',
       login,
