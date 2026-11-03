@@ -13,6 +13,7 @@ import { Text } from '@/components/ui/text';
 import { useAuth } from '@/features/auth/session';
 import { ApiError } from '@/lib/api';
 import { AuthHeader } from '@/components/auth-header';
+import { normalizeUsername } from '@/features/auth/validation';
 
 export default function LoginScreen() {
   const { t } = useTranslation();
@@ -24,14 +25,15 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   async function submit() {
     if (submitting) return;
-    if (!username || !password) {
+    const normalizedUsername = normalizeUsername(username);
+    if (!normalizedUsername || !password) {
       setError('login.missing');
       return;
     }
     setSubmitting(true);
     setError('');
     try {
-      await signIn({ username, password });
+      await signIn({ username: normalizedUsername, password });
     } catch (caught) {
       setError(
         caught instanceof ApiError && caught.status === 401
