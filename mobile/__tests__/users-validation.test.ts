@@ -55,8 +55,8 @@ describe('User form validation', () => {
       validateUserForm(
         {
           ...base,
-          password: 'securepassword123',
-          confirmPassword: 'securepassword123',
+          password: 'SecurePassword123!',
+          confirmPassword: 'SecurePassword123!',
         },
         'Player1',
       ),

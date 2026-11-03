@@ -36,6 +36,34 @@ export default function AuthenticatedLayout() {
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
+        name="tournaments/create"
+        options={{ title: t('tournaments.create') }}
+      />
+      <Stack.Screen
+        name="tournaments/transfer"
+        options={{ title: t('tournaments.transfer') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/index"
+        options={{ title: t('tournaments.details') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/edit"
+        options={{ title: t('tournaments.edit') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/participants"
+        options={{ title: t('tournaments.participants') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/scoring"
+        options={{ title: t('tournaments.scoring') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/ranking"
+        options={{ title: t('tournaments.ranking') }}
+      />
+      <Stack.Screen
         name="teams/create"
         options={{ title: t('teams.create') }}
       />

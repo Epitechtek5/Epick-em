@@ -115,14 +115,14 @@ it.each([DefaultTheme, DarkTheme])(
       vbWidth: 24,
       vbHeight: 24,
     });
-    expect(screen.getByLabelText('Users')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Users')).toBeNull();
     expect(screen.getByLabelText('Teams')).toBeOnTheScreen();
     expect(screen.getAllByTestId('teams-tab-icon').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Settings')).toBeOnTheScreen();
     expect(screen.getAllByTestId('settings-tab-icon').length).toBeGreaterThan(
       0,
     );
-    expect(screen.getAllByTestId('users-tab-icon').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('users-tab-icon')).toBeNull();
     expect(screen.queryByText('⏷')).toBeNull();
     expect(screen.getAllByTestId('settings-tab-icon')[0].props).toMatchObject({
       vbWidth: 24,
@@ -133,9 +133,6 @@ it.each([DefaultTheme, DarkTheme])(
         .getAllByTestId('settings-tab-icon')
         .map((icon) => icon.props.color),
     ).toContain(colors[theme.dark ? 'dark' : 'light']['primary-foreground']);
-    expect(
-      screen.getAllByTestId('users-tab-icon').map((icon) => icon.props.color),
-    ).toContain(colors[theme.dark ? 'dark' : 'light']['muted-foreground']);
   },
 );
 it.each(['user', 'watcher'] as const)(
@@ -143,7 +140,7 @@ it.each(['user', 'watcher'] as const)(
   async (role) => {
     session(role);
     await renderRouter(routes, { initialUrl: `/admin/${user.id}` });
-    expect(await screen.findByText('Users content')).toBeOnTheScreen();
+    expect(await screen.findByText('Games content')).toBeOnTheScreen();
     expect(screen.queryByText('Manage user')).toBeNull();
   },
 );
