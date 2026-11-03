@@ -117,7 +117,10 @@ export default function StepEditorScreen() {
         });
 
   function change<K extends keyof StepInput>(field: K, value: StepInput[K]) {
-    setValues({ ...formValues, [field]: value });
+    setValues((current) => ({
+      ...(current ?? formValues),
+      [field]: value,
+    }));
     setErrors((current) => ({ ...current, [field]: undefined }));
   }
 

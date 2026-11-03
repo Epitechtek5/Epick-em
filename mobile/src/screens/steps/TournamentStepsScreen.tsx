@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Text } from '@/components/ui/text';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { useAuth } from '@/features/auth/session';
 import { useGameResource } from '@/features/games/use-game-resource';
 import { listSteps } from '@/features/steps/api';
@@ -115,11 +116,10 @@ export default function TournamentStepsScreen() {
                   <Text className="text-lg font-semibold">
                     {t('steps.position', { position: item.position })}
                   </Text>
-                  <View className="rounded-full bg-muted px-3 py-1">
-                    <Text className="text-xs font-medium">
-                      {t(`steps.status.${item.status}`)}
-                    </Text>
-                  </View>
+                  <StatusBadge
+                    status={item.status}
+                    label={t(`steps.status.${item.status}`)}
+                  />
                 </View>
                 <Text>
                   {t(`steps.format.${item.format}`)} ·{' '}

@@ -373,7 +373,7 @@
     "participantType": { "solo": "Solo", "team": "Équipe" },
     "participantStatus": {
       "registered": "Inscrit",
-      "checked_in": "Pointé",
+      "checked_in": "Confirmé",
       "disqualified": "Disqualifié",
       "withdrawn": "Retiré"
     },
@@ -404,6 +404,12 @@
     },
     "registration": {
       "soloTitle": "S’inscrire au tournoi",
+      "chooseTeamTitle": "Choisissez votre équipe",
+      "participantCount": "{{count}} places confirmées sur {{capacity}}",
+      "journeyTitle": "Progression de l’inscription",
+      "journeyRegistered": "Inscription enregistrée",
+      "journeyConfirmed": "Présence confirmée",
+      "journeyCompetition": "Tournoi en cours",
       "soloHelp": "Votre compte actuel sera inscrit. Représenter une équipe du tournoi est facultatif.",
       "teamTitle": "Inscrire une équipe",
       "teamHelp": "Seul le propriétaire de l’équipe ou un administrateur peut l’inscrire. Le nombre de titulaires doit être exact ; les remplaçants ne sont pas comptabilisés.",

@@ -10,6 +10,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { useAuth } from '@/features/auth/session';
 import { getGame } from '@/features/games/api';
 import { useGameResource } from '@/features/games/use-game-resource';
@@ -252,11 +253,10 @@ export default function TournamentDetailsScreen() {
       {message ? <FormMessage>{t(message)}</FormMessage> : null}
       <View className="gap-2">
         <View className="flex-row items-center gap-2">
-          <View className="rounded-full bg-muted px-3 py-1">
-            <Text className="text-xs font-medium">
-              {t(`tournaments.status.${tournament.status}`)}
-            </Text>
-          </View>
+          <StatusBadge
+            status={tournament.status}
+            label={t(`tournaments.status.${tournament.status}`)}
+          />
           <Text variant="muted">
             {t(`tournaments.participantType.${tournament.participant_type}`)}
           </Text>
@@ -360,7 +360,16 @@ export default function TournamentDetailsScreen() {
           </Button>
         ) : null}
         {myRegistration ? (
-          <Button variant="outline" onPress={() => open('participants')}>
+          <Button
+            variant="default"
+            onPress={() =>
+              router.push({
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/participants',
+                params: { tournamentId, participantId: myRegistration.id },
+              })
+            }
+          >
             <Text>{t('tournaments.viewRegistration')}</Text>
           </Button>
         ) : null}
@@ -382,27 +391,24 @@ export default function TournamentDetailsScreen() {
           <Text className="font-semibold">
             {t('tournaments.detailsSections.explore')}
           </Text>
-          <View className="flex-row flex-wrap gap-2">
+          <View className="gap-2">
             <Button
-              className="flex-1"
-              variant="outline"
+              variant="default"
               onPress={() => open('participants')}
             >
-              <Text>{t('tournaments.participants')}</Text>
+              <Text numberOfLines={1}>{t('tournaments.participants')}</Text>
             </Button>
             <Button
-              className="flex-1"
-              variant="outline"
+              variant="default"
               onPress={() => open('ranking')}
             >
-              <Text>{t('tournaments.ranking')}</Text>
+              <Text numberOfLines={1}>{t('tournaments.ranking')}</Text>
             </Button>
             <Button
-              className="flex-1"
-              variant="outline"
+              variant="default"
               onPress={() => open('steps')}
             >
-              <Text>{t('steps.title')}</Text>
+              <Text numberOfLines={1}>{t('steps.title')}</Text>
             </Button>
           </View>
         </CardContent>

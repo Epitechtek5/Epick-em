@@ -169,6 +169,13 @@ it('shows a registered team member their enrollment without owner actions', asyn
   });
   await render(<TournamentDetailsScreen />);
   expect(screen.getByText('View my registration')).toBeTruthy();
+  fireEvent.press(screen.getByText('View my registration'));
+  expect(router.push).toHaveBeenCalledWith({
+    pathname:
+      '/(authenticated)/tournaments/[tournamentId]/participants',
+    params: { tournamentId: id, participantId: participant.id },
+  });
+
   expect(screen.queryByText('Check in')).toBeNull();
   expect(screen.queryByText('Withdraw')).toBeNull();
 });

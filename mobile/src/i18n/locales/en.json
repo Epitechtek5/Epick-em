@@ -404,6 +404,12 @@
     },
     "registration": {
       "soloTitle": "Register for tournament",
+      "chooseTeamTitle": "Choose your team",
+      "participantCount": "{{count}} of {{capacity}} places confirmed",
+      "journeyTitle": "Registration progress",
+      "journeyRegistered": "Registration submitted",
+      "journeyConfirmed": "Attendance confirmed",
+      "journeyCompetition": "Tournament underway",
       "soloHelp": "Your current account will be registered. Representing a tournament team is optional.",
       "teamTitle": "Register a team",
       "teamHelp": "Only the team owner or an administrator may register it. The required number of starters must be exact; substitutes are not counted.",

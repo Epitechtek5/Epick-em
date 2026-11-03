@@ -9,6 +9,7 @@ import { Alert } from 'react-native';
 import { router } from 'expo-router';
 import TournamentStepsScreen from '../src/screens/steps/TournamentStepsScreen';
 import StepDetailsScreen from '../src/screens/steps/StepDetailsScreen';
+import StepEditorScreen from '../src/screens/steps/StepEditorScreen';
 import { useAuth } from '../src/features/auth/session';
 import { useGameResource } from '../src/features/games/use-game-resource';
 import * as stepApi from '../src/features/steps/api';
@@ -124,6 +125,29 @@ it('renders stages in backend position order with natural labels', async () => {
     pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]',
     params: { tournamentId, stepId },
   });
+});
+
+it('keeps the selected format when updating its dependent fields', async () => {
+  jest.mocked(useAuth).mockReturnValue({
+    ...session,
+    user: { ...session.user, role: 'admin' },
+  });
+  jest.mocked(useGameResource).mockReturnValue(
+    resource({
+      tournament,
+      steps: [first],
+      step: first,
+    }),
+  );
+
+  await render(<StepEditorScreen />);
+  await fireEvent.press(screen.getByLabelText('Format: Groups'));
+  const swiss = await screen.findByRole('radio', { name: 'Swiss' });
+  await fireEvent.press(swiss);
+
+  await waitFor(() =>
+    expect(screen.getByLabelText('Format: Swiss')).toBeTruthy(),
+  );
 });
 
 it('localizes formats and statuses in French', async () => {

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Text } from '@/components/ui/text';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { useAuth } from '@/features/auth/session';
 import { useGameResource } from '@/features/games/use-game-resource';
 import {
@@ -192,11 +193,10 @@ export default function StepDetailsScreen() {
           <Text className="text-2xl font-semibold">
             {t('steps.position', { position: step.position })}
           </Text>
-          <View className="rounded-full bg-muted px-3 py-1">
-            <Text className="text-xs font-medium">
-              {t(`steps.status.${step.status}`)}
-            </Text>
-          </View>
+          <StatusBadge
+            status={step.status}
+            label={t(`steps.status.${step.status}`)}
+          />
         </View>
         <Text>
           {t(`steps.format.${step.format}`)} ·{' '}
@@ -266,9 +266,10 @@ export default function StepDetailsScreen() {
                         {names[participant.participant_id] ??
                           t('steps.unknownParticipant')}
                       </Text>
-                      <Text variant="muted">
-                        {t(`steps.participantStatus.${participant.status}`)}
-                      </Text>
+                      <StatusBadge
+                        status={participant.status}
+                        label={t(`steps.participantStatus.${participant.status}`)}
+                      />
                     </View>
                     <Text>
                       {t('steps.points', { points: participant.points })}
