@@ -1,3 +1,4 @@
+import { appendFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -7,11 +8,26 @@ const exceptions = new Map([
   ['GHSA-86w9-cpqp-85rv', 'node-forge'],
   ['GHSA-rj75-hqrm-r3gf', 'postcss-selector-parser'],
 ]);
+const temporaryExceptions = new Map([
+  ['GHSA-gcqx-w48m-w2h4', { package: 'deepmerge', reviewBy: '2026-11-28' }],
+]);
+// npm currently expands this advisory to <11.0.1, while the maintainer's
+// advisory identifies only 10.2.6. Verify every reported lockfile node so an
+// actually affected version still fails closed.
+const upstreamAffectedVersions = new Map([
+  [
+    'GHSA-g3hv-75wg-m249',
+    { package: 'minimatch', versions: new Set(['10.2.6']) },
+  ],
+]);
 const severities = ['info', 'low', 'moderate', 'high', 'critical'];
 const isObject = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-export function inspectAudit(result) {
+export function inspectAudit(
+  result,
+  { now = new Date(), lockPackages = {} } = {},
+) {
   if (result.error || result.signal || ![0, 1].includes(result.status)) {
     throw new Error(
       `Audit execution failed: ${result.error?.message || result.signal || `exit ${result.status}`}`,
@@ -37,7 +53,32 @@ export function inspectAudit(result) {
     severities.map((severity) => [severity, 0]),
   );
   const accepted = new Set();
-  const unexpected = new Set();
+  const unexpected = new Map();
+
+  function remediationFor(name, fixAvailable) {
+    if (!fixAvailable) return 'npm reports no available fix.';
+    if (fixAvailable === true) {
+      return 'npm reports a fix; review the package-specific version before updating.';
+    }
+    if (!isObject(fixAvailable)) {
+      return 'npm returned an unsupported fix recommendation; review the audit report.';
+    }
+
+    const fixName = fixAvailable.name ?? name;
+    const version = fixAvailable.version;
+    const majorNote = fixAvailable.isSemVerMajor
+      ? ' (major version change; check compatibility)'
+      : '';
+    const recommendation = version
+      ? `${fixName}@${version}${majorNote}`
+      : fixName;
+
+    if (fixName !== name) {
+      return `npm proposes ${recommendation}, which does not replace ${name}.`;
+    }
+
+    return `npm proposes ${recommendation}.`;
+  }
 
   function visit(name, path = new Set()) {
     const entry = entries[name];
@@ -55,14 +96,58 @@ export function inspectAudit(result) {
             via.url,
           );
         const id = match?.[1];
-        if (
-          exceptions.get(id) === name &&
+        const temporaryException = temporaryExceptions.get(id);
+        const upstreamAffected = upstreamAffectedVersions.get(id);
+        const exceptionPackage =
+          exceptions.get(id) ?? temporaryException?.package;
+        const expired =
+          temporaryException !== undefined &&
+          now.toISOString().slice(0, 10) > temporaryException.reviewBy;
+        const installedVersions = Array.isArray(entry.nodes)
+          ? entry.nodes.map((node) => lockPackages[node]?.version)
+          : [];
+        const upstreamRangeCorrectionApplies =
+          upstreamAffected?.package === name &&
+          via.name === name &&
+          via.dependency === name &&
+          installedVersions.length > 0 &&
+          installedVersions.every(
+            (version) =>
+              typeof version === 'string' &&
+              !upstreamAffected.versions.has(version),
+          );
+        if (upstreamRangeCorrectionApplies) {
+          accepted.add(`${name}: ${id}`);
+        } else if (
+          exceptionPackage === name &&
           via.name === name &&
           via.dependency === name
         ) {
-          accepted.add(`${name}: ${id}`);
+          if (expired) {
+            const finding = {
+              package: name,
+              advisory: id,
+              severity: via.severity,
+              affectedRange: via.range ?? entry.range,
+              title: via.title,
+              remediation: remediationFor(name, entry.fixAvailable),
+              reason: `Temporary exception expired after ${temporaryException.reviewBy}.`,
+            };
+            unexpected.set(`${name}:${id}`, finding);
+          } else {
+            accepted.add(`${name}: ${id}`);
+          }
         } else {
-          unexpected.add(`${name}: ${via.url} (${via.severity})`);
+          const advisoryId = id ?? via.url;
+          const finding = {
+            package: name,
+            advisory: advisoryId,
+            severity: via.severity,
+            affectedRange: via.range ?? entry.range,
+            title: via.title,
+            remediation: remediationFor(name, entry.fixAvailable),
+          };
+          unexpected.set(`${name}:${advisoryId}`, finding);
         }
       }
     }
@@ -111,30 +196,153 @@ export function inspectAudit(result) {
       throw new Error(`Unresolved advisory chain: ${name}`);
     }
   }
-  return { accepted: [...accepted].sort(), unexpected: [...unexpected].sort() };
+  return {
+    accepted: [...accepted].sort(),
+    unexpected: [...unexpected.values()].sort((left, right) =>
+      `${left.package}:${left.advisory}`.localeCompare(
+        `${right.package}:${right.advisory}`,
+      ),
+    ),
+  };
 }
 
-export function runAudits(execute = spawnSync, log = console.log) {
+export function runAudits(
+  execute = spawnSync,
+  log = console.log,
+  { now = new Date() } = {},
+) {
+  const failures = [];
+  const auditResults = [];
+  const packageLock = JSON.parse(
+    readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'),
+  );
+  if (!isObject(packageLock.packages)) {
+    throw new Error('package-lock.json does not contain a packages inventory');
+  }
+
   for (const [label, args] of [
     ['Full tree', ['audit', '--json']],
     ['Production tree', ['audit', '--omit=dev', '--json']],
   ]) {
-    const result = execute('npm', args, {
-      cwd: fileURLToPath(new URL('../', import.meta.url)),
-      encoding: 'utf8',
-      timeout: 120_000,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    const findings = inspectAudit(result);
-    log(
-      `${label}: ${findings.accepted.length} accepted, ${findings.unexpected.length} unexpected advisories`,
-    );
-    for (const finding of findings.accepted)
-      log(`  Temporary exception: ${finding}`);
-    for (const finding of findings.unexpected) log(`  Unexpected: ${finding}`);
-    if (findings.unexpected.length)
-      throw new Error(`${label}: unexpected vulnerabilities detected`);
+    try {
+      const result = execute('npm', args, {
+        cwd: fileURLToPath(new URL('../', import.meta.url)),
+        encoding: 'utf8',
+        timeout: 120_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      const findings = inspectAudit(result, {
+        now,
+        lockPackages: packageLock.packages,
+      });
+      auditResults.push({ label, findings });
+      log(
+        `${label}: ${findings.accepted.length} accepted, ${findings.unexpected.length} unexpected advisories`,
+      );
+      for (const finding of findings.accepted) {
+        log(`  Accepted policy finding: ${finding}`);
+      }
+      for (const finding of findings.unexpected) {
+        const detail = [
+          `${finding.package}: ${finding.advisory}`,
+          finding.severity,
+          `affected ${finding.affectedRange}`,
+          finding.title,
+          ...(finding.reason ? [finding.reason] : []),
+          `Remediation: ${finding.remediation}`,
+        ].join(' | ');
+        log(`  Unexpected: ${detail}`);
+        if (process.env.GITHUB_ACTIONS === 'true') {
+          const annotation = detail
+            .replaceAll('%', '%25')
+            .replaceAll('\r', '%0D')
+            .replaceAll('\n', '%0A')
+            .replaceAll(':', '%3A')
+            .replaceAll(',', '%2C');
+          log(`::error title=Vulnerable dependency::${annotation}`);
+        }
+      }
+      if (findings.unexpected.length) {
+        failures.push(`${label}: unexpected vulnerabilities detected`);
+      }
+    } catch (error) {
+      const failure = `${label}: ${error.message}`;
+      failures.push(failure);
+      auditResults.push({ label, error: failure });
+      log(failure);
+    }
   }
+
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (summaryPath) {
+    appendFileSync(summaryPath, formatAuditSummary(auditResults));
+  }
+
+  if (failures.length > 0) {
+    throw new Error(failures.join('\n'));
+  }
+}
+
+export function formatAuditSummary(auditResults) {
+  const lines = [
+    '## Mobile dependency security audit',
+    '',
+    '| Dependency tree | Unexpected advisory status | Accepted known advisories |',
+    '| --- | --- | --- |',
+  ];
+
+  for (const auditResult of auditResults) {
+    if (auditResult.error) {
+      lines.push(
+        `| ${auditResult.label} | Audit failed before policy evaluation | None |`,
+      );
+      continue;
+    }
+
+    const accepted = auditResult.findings.accepted.length
+      ? auditResult.findings.accepted
+          .map((entry) => {
+            const [packageName, advisory] = entry.split(': ');
+            const exception = temporaryExceptions.get(advisory);
+            const reviewNote = upstreamAffectedVersions.has(advisory)
+              ? ' (upstream range correction)'
+              : exception
+                ? ` (review by ${exception.reviewBy})`
+                : ' (existing exception)';
+            return `${packageName} ${advisory}${reviewNote}`;
+          })
+          .join('<br>')
+      : 'None';
+    const status = auditResult.findings.unexpected.length
+      ? 'New or expired advisories require action'
+      : 'No unexpected advisories';
+
+    lines.push(`| ${auditResult.label} | ${status} | ${accepted} |`);
+  }
+
+  const unexpectedFindings = auditResults.flatMap(
+    (auditResult) => auditResult.findings?.unexpected ?? [],
+  );
+  if (unexpectedFindings.length) {
+    lines.push('', '### New or expired advisories requiring action', '');
+    for (const finding of unexpectedFindings) {
+      lines.push(
+        `- **${finding.package} — ${finding.advisory} (${finding.severity})**: ` +
+          `${finding.title}. ${finding.reason ?? finding.remediation}`,
+      );
+    }
+  }
+
+  const auditErrors = auditResults.filter((auditResult) => auditResult.error);
+  if (auditErrors.length) {
+    lines.push('', '### Audit execution errors', '');
+    for (const auditError of auditErrors) {
+      lines.push(`- ${auditError.error}`);
+    }
+  }
+
+  lines.push('');
+  return lines.join('\n');
 }
 
 if (

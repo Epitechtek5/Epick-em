@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react-native';
-import LoginScreen from '../src/screens/LoginScreen';
+import LoginScreen from '../src/screens/auth/LoginScreen';
 import { useAuth } from '../src/features/auth/session';
 import { ApiError } from '../src/lib/api';
 jest.mock('../src/features/auth/session', () => ({ useAuth: jest.fn() }));
@@ -43,4 +43,16 @@ it('submits credentials and displays invalid credentials without exposing secret
     await screen.findByText('Invalid username or password.'),
   ).toBeOnTheScreen();
   expect(screen.queryByText('secret')).toBeNull();
+});
+
+it('trims username boundaries without changing the password', async () => {
+  signIn.mockResolvedValue(undefined);
+  await render(<LoginScreen />);
+  await fireEvent.changeText(screen.getByLabelText('Username'), '  alice  ');
+  await fireEvent.changeText(screen.getByLabelText('Password'), ' pass word ');
+  await fireEvent.press(screen.getByLabelText('Sign in'));
+  expect(signIn).toHaveBeenCalledWith({
+    username: 'alice',
+    password: ' pass word ',
+  });
 });

@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 
 import type { User } from '@/features/auth/types';
+import { normalizeUsername } from '@/features/auth/validation';
 import type { UpdateUserRequest } from '@/features/users/api';
 import {
   validateUserForm,
@@ -76,9 +77,10 @@ export function UserForm({
     if (Object.keys(validation).length > 0) return;
 
     const changes: UpdateUserRequest = {};
+    const normalizedUsername = normalizeUsername(form.username);
 
-    if (form.username !== user.username) {
-      changes.username = form.username;
+    if (normalizedUsername !== user.username) {
+      changes.username = normalizedUsername;
     }
 
     if (form.password) {
