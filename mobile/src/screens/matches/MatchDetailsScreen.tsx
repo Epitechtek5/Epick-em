@@ -4,11 +4,15 @@ import { router } from 'expo-router';
 import { useMatchContext } from '@/features/matches/context';
 import { useMatchAction } from '@/features/matches/use-match-action';
 import { matchApi } from '@/features/matches/api';
-import { playable, detailed } from '@/features/matches/validation';
+import { playable } from '@/features/matches/validation';
 import type { TournamentStep } from '@/features/steps/types';
 import { useAuth } from '@/features/auth/session';
 import { MatchPage, MatchState } from '@/components/matches/MatchPage';
-import { MatchCard, matchNumber } from '@/components/matches/MatchCard';
+import { matchNumber } from '@/components/matches/MatchCard';
+import {
+  MatchScoreboard,
+  ParticipantStats,
+} from '@/components/matches/MatchScoreboard';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { FormMessage } from '@/components/ui/feedback';
@@ -18,6 +22,7 @@ export default function MatchDetailsScreen() {
   const { token, user } = useAuth();
   const state = useMatchContext();
   const action = useMatchAction();
+  const [more, setMore] = useState(false);
   const [notice, setNotice] = useState('');
   const [nextStep, setNextStep] = useState<TournamentStep | null>(null);
   const { data, tournamentId, stepId } = state;
@@ -82,35 +87,7 @@ export default function MatchDetailsScreen() {
           </Text>
         </Button>
       )}
-      <MatchCard match={match} context={data} />
-      {match.participants.map((p) => {
-        const totals = detailed(p.stats) ? p.stats.total : p.stats;
-        const players = detailed(p.stats)
-          ? Object.entries(p.stats.players ?? {})
-          : [];
-
-        return Object.keys(totals).length || players.length ? (
-          <View key={p.participant_id} className="gap-1">
-            <Text>
-              {data.names[p.participant_id] ?? t('steps.unknownParticipant')} ·{' '}
-              {t('matches.stats')}
-              {'\n'}
-              {Object.entries(totals)
-                .map(([key, value]) => key + ' · ' + value)
-                .join('\n')}
-            </Text>
-            {players.map(([id, stats]) => (
-              <Text key={id} variant="muted">
-                {data.playerNames[id] ?? t('steps.unknownParticipant')}
-                {' · '}
-                {Object.entries(stats)
-                  .map(([key, value]) => key + ' ' + value)
-                  .join(' · ')}
-              </Text>
-            ))}
-          </View>
-        ) : null;
-      })}
+      <MatchScoreboard match={match} data={data} />
       {successor && (
         <Button
           variant="outline"
@@ -131,21 +108,17 @@ export default function MatchDetailsScreen() {
         </Button>
       )}
       {manage && open && (
-        <>
+        <View className="gap-2">
+          {match.status === 'scheduled' && (
+            <Button
+              disabled={action.busy || !ready}
+              onPress={() => confirm('ongoing')}
+            >
+              <Text>{t('matches.action.ongoing')}</Text>
+            </Button>
+          )}
           <Button
-            variant="outline"
-            disabled={action.busy}
-            onPress={() =>
-              router.push({
-                pathname:
-                  '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/edit',
-                params,
-              })
-            }
-          >
-            <Text>{t('matches.edit')}</Text>
-          </Button>
-          <Button
+            variant={match.status === 'scheduled' ? 'outline' : 'default'}
             disabled={action.busy || !match.participants.length}
             onPress={() =>
               router.push({
@@ -157,37 +130,80 @@ export default function MatchDetailsScreen() {
           >
             <Text>{t('matches.results')}</Text>
           </Button>
-          {match.status === 'scheduled' && (
+          {match.status === 'ongoing' && (
             <Button
+              variant="outline"
               disabled={action.busy || !ready}
-              onPress={() => confirm('ongoing')}
+              onPress={() => confirm('finished')}
             >
-              <Text>{t('matches.action.ongoing')}</Text>
+              <Text>{t('matches.action.finished')}</Text>
             </Button>
           )}
-          <Button
-            disabled={action.busy || !ready}
-            onPress={() => confirm('finished')}
-          >
-            <Text>{t('matches.action.finished')}</Text>
-          </Button>
-          <Button
-            variant="outline"
-            disabled={action.busy}
-            onPress={() => confirm('cancelled')}
-          >
-            <Text>{t('matches.action.cancelled')}</Text>
-          </Button>
-        </>
+        </View>
       )}
+      {match.participants.map((score) => (
+        <ParticipantStats
+          key={score.participant_id}
+          score={score}
+          data={data}
+        />
+      ))}
       {manage && match.status !== 'finished' && (
-        <Button
-          variant="destructive"
-          disabled={action.busy}
-          onPress={() => confirm('delete')}
-        >
-          <Text>{t('matches.action.delete')}</Text>
-        </Button>
+        <View className="gap-2 border-t border-border pt-2">
+          <Button
+            variant="ghost"
+            accessibilityState={{ expanded: more }}
+            onPress={() => setMore(!more)}
+          >
+            <Text>{t('matches.manage')}</Text>
+          </Button>
+          {more && (
+            <>
+              {open && (
+                <Button
+                  variant="outline"
+                  disabled={action.busy}
+                  onPress={() =>
+                    router.push({
+                      pathname:
+                        '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/edit',
+                      params,
+                    })
+                  }
+                >
+                  <Text>{t('matches.edit')}</Text>
+                </Button>
+              )}
+              {match.status === 'scheduled' && (
+                <Button
+                  variant="outline"
+                  disabled={action.busy || !ready}
+                  onPress={() => confirm('finished')}
+                >
+                  <Text>{t('matches.action.finished')}</Text>
+                </Button>
+              )}
+              {open && (
+                <Button
+                  variant="ghost"
+                  disabled={action.busy}
+                  onPress={() => confirm('cancelled')}
+                >
+                  <Text>{t('matches.action.cancelled')}</Text>
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                disabled={action.busy}
+                onPress={() => confirm('delete')}
+              >
+                <Text className="text-destructive">
+                  {t('matches.action.delete')}
+                </Text>
+              </Button>
+            </>
+          )}
+        </View>
       )}
     </MatchPage>
   );

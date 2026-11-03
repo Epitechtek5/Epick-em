@@ -63,6 +63,7 @@ const groupMatch = {
 };
 const context: MatchContext = {
   playerNames: {},
+  statDefinitions: [],
   step: {
     id: stepId,
     tournament_id: tournamentId,
@@ -168,12 +169,12 @@ it('shows the server winner, points and a neutral missing identity to readers', 
     .mocked(useMatchContext)
     .mockReturnValue(resource({ ...context, match: finished }));
   await render(<MatchDetailsScreen />);
-  expect(screen.getByText('#1 Falcons · Win · 3 pts')).toBeTruthy();
+  expect(screen.getByText('#1  Falcons')).toBeTruthy();
   expect(
-    screen.getByText(
-      '#2 ' + i18n.t('steps.unknownParticipant') + ' · Loss · 0 pts',
-    ),
+    screen.getByText('#2  ' + i18n.t('steps.unknownParticipant')),
   ).toBeTruthy();
+  expect(screen.getByText('Win')).toBeTruthy();
+  expect(screen.getByText('3 pts')).toBeTruthy();
   expect(screen.queryByText('Enter results')).toBeNull();
   expect(screen.queryByText('Delete match')).toBeNull();
 });
@@ -229,6 +230,10 @@ it('saves team totals and registered player stats without computing points', asy
     json: async () => groupMatch,
   } as Response);
   await render(<MatchResultsScreen />);
+  await fireEvent.press(
+    screen.getByLabelText('Enter statistics for: Team total'),
+  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Player One' }));
   await fireEvent.changeText(screen.getByLabelText('Player One · Kills'), '2');
   await fireEvent.press(screen.getByText('Save changes'));
   await waitFor(() => expect(router.back).toHaveBeenCalled());
@@ -343,5 +348,5 @@ it('displays imported points even when the match has no statistic entries or pla
     .mocked(useMatchContext)
     .mockReturnValue(resource({ ...context, match: imported }));
   await render(<MatchDetailsScreen />);
-  expect(screen.getByText('Falcons · 3 pts')).toBeTruthy();
+  expect(screen.getByText('3 pts')).toBeTruthy();
 });

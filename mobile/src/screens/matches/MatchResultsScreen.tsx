@@ -64,6 +64,8 @@ function ResultEditor({
 }) {
   const { t } = useTranslation();
   const action = useMatchAction();
+  const [selected, setSelected] = useState(0);
+  const [playerId, setPlayerId] = useState('');
   const load = useCallback(
     (access: string) => loadResultConfig(access, context, match),
     [match, context],
@@ -146,56 +148,85 @@ function ResultEditor({
       router.back();
     });
   }
+  const p = draft[selected];
+  const name = context.names[p?.id] ?? t('steps.unknownParticipant');
+  const members = supportsTeamStats && p ? (rosters[p.id] ?? []) : [];
+  const change = (patch: Partial<typeof p>) =>
+    setDraft((prev) =>
+      prev.map((row, i) =>
+        i === selected ? { ...row, ...patch, changed: true } : row,
+      ),
+    );
   return (
     <MatchPage>
-      {draft.map((p, index) => {
-        const name = context.names[p.id] ?? t('steps.unknownParticipant');
-        const change = (patch: Partial<typeof p>) =>
-          setDraft((prev) =>
-            prev.map((row, i) =>
-              i === index ? { ...row, ...patch, changed: true } : row,
-            ),
-          );
-        return (
-          <View
-            key={p.id}
-            className="gap-3 rounded-lg border border-border bg-card p-3"
+      <Text className="text-lg font-semibold">{t('matches.participants')}</Text>
+      <View className="flex-row flex-wrap gap-2">
+        {draft.map((item, index) => (
+          <Button
+            key={item.id}
+            size="sm"
+            variant={index === selected ? 'secondary' : 'outline'}
+            accessibilityState={{ selected: index === selected }}
+            onPress={() => {
+              setSelected(index);
+              setPlayerId('');
+            }}
           >
-            <Text className="font-semibold">{name}</Text>
-            {fields(p.total, (total) => change({ total }), name)}
-            {supportsTeamStats &&
-              rosters[p.id]?.map((player) => (
-                <View key={player.id} className="gap-2">
-                  <Text>{player.name ?? t('steps.unknownParticipant')}</Text>
-                  {fields(
-                    p.players[player.id] ?? {},
-                    (values) =>
-                      change({
-                        players: { ...p.players, [player.id]: values },
-                      }),
-                    player.name ?? t('steps.unknownParticipant'),
-                  )}
-                </View>
-              ))}
-            <Text>{t('matches.rank')}</Text>
-            <Input
-              accessibilityLabel={name + ' · ' + t('matches.rank')}
-              keyboardType="number-pad"
-              value={p.rank}
-              onChangeText={(rank) => change({ rank })}
-            />
+            <Text>
+              {context.names[item.id] ?? t('steps.unknownParticipant')}
+              {item.changed ? ' •' : ''}
+            </Text>
+          </Button>
+        ))}
+      </View>
+      {p && (
+        <View className="gap-3 rounded-xl border border-border bg-card p-4">
+          <Text className="text-lg font-semibold">{name}</Text>
+          {members.length > 0 && (
             <StepOptionSelect
-              label={t('matches.outcomeLabel')}
-              value={p.result}
-              options={['', ...outcomes]}
-              labelFor={(v) =>
-                v ? t('matches.outcome.' + v) : t('matches.unset')
+              label={t('matches.entryScope')}
+              value={playerId}
+              options={['', ...members.map((m) => m.id)]}
+              labelFor={(id) =>
+                id
+                  ? (members.find((m) => m.id === id)?.name ??
+                    t('steps.unknownParticipant'))
+                  : t('matches.teamTotals')
               }
-              onSelect={(result) => change({ result })}
+              onSelect={setPlayerId}
             />
-          </View>
-        );
-      })}
+          )}
+          {playerId
+            ? fields(
+                p.players[playerId] ?? {},
+                (values) =>
+                  change({ players: { ...p.players, [playerId]: values } }),
+                members.find((m) => m.id === playerId)?.name ??
+                  t('steps.unknownParticipant'),
+              )
+            : fields(p.total, (total) => change({ total }), name)}
+          {!playerId && (
+            <View className="gap-2 border-t border-border pt-3">
+              <Text>{t('matches.rank')}</Text>
+              <Input
+                accessibilityLabel={name + ' · ' + t('matches.rank')}
+                keyboardType="number-pad"
+                value={p.rank}
+                onChangeText={(rank) => change({ rank })}
+              />
+              <StepOptionSelect
+                label={t('matches.outcomeLabel')}
+                value={p.result}
+                options={['', ...outcomes]}
+                labelFor={(v) =>
+                  v ? t('matches.outcome.' + v) : t('matches.unset')
+                }
+                onSelect={(result) => change({ result })}
+              />
+            </View>
+          )}
+        </View>
+      )}
       {action.error && <FormMessage>{t(action.error)}</FormMessage>}
       <Button
         disabled={action.busy || !draft.some((row) => row.changed)}

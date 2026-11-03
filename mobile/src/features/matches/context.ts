@@ -7,6 +7,7 @@ import { getTournamentTeam } from '@/features/teams/api';
 import { useGameResource } from '@/features/games/use-game-resource';
 import { ApiError } from '@/lib/api';
 import { detailed } from './validation';
+import { listGameStats } from '@/features/stats/api';
 import { matchApi } from './api';
 import type { MatchStatus } from './types';
 
@@ -84,7 +85,16 @@ export function useMatchContext(group_id?: string, status?: MatchStatus) {
           }
         }),
       );
+      const statDefinitions = match?.participants.some(
+        (p) => Object.keys(p.stats).length,
+      )
+        ? await listGameStats(token, match.game_id).catch((error: unknown) => {
+            if (error instanceof ApiError && error.status === 401) throw error;
+            return [];
+          })
+        : [];
       return {
+        statDefinitions,
         playerNames,
         step,
         groups,

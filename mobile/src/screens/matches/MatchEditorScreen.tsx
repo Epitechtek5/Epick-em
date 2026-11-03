@@ -140,6 +140,7 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
       {elimination(step) && (
         <StepOptionSelect
           label={t('matches.next')}
+          description={t('matches.nextHelp')}
           value={next}
           options={[
             '',
@@ -150,7 +151,7 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
               ? t('matches.number', {
                   number: data.matches.findIndex((m) => m.id === id) + 1,
                 })
-              : t('matches.unset')
+              : t('matches.noNext')
           }
           onSelect={setNext}
         />

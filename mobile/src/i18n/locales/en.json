@@ -370,7 +370,10 @@
       "finished": "Finished",
       "cancelled": "Cancelled"
     },
-    "participantType": { "solo": "Solo", "team": "Team" },
+    "participantType": {
+      "solo": "Solo",
+      "team": "Team"
+    },
     "participantStatus": {
       "registered": "Registered",
       "checked_in": "Checked in",
@@ -422,7 +425,10 @@
       "success": "Registration completed successfully.",
       "checkedIn": "Check-in completed successfully."
     },
-    "scoringMode": { "linear": "Linear", "table": "Table" },
+    "scoringMode": {
+      "linear": "Linear",
+      "table": "Table"
+    },
     "validation": {
       "game": "Select a game.",
       "name": "Enter a name of 1–128 characters.",
@@ -560,7 +566,7 @@
     "roundNumber": "Round {{round}}",
     "unknownRound": "Round unassigned",
     "round": "Round (1–1,000)",
-    "next": "Winner advances to",
+    "next": "Next match for the winner",
     "outside": "Match outside this view",
     "empty": "No matches for this selection.",
     "awaiting": "Awaiting participant",
@@ -611,7 +617,14 @@
       "bracket": "Bracket regions require double elimination.",
       "next": "Select another match in this elimination stage.",
       "participants": "Choose distinct group members within the match capacity."
-    }
+    },
+    "manage": "Match options",
+    "entryScope": "Enter statistics for",
+    "teamTotals": "Team total",
+    "showPlayers": "Player breakdown ({{count}})",
+    "hidePlayers": "Hide player breakdown",
+    "noNext": "No next match",
+    "nextHelp": "Choose an existing match to receive the winner. Leave this empty for a final."
   },
   "steps": {
     "title": "Tournament stages",
