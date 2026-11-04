@@ -4,6 +4,7 @@ import {
   CheckmarkCircle02Icon,
   RefreshIcon,
   UserAdd01Icon,
+  UserMultiple02Icon,
   UserRemove01Icon,
 } from '@hugeicons/core-free-icons'
 import { useState, type FormEvent } from 'react'
@@ -32,6 +33,7 @@ import { participantStatusLabelKey } from '@/features/tournaments/labels'
 import {
   canActOn,
   canCheckIn,
+  isActive,
   registrationWindow,
   withdrawalMode,
 } from '@/features/tournaments/lifecycle'
@@ -47,6 +49,10 @@ import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n, type MessageKey, type Params } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
+import { cn } from '@/lib/utils'
+import { PARTICIPANT_TONES } from './tones'
+import { Avatar, EmptyState, SectionCard } from './ui'
+
 
 interface Feedback {
   kind: 'success' | 'error'
@@ -111,17 +117,44 @@ export function ParticipantsSection({ tournament, teams, teamsReady, onChanged }
 
   const registration = registrationWindow(tournament)
 
+  // Jauge de places : seulement quand toute la liste tient sur la première page (compte exact).
+  const complete = state.status === 'success' && page === 1 && !hasNext
+  const activeCount = participants.filter((p) => isActive(p.status)).length
+  const fill = Math.min(100, Math.round((activeCount / Math.max(1, tournament.max_participants)) * 100))
+
   return (
-    <section aria-labelledby="participants-title" className="grid gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="participants-title" className="text-lg font-semibold">
-          {t('tournaments.participants.title')}
-        </h2>
+    <SectionCard
+      id="participants-title"
+      icon={UserMultiple02Icon}
+      title={t('tournaments.participants.title')}
+      subtitle={
+        complete
+          ? t('tournaments.participants.spots', { count: activeCount, max: tournament.max_participants })
+          : undefined
+      }
+      actions={
         <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
           <Icon icon={RefreshIcon} />
           {t('tournaments.participants.refresh')}
         </Button>
-      </div>
+      }
+    >
+      {complete ? (
+        <div
+          role="meter"
+          aria-label={t('tournaments.participants.capacityMeter')}
+          aria-valuemin={0}
+          aria-valuemax={tournament.max_participants}
+          aria-valuenow={activeCount}
+          aria-valuetext={t('tournaments.participants.spots', { count: activeCount, max: tournament.max_participants })}
+          className="h-2 overflow-hidden rounded-full bg-muted"
+        >
+          <div
+            className={cn('h-full rounded-full transition-[width]', fill >= 100 ? 'bg-red-500' : fill >= 80 ? 'bg-amber-500' : 'bg-primary')}
+            style={{ width: `${fill}%` }}
+          />
+        </div>
+      ) : null}
 
       {feedback ? <StateMessage kind={feedback.kind}>{t(feedback.key, feedback.params)}</StateMessage> : null}
 
@@ -140,7 +173,7 @@ export function ParticipantsSection({ tournament, teams, teamsReady, onChanged }
           }
         />
       ) : (
-        <p className="rounded-lg border border-border p-3 text-sm">
+        <p className="rounded-xl bg-muted px-4 py-3 text-sm">
           {t(
             registration === 'notYetOpen'
               ? 'tournaments.participants.notYetOpen'
@@ -172,13 +205,13 @@ export function ParticipantsSection({ tournament, teams, teamsReady, onChanged }
       ) : null}
 
       {state.status === 'success' && participants.length === 0 ? (
-        <StateMessage kind="empty">
+        <EmptyState icon={UserMultiple02Icon}>
           {page > 1 ? t('tournaments.participants.emptyPage') : t('tournaments.participants.empty')}
-        </StateMessage>
+        </EmptyState>
       ) : null}
 
       {participants.length > 0 ? (
-        <ul aria-label={t('tournaments.participants.list')} className="grid gap-2">
+        <ul aria-label={t('tournaments.participants.list')} className="grid divide-y overflow-hidden rounded-xl ring-1 ring-foreground/10">
           {participants.map((participant) => (
             <ParticipantRow
               key={`${participant.id}-${participant.status}`}
@@ -188,6 +221,7 @@ export function ParticipantsSection({ tournament, teams, teamsReady, onChanged }
               team={participant.tournament_team_id ? teamMap.get(participant.tournament_team_id) : undefined}
               canAct={canActOn(participant, userId, isAdmin, teamMap)}
               isAdmin={isAdmin}
+              own={canActOn(participant, userId, false, teamMap)}
               busy={busy}
               onCheckIn={(name) =>
                 mutate(participant.id, () => checkInParticipant(tournament.id, participant.id), {
@@ -233,7 +267,7 @@ export function ParticipantsSection({ tournament, teams, teamsReady, onChanged }
           </Button>
         </nav>
       ) : null}
-    </section>
+    </SectionCard>
   )
 }
 
@@ -244,6 +278,8 @@ interface ParticipantRowProps {
   team?: TournamentTeam
   canAct: boolean
   isAdmin: boolean
+  // Inscription du compte connecté (ou de son équipe) : « Se retirer » plutôt que « Retirer ».
+  own: boolean
   busy: string | null
   onCheckIn: (name: string) => void
   onWithdraw: (name: string, mode: 'delete' | 'status') => void
@@ -257,6 +293,7 @@ function ParticipantRow({
   team,
   canAct,
   isAdmin,
+  own,
   busy,
   onCheckIn,
   onWithdraw,
@@ -269,25 +306,40 @@ function ParticipantRow({
   const rowBusy = busy === participant.id
 
   return (
-    <li className="flex flex-wrap items-center justify-between gap-3 rounded-lg px-3 py-2 ring-1 ring-foreground/10">
-      <div className="grid min-w-0">
-        <span className="font-medium break-words">{name}</span>
-        <span className="text-sm text-muted-foreground">
-          {t('tournaments.participants.statusLabel')} : {t(participantStatusLabelKey(participant.status))}
-          {' · '}
+    <li className={cn('flex flex-wrap items-center justify-between gap-3 bg-card px-4 py-3', !isActive(participant.status) && 'bg-muted/40')}>
+      <div className="flex min-w-0 items-center gap-3">
+        <Avatar name={name} />
+        <div className="grid min-w-0 gap-0.5">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className={cn('font-semibold break-words', !isActive(participant.status) && 'text-muted-foreground line-through decoration-1')}>
+            {name}
+          </span>
+          {own ? <span className="text-xs text-muted-foreground">({t('teams.you')})</span> : null}
+          <span
+            className={cn(
+              'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset',
+              PARTICIPANT_TONES[participant.status],
+            )}
+          >
+            <span className="sr-only">{t('tournaments.participants.statusLabel')} : </span>
+            {t(participantStatusLabelKey(participant.status))}
+          </span>
+        </span>
+        <span className="text-xs text-muted-foreground">
           {t('tournaments.participants.registeredAt', { date: formatDateTime(lang, participant.registered_at) })}
         </span>
         {participant.tournament_team_id ? (
-          <span className="text-sm text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             {participant.user_id ? `${t('tournaments.participants.forTeam')} : ` : `${t('tournaments.participants.team')} : `}
             <Link
               to={`/tournament-teams/${participant.tournament_team_id}`}
-              className="text-primary underline underline-offset-4"
+              className="text-primary underline underline-offset-4 dark:text-violet-300"
             >
               {team?.name ?? t('tournaments.participants.unknownTeam')}
             </Link>
           </span>
         ) : null}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-end gap-2">
@@ -309,7 +361,7 @@ function ParticipantRow({
             size="sm"
             variant="destructive"
             icon={UserRemove01Icon}
-            label={t('tournaments.participants.withdraw')}
+            label={t(own ? 'tournaments.participants.withdraw' : 'tournaments.participants.remove')}
             busyLabel={t('tournaments.participants.working')}
             triggerAriaLabel={t('tournaments.participants.withdrawFor', { name })}
             title={t('tournaments.participants.confirmWithdrawTitle')}
@@ -440,7 +492,7 @@ function RegisterForm({
     <form
       aria-labelledby="register-title"
       onSubmit={submit}
-      className="grid gap-3 rounded-xl p-4 ring-1 ring-foreground/10"
+      className="grid gap-3 rounded-xl bg-primary/5 p-4 ring-1 ring-primary/20 dark:bg-primary/15"
     >
       <h3 id="register-title" className="text-base font-semibold">
         {t('tournaments.participants.registerTitle')}
@@ -499,7 +551,7 @@ function RegisterForm({
           : teamsReady && eligibleTeams.length === 0
             ? t('tournaments.participants.noOwnedTeam')
             : t('tournaments.participants.teamHint')}{' '}
-        <Link to={`/tournaments/${tournament.id}/teams`} className="text-primary underline underline-offset-4">
+        <Link to={`/tournaments/${tournament.id}/teams`} className="text-primary underline underline-offset-4 dark:text-violet-300">
           {t('tournaments.participants.manageTeams')}
         </Link>
       </p>

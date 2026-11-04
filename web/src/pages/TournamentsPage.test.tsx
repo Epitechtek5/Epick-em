@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { GAME_A, GAME_B, jsonResponse, renderApp, routeFetch, signInAs } from '@/test/render'
-import { SOLO, TEAM_CUP } from '@/test/tournaments'
+import { fullText, SOLO, TEAM_CUP } from '@/test/tournaments'
 
 function server(tournaments: unknown[] = [SOLO, { ...TEAM_CUP, game_id: GAME_B.id }]) {
   return routeFetch((path) => {
@@ -35,14 +35,13 @@ describe('TournamentsPage', () => {
     const link = await screen.findByRole('link', { name: 'TFT Open' })
     expect(link).toHaveAttribute('href', `/tournaments/${SOLO.id}`)
     const card = link.closest('li')!
-    expect(within(card).getByText('Statut : Inscriptions')).toBeInTheDocument()
+    expect(within(card).getByText(fullText('Statut : Inscriptions'))).toBeInTheDocument()
     expect(await within(card).findByText(GAME_A.name)).toBeInTheDocument()
-    expect(within(card).getByText('Solo')).toBeInTheDocument()
-    expect(within(card).getByText('32')).toBeInTheDocument()
-    expect(within(card).getByText(/^du .* au /)).toBeInTheDocument()
+    expect(within(card).getByText(fullText('Solo · 32 joueurs maximum'))).toBeInTheDocument()
+    expect(within(card).getByText(fullText(/^14.*15 nov\. 2026$/))).toBeInTheDocument()
     const team = screen.getByRole('link', { name: 'Team Cup' }).closest('li')!
-    expect(within(team).getByText('Statut : Brouillon')).toBeInTheDocument()
-    expect(within(team).getByText('Équipes · 2 joueurs par équipe')).toBeInTheDocument()
+    expect(within(team).getByText(fullText('Statut : Brouillon'))).toBeInTheDocument()
+    expect(within(team).getByText(fullText('Équipes de 2 · 8 équipes maximum'))).toBeInTheDocument()
     expect(tournamentCalls(fetchMock)[0]).toBe('/api/tournaments?limit=13&offset=0')
   })
 
@@ -53,7 +52,9 @@ describe('TournamentsPage', () => {
     renderApp('/tournaments')
     await screen.findByRole('link', { name: 'TFT Open' })
 
-    await user.selectOptions(screen.getByLabelText('Statut'), 'ongoing')
+    const filters = screen.getByRole('group', { name: 'Statut' })
+    await user.click(within(filters).getByRole('button', { name: 'En cours' }))
+    expect(within(filters).getByRole('button', { name: /En cours/ })).toHaveAttribute('aria-pressed', 'true')
     await screen.findByRole('link', { name: 'TFT Open' })
     expect(tournamentCalls(fetchMock).at(-1)).toBe('/api/tournaments?limit=13&offset=0&status=ongoing')
 

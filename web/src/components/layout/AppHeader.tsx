@@ -30,7 +30,7 @@ export function AppHeader() {
         </Link>
         {isAuthenticated ? (
           <nav aria-label={t('nav.main')}>
-            <ul className="flex items-center gap-1">
+            <ul className="flex flex-wrap items-center gap-1">
               {NAV_ITEMS.map((item) => (
                 <li key={item.to}>
                   <NavLink

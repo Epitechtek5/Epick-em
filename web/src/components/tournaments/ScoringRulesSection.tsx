@@ -1,4 +1,4 @@
-import { Add01Icon, Delete02Icon, Edit02Icon } from '@hugeicons/core-free-icons'
+import { Add01Icon, Calculator01Icon, Delete02Icon, Edit02Icon } from '@hugeicons/core-free-icons'
 import { useId, useState, type FormEvent } from 'react'
 
 import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog'
@@ -32,6 +32,7 @@ import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useI18n, type MessageKey, type Params } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
+import { Chip, EmptyState, SectionCard } from './ui'
 
 interface Feedback {
   kind: 'success' | 'error'
@@ -78,13 +79,14 @@ export function ScoringRulesSection({ tournament }: { tournament: Tournament }) 
   }
 
   return (
-    <section aria-labelledby="scoring-title" className="grid gap-3">
-      <h2 id="scoring-title" className="text-lg font-semibold">
-        {t('tournaments.scoring.title')}
-      </h2>
-      <p className="text-sm text-muted-foreground">{t('tournaments.scoring.hint')}</p>
+    <SectionCard
+      id="scoring-title"
+      icon={Calculator01Icon}
+      title={t('tournaments.scoring.title')}
+      subtitle={t('tournaments.scoring.hint')}
+    >
       {isAdmin && !editable ? (
-        <p className="rounded-lg border border-border p-3 text-sm">{t('tournaments.scoring.locked')}</p>
+        <p className="rounded-xl bg-muted px-4 py-3 text-sm">{t('tournaments.scoring.locked')}</p>
       ) : null}
 
       {feedback ? <StateMessage kind={feedback.kind}>{t(feedback.key, feedback.params)}</StateMessage> : null}
@@ -103,18 +105,18 @@ export function ScoringRulesSection({ tournament }: { tournament: Tournament }) 
         </StateMessage>
       ) : null}
       {state.status === 'success' && rules.length === 0 ? (
-        <StateMessage kind="empty">{t('tournaments.scoring.empty')}</StateMessage>
+        <EmptyState icon={Calculator01Icon}>{t('tournaments.scoring.empty')}</EmptyState>
       ) : null}
 
       {rules.length > 0 ? (
-        <ul aria-label={t('tournaments.scoring.list')} className="grid gap-2">
+        <ul aria-label={t('tournaments.scoring.list')} className="grid items-start gap-3 md:grid-cols-2">
           {rules.map((rule) => {
             const label = statLabel(rule.stat_id)
             return (
-              <li key={rule.id} className="grid gap-2 rounded-lg px-3 py-2 ring-1 ring-foreground/10">
+              <li key={rule.id} className="grid content-start gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="grid min-w-0">
-                    <span className="font-medium break-words">{label}</span>
+                  <div className="grid min-w-0 gap-2">
+                    <span className="font-semibold break-words">{label}</span>
                     <RuleSummary rule={rule} />
                   </div>
                   {editable ? (
@@ -191,7 +193,7 @@ export function ScoringRulesSection({ tournament }: { tournament: Tournament }) 
           }
         />
       ) : null}
-    </section>
+    </SectionCard>
   )
 }
 
@@ -199,28 +201,31 @@ function RuleSummary({ rule }: { rule: ScoringRule }) {
   const { t, lang } = useI18n()
   if (rule.mode === 'linear') {
     return (
-      <span className="text-sm text-muted-foreground">
-        {t(scoringModeLabelKey('linear'))} : {t('tournaments.scoring.linearSummary', { coefficient: formatPoints(lang, rule.coefficient ?? 0) })}
+      <span className="flex flex-wrap items-center gap-2 text-sm">
+        <Chip>{t(scoringModeLabelKey('linear'))}</Chip>
+        <span>{t('tournaments.scoring.linearSummary', { coefficient: formatPoints(lang, rule.coefficient ?? 0) })}</span>
       </span>
     )
   }
   const rows = pointsRows(rule.points_table)
   return (
-    <div className="grid gap-1 text-sm text-muted-foreground">
-      <span>{t(scoringModeLabelKey('table'))} :</span>
-      <table className="w-fit text-left">
+    <div className="grid gap-2 text-sm">
+      <span>
+        <Chip>{t(scoringModeLabelKey('table'))}</Chip>
+      </span>
+      <table className="w-fit overflow-hidden rounded-lg text-left ring-1 ring-foreground/10">
         <caption className="sr-only">{t('tournaments.scoring.tableCaption')}</caption>
-        <thead>
+        <thead className="bg-muted/60">
           <tr>
-            <th scope="col" className="pr-4 font-medium">{t('tournaments.scoring.value')}</th>
-            <th scope="col" className="font-medium">{t('tournaments.scoring.points')}</th>
+            <th scope="col" className="px-3 py-1.5 font-medium">{t('tournaments.scoring.value')}</th>
+            <th scope="col" className="px-3 py-1.5 font-medium">{t('tournaments.scoring.points')}</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.value}>
-              <td className="pr-4 font-mono">{row.value}</td>
-              <td className="font-mono">{row.points}</td>
+            <tr key={row.value} className="border-t">
+              <td className="px-3 py-1 font-mono">{row.value}</td>
+              <td className="px-3 py-1 font-mono font-semibold">{row.points}</td>
             </tr>
           ))}
         </tbody>
@@ -277,7 +282,7 @@ function AddRuleForm({
   }
 
   return (
-    <div className="grid gap-3 rounded-xl p-4 ring-1 ring-foreground/10">
+    <div className="grid gap-3 rounded-xl bg-primary/5 p-4 ring-1 ring-primary/20 dark:bg-primary/15">
       <h3 className="text-base font-semibold">{t('tournaments.scoring.add')}</h3>
       <div className="grid gap-1 sm:max-w-sm">
         <Label htmlFor="rule-stat">{t('tournaments.scoring.stat')}</Label>

@@ -1,4 +1,4 @@
-import { RefreshIcon } from '@hugeicons/core-free-icons'
+import { Award01Icon, Medal01Icon, RefreshIcon } from '@hugeicons/core-free-icons'
 import { Link } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
@@ -14,6 +14,44 @@ import type { Tournament } from '@/features/tournaments/types'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n } from '@/i18n/context'
+import { cn } from '@/lib/utils'
+import { Avatar, EmptyState, SectionCard } from './ui'
+
+// Marches du podium : l'ordre visuel 2-1-3, le rang reste écrit (jamais la couleur seule).
+const MEDALS: Record<number, { tone: string; height: string }> = {
+  1: { tone: 'bg-amber-100 text-amber-900 ring-amber-500/40 dark:bg-amber-400/20 dark:text-amber-100', height: 'sm:min-h-56' },
+  2: { tone: 'bg-slate-100 text-slate-800 ring-slate-400/40 dark:bg-slate-400/20 dark:text-slate-100', height: 'sm:min-h-48' },
+  3: { tone: 'bg-orange-100 text-orange-900 ring-orange-500/40 dark:bg-orange-400/20 dark:text-orange-100', height: 'sm:min-h-44' },
+}
+
+function Podium({ entries }: { entries: Array<{ key: string; rank: number; name: string; points: string }> }) {
+  const { t } = useI18n()
+  const top = entries.filter((entry) => entry.rank <= 3).slice(0, 3)
+  if (top.length === 0) return null
+  // Le premier au centre sur grand écran ; ordre naturel (1, 2, 3) pour les lecteurs d'écran et le mobile.
+  const order = (rank: number) => (rank === 1 ? 'sm:order-2' : rank === 2 ? 'sm:order-1' : 'sm:order-3')
+  return (
+    <ol aria-label={t('tournaments.ranking.podium')} className="grid gap-3 sm:grid-cols-3 sm:items-end">
+      {top.map((entry) => {
+        const medal = MEDALS[entry.rank] ?? MEDALS[3]
+        return (
+          <li
+            key={entry.key}
+            className={cn('flex flex-col items-center justify-end gap-2 rounded-2xl p-4 text-center ring-1 ring-inset', medal.tone, medal.height, order(entry.rank))}
+          >
+            <Avatar name={entry.name} className="size-12 bg-white/70 text-sm text-current ring-2 ring-current/20 dark:bg-black/20" />
+            <span className="max-w-full truncate font-semibold">{entry.name}</span>
+            <span className="text-sm">{t('tournaments.ranking.pointsValue', { points: entry.points })}</span>
+            <span className="inline-flex items-center gap-1 text-xs font-bold">
+              <Icon icon={Medal01Icon} size={14} />
+              {entry.rank === 1 ? t('tournaments.ranking.placeFirst') : t('tournaments.ranking.place', { rank: entry.rank })}
+            </span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
 
 // Classements tels que renvoyés par le serveur (GET /ranking et /team-ranking), dans leur ordre :
 // rien n'est recalculé côté client. `version` change après une inscription pour forcer la relecture.
@@ -47,18 +85,18 @@ export function RankingSection({
   }
 
   return (
-    <section aria-labelledby="ranking-title" className="grid gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="ranking-title" className="text-lg font-semibold">
-          {t('tournaments.ranking.title')}
-        </h2>
+    <SectionCard
+      id="ranking-title"
+      icon={Award01Icon}
+      title={t('tournaments.ranking.title')}
+      subtitle={t('tournaments.ranking.hint')}
+      actions={
         <Button variant="outline" size="sm" onClick={refresh}>
           <Icon icon={RefreshIcon} />
           {t('tournaments.ranking.refresh')}
         </Button>
-      </div>
-      <p className="text-sm text-muted-foreground">{t('tournaments.ranking.hint')}</p>
-
+      }
+    >
       {solo ? (
         <div className="grid gap-2">
           <h3 className="text-base font-semibold">{t('tournaments.ranking.players')}</h3>
@@ -78,32 +116,42 @@ export function RankingSection({
             </StateMessage>
           ) : null}
           {players.state.status === 'success' && playerRows.length === 0 ? (
-            <StateMessage kind="empty">{t('tournaments.ranking.emptyPlayers')}</StateMessage>
+            <EmptyState icon={Award01Icon}>{t('tournaments.ranking.emptyPlayers')}</EmptyState>
           ) : null}
           {playerRows.length > 0 ? (
-            <div className="overflow-x-auto">
+            <Podium
+              entries={playerRows.map((row) => ({
+                key: row.participant_id,
+                rank: row.rank,
+                name: names[row.user_id] ?? t('teams.unknownUser'),
+                points: formatPoints(lang, row.points),
+              }))}
+            />
+          ) : null}
+          {playerRows.length > 0 ? (
+            <div className="overflow-x-auto rounded-xl ring-1 ring-foreground/10">
               <table className="w-full text-left text-sm">
                 <caption className="sr-only">{t('tournaments.ranking.players')}</caption>
                 <thead>
-                  <tr className="border-b">
-                    <th scope="col" className="py-2 pr-4 font-medium">{t('tournaments.ranking.rank')}</th>
-                    <th scope="col" className="py-2 pr-4 font-medium">{t('tournaments.ranking.player')}</th>
-                    <th scope="col" className="py-2 pr-4 font-medium">{t('tournaments.ranking.team')}</th>
-                    <th scope="col" className="py-2 text-right font-medium">{t('tournaments.ranking.points')}</th>
+                  <tr className="border-b bg-muted/60">
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('tournaments.ranking.rank')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('tournaments.ranking.player')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('tournaments.ranking.team')}</th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('tournaments.ranking.points')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {playerRows.map((row) => (
                     <tr key={row.participant_id} className="border-b last:border-0">
-                      <td className="py-2 pr-4 font-mono">{row.rank}</td>
-                      <th scope="row" className="py-2 pr-4 font-medium">
+                      <td className="px-4 py-2.5"><RankCell rank={row.rank} /></td>
+                      <th scope="row" className="px-4 py-2.5 font-medium">
                         {names[row.user_id] ?? t('teams.unknownUser')}
                       </th>
-                      <td className="py-2 pr-4">
+                      <td className="px-4 py-2.5">
                         {row.tournament_team_id ? (
                           <Link
                             to={`/tournament-teams/${row.tournament_team_id}`}
-                            className="text-primary underline underline-offset-4"
+                            className="text-primary underline underline-offset-4 dark:text-violet-300"
                           >
                             {teamNames.get(row.tournament_team_id) ?? t('tournaments.participants.unknownTeam')}
                           </Link>
@@ -111,7 +159,7 @@ export function RankingSection({
                           <span className="text-muted-foreground">{t('tournaments.ranking.noTeam')}</span>
                         )}
                       </td>
-                      <td className="py-2 text-right font-mono">{formatPoints(lang, row.points)}</td>
+                      <td className="px-4 py-2.5 text-right font-mono font-semibold tabular-nums">{formatPoints(lang, row.points)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -151,32 +199,42 @@ export function RankingSection({
           </StateMessage>
         ) : null}
         {withTeams && teamRanks.state.status === 'success' && teamRanks.state.data.length === 0 ? (
-          <StateMessage kind="empty">{t('tournaments.ranking.emptyTeams')}</StateMessage>
+          <EmptyState icon={Award01Icon}>{t('tournaments.ranking.emptyTeams')}</EmptyState>
+        ) : null}
+        {withTeams && teamRanks.state.status === 'success' && teamRanks.state.data.length > 0 && !solo ? (
+          <Podium
+            entries={teamRanks.state.data.map((row) => ({
+              key: row.tournament_team_id,
+              rank: row.rank,
+              name: row.name || t('tournaments.participants.unknownTeam'),
+              points: formatPoints(lang, row.points),
+            }))}
+          />
         ) : null}
         {withTeams && teamRanks.state.status === 'success' && teamRanks.state.data.length > 0 ? (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-xl ring-1 ring-foreground/10">
             <table className="w-full text-left text-sm">
               <caption className="sr-only">{t('tournaments.ranking.teams')}</caption>
               <thead>
-                <tr className="border-b">
-                  <th scope="col" className="py-2 pr-4 font-medium">{t('tournaments.ranking.rank')}</th>
-                  <th scope="col" className="py-2 pr-4 font-medium">{t('tournaments.ranking.team')}</th>
-                  <th scope="col" className="py-2 text-right font-medium">{t('tournaments.ranking.points')}</th>
+                <tr className="border-b bg-muted/60">
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('tournaments.ranking.rank')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('tournaments.ranking.team')}</th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('tournaments.ranking.points')}</th>
                 </tr>
               </thead>
               <tbody>
                 {teamRanks.state.data.map((row) => (
                   <tr key={row.tournament_team_id} className="border-b last:border-0">
-                    <td className="py-2 pr-4 font-mono">{row.rank}</td>
-                    <th scope="row" className="py-2 pr-4 font-medium">
+                    <td className="px-4 py-2.5"><RankCell rank={row.rank} /></td>
+                    <th scope="row" className="px-4 py-2.5 font-medium">
                       <Link
                         to={`/tournament-teams/${row.tournament_team_id}`}
-                        className="text-primary underline underline-offset-4"
+                        className="text-primary underline underline-offset-4 dark:text-violet-300"
                       >
                         {row.name || t('tournaments.participants.unknownTeam')}
                       </Link>
                     </th>
-                    <td className="py-2 text-right font-mono">{formatPoints(lang, row.points)}</td>
+                    <td className="px-4 py-2.5 text-right font-mono font-semibold tabular-nums">{formatPoints(lang, row.points)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -184,6 +242,21 @@ export function RankingSection({
           </div>
         ) : null}
       </div>
-    </section>
+    </SectionCard>
+  )
+}
+
+// Rang : pastille teintée pour le podium, chiffre seul ensuite (le nombre est toujours écrit).
+function RankCell({ rank }: { rank: number }) {
+  const medal = MEDALS[rank]
+  return (
+    <span
+      className={cn(
+        'inline-grid size-7 place-items-center rounded-full font-mono text-xs font-bold',
+        medal ? cn('ring-1 ring-inset', medal.tone) : 'text-muted-foreground',
+      )}
+    >
+      {rank}
+    </span>
   )
 }

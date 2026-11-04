@@ -1,10 +1,15 @@
+import { Add01Icon, ArrowLeft01Icon, Edit02Icon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
 import { TournamentForm } from '@/components/tournaments/TournamentForm'
+import { TournamentPreview } from '@/components/tournaments/TournamentPreview'
+import { TournamentStatusBadge } from '@/components/tournaments/TournamentStatusBadge'
+import { PageHero } from '@/components/tournaments/ui'
 import { Button } from '@/components/ui/button'
-import { listAllGames } from '@/features/games/api'
+import { Icon } from '@/components/ui/icon'
+import { getGame, listAllGames } from '@/features/games/api'
 import type { Game } from '@/features/games/types'
 import { isUuid } from '@/features/teams/validation'
 import { createTournament, getTournament, updateTournament } from '@/features/tournaments/api'
@@ -51,6 +56,17 @@ export default function TournamentEditorPage() {
 
   const tournament = editing && state.status === 'success' && !Array.isArray(state.data) ? state.data : null
   const games = !editing && state.status === 'success' && Array.isArray(state.data) ? state.data : null
+  // Modification : jeu du tournoi pour l'aperçu (facultatif, une erreur ne bloque rien).
+  const gameId = tournament?.game_id
+  const { state: gameState } = useAsyncResource(
+    (signal) => (gameId ? getGame(gameId, signal) : Promise.resolve(null)),
+    [gameId],
+  )
+  const editedGame = gameState.status === 'success' ? gameState.data : null
+  const previewGame = (gameIdValue: string) => {
+    const game = games ? games.find((candidate) => candidate.id === gameIdValue) : editedGame
+    return game ? { name: game.name, image: game.images[0] } : undefined
+  }
   const cancel = () => navigate(editing ? `/tournaments/${id}` : '/tournaments')
 
   async function submit(values: TournamentValues) {
@@ -88,15 +104,37 @@ export default function TournamentEditorPage() {
   }
 
   const backLink = (
-    <Link to="/tournaments" className="text-primary underline underline-offset-4">
+    <Link to="/tournaments" className="text-primary underline underline-offset-4 dark:text-violet-300">
       {t('tournaments.returnToCatalog')}
     </Link>
   )
   const presetGame = search.get('game') ?? ''
+  const backTo = editing && valid ? `/tournaments/${id}` : '/tournaments'
 
   return (
-    <div className="grid w-full max-w-3xl gap-6 self-start">
-      <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      <PageHero
+        icon={editing ? Edit02Icon : Add01Icon}
+        title={title}
+        description={
+          tournament ? (
+            <span className="font-semibold text-white">{tournament.name}</span>
+          ) : editing ? undefined : (
+            t('tournaments.createIntro')
+          )
+        }
+        back={
+          <Link
+            to={backTo}
+            className="inline-flex items-center gap-1 font-medium text-white/90 underline underline-offset-4 hover:text-white"
+          >
+            <Icon icon={ArrowLeft01Icon} size={16} />
+            {editing && valid ? t('tournaments.returnToTournament') : t('tournaments.returnToCatalog')}
+          </Link>
+        }
+      >
+        {tournament ? <TournamentStatusBadge status={tournament.status} className="shadow-sm" /> : null}
+      </PageHero>
 
       {!valid ? (
         <StateMessage kind="error" action={backLink}>
@@ -150,6 +188,14 @@ export default function TournamentEditorPage() {
           formError={formError}
           onSubmit={submit}
           onCancel={cancel}
+          preview={(values) => (
+            <TournamentPreview
+              values={values}
+              status={tournament?.status ?? 'draft'}
+              game={previewGame(values.game_id)}
+              creating={!tournament}
+            />
+          )}
         />
       ) : null}
     </div>

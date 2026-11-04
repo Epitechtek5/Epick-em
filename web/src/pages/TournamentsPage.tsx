@@ -1,12 +1,20 @@
-import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Download04Icon, RefreshIcon } from '@hugeicons/core-free-icons'
+import {
+  Add01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  ChampionIcon,
+  Download04Icon,
+  RefreshIcon,
+} from '@hugeicons/core-free-icons'
 import { Link, useLocation, useSearchParams } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
 import { TournamentCard } from '@/components/tournaments/TournamentCard'
+import { STATUS_TONES } from '@/components/tournaments/tones'
+import { EmptyState } from '@/components/tournaments/ui'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Label } from '@/components/ui/label'
-import { NativeSelect } from '@/components/ui/native-select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { listAllGames } from '@/features/games/api'
 import { readNotice } from '@/features/games/notice'
@@ -19,6 +27,7 @@ import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useI18n } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth/auth-context'
 
 function readPage(raw: string | null): number {
@@ -59,7 +68,7 @@ export default function TournamentsPage() {
   )
   const { state: gamesState } = useAsyncResource((signal) => listAllGames(signal), [])
   const games = gamesState.status === 'success' ? gamesState.data : []
-  const gameNames = new Map(games.map((game) => [game.id, game.name]))
+  const gameById = new Map(games.map((game) => [game.id, game]))
 
   const tournaments = state.status === 'success' ? state.data.slice(0, TOURNAMENTS_PAGE_SIZE) : []
   const hasNext = state.status === 'success' && state.data.length > TOURNAMENTS_PAGE_SIZE
@@ -75,33 +84,54 @@ export default function TournamentsPage() {
   }
 
   return (
-    <div className="grid w-full max-w-5xl gap-6 self-start">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="grid gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">{t('tournaments.title')}</h1>
-          <p className="text-muted-foreground">{t('tournaments.description')}</p>
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      <header className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-violet-600 via-violet-700 to-fuchsia-700 p-6 text-white shadow-lg sm:p-8">
+        <div className="pointer-events-none absolute -top-16 -right-10 size-64 rounded-full bg-white/10 blur-2xl" aria-hidden="true" />
+        <div className="pointer-events-none absolute -bottom-24 left-1/3 size-72 rounded-full bg-fuchsia-400/20 blur-3xl" aria-hidden="true" />
+        <div className="relative flex flex-wrap items-end justify-between gap-6">
+          <div className="flex items-start gap-4">
+            <span className="hidden size-14 shrink-0 place-items-center rounded-2xl bg-white/15 ring-1 ring-white/25 sm:grid">
+              <Icon icon={ChampionIcon} size={30} />
+            </span>
+            <div className="grid gap-2">
+              <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">{t('tournaments.title')}</h1>
+              <p className="max-w-xl text-violet-100">{t('tournaments.description')}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t('tournaments.actions')}>
+            <Button
+              variant="outline"
+              onClick={reload}
+              disabled={state.status === 'loading'}
+              className="border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white"
+            >
+              <Icon icon={RefreshIcon} />
+              {t('tournaments.refresh')}
+            </Button>
+            {isAdmin ? (
+              <>
+                <Link
+                  to="/tournaments/transfer"
+                  className={cn(buttonVariants({ variant: 'outline' }), 'border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white')}
+                >
+                  <Icon icon={Download04Icon} />
+                  {t('tournaments.transfer')}
+                </Link>
+                <Link to="/tournaments/new" className={cn(buttonVariants(), 'bg-white text-violet-800 hover:bg-violet-50')}>
+                  <Icon icon={Add01Icon} />
+                  {t('tournaments.create')}
+                </Link>
+              </>
+            ) : null}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('tournaments.actions')}>
-          <Button variant="outline" onClick={reload} disabled={state.status === 'loading'}>
-            <Icon icon={RefreshIcon} />
-            {t('tournaments.refresh')}
-          </Button>
-          {isAdmin ? (
-            <>
-              <Link to="/tournaments/transfer" className={buttonVariants({ variant: 'outline' })}>
-                <Icon icon={Download04Icon} />
-                {t('tournaments.transfer')}
-              </Link>
-              <Link to="/tournaments/new" className={buttonVariants()}>
-                <Icon icon={Add01Icon} />
-                {t('tournaments.create')}
-              </Link>
-            </>
-          ) : null}
-        </div>
-      </div>
+      </header>
 
-      <div className="grid gap-4 sm:grid-cols-2 sm:max-w-2xl" role="search" aria-label={t('tournaments.filters')}>
+      <div
+        className="grid gap-4 rounded-2xl bg-card p-4 shadow-sm ring-1 ring-foreground/10 lg:grid-cols-[minmax(0,18rem)_1fr] lg:items-end"
+        role="search"
+        aria-label={t('tournaments.filters')}
+      >
         <div className="grid gap-1">
           <Label htmlFor="tournaments-game-filter">{t('tournaments.filterByGame')}</Label>
           <SearchableSelect
@@ -120,21 +150,33 @@ export default function TournamentsPage() {
             </p>
           ) : null}
         </div>
-        <div className="grid gap-1">
-          <Label htmlFor="tournaments-status-filter">{t('tournaments.filterByStatus')}</Label>
-          <NativeSelect
-            id="tournaments-status-filter"
-            value={statusFilter}
-            onChange={(event) => update({ status: event.target.value })}
-          >
-            <option value="">{t('tournaments.allStatuses')}</option>
-            {TOURNAMENT_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {t(statusLabelKey(status))}
-              </option>
-            ))}
-          </NativeSelect>
-        </div>
+        <fieldset className="grid gap-1">
+          <legend className="mb-1 text-sm font-medium">{t('tournaments.filterByStatus')}</legend>
+          <div className="flex flex-wrap gap-2">
+            {(['', ...TOURNAMENT_STATUSES] as const).map((status) => {
+              const active = statusFilter === status
+              return (
+                <button
+                  key={status || 'all'}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => update({ status })}
+                  className={cn(
+                    'inline-flex min-h-8 items-center rounded-full px-3 text-sm font-medium ring-1 ring-inset outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50',
+                    active
+                      ? status
+                        ? cn(STATUS_TONES[status], 'ring-2')
+                        : 'bg-foreground text-background ring-foreground'
+                      : 'bg-background text-muted-foreground ring-foreground/15 hover:bg-accent hover:text-foreground',
+                  )}
+                >
+                  {active ? <span aria-hidden="true" className="mr-1">✓</span> : null}
+                  {status ? t(statusLabelKey(status)) : t('tournaments.allStatuses')}
+                </button>
+              )
+            })}
+          </div>
+        </fieldset>
       </div>
 
       {notice ? <StateMessage kind="success">{t(notice.key, notice.params)}</StateMessage> : null}
@@ -157,21 +199,22 @@ export default function TournamentsPage() {
       ) : null}
 
       {state.status === 'success' && tournaments.length === 0 ? (
-        <StateMessage kind="empty">
+        <EmptyState icon={ChampionIcon}>
           {gameFilter || statusFilter ? t('tournaments.emptyFiltered') : t('tournaments.empty')}
-        </StateMessage>
+        </EmptyState>
       ) : null}
 
       {tournaments.length > 0 ? (
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label={t('tournaments.list')}>
+        <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-label={t('tournaments.list')}>
           {tournaments.map((tournament) => (
             <li key={tournament.id}>
               <TournamentCard
                 tournament={tournament}
                 gameName={
-                  gameNames.get(tournament.game_id) ??
+                  gameById.get(tournament.game_id)?.name ??
                   (gamesState.status === 'loading' ? '…' : t('teams.unknownGame'))
                 }
+                gameImage={gameById.get(tournament.game_id)?.images[0]}
               />
             </li>
           ))}

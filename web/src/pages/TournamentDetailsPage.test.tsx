@@ -16,7 +16,7 @@ import {
   USERS,
   userResponse,
 } from '@/test/render'
-import { P_BOB, P_ME, RULE_LINEAR, SOLO, TEAM_CUP } from '@/test/tournaments'
+import { fullText, P_BOB, P_ME, RULE_LINEAR, SOLO, TEAM_CUP } from '@/test/tournaments'
 
 const TT_BOB = { ...TT_MINE, id: 'bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc', team_id: null, name: 'Bob Squad', owner_id: BOB.id }
 
@@ -121,10 +121,10 @@ describe('TournamentDetailsPage', () => {
     server()
     renderApp(`/tournaments/${SOLO.id}`)
     expect(await screen.findByRole('heading', { level: 1, name: 'TFT Open' })).toBeInTheDocument()
-    expect(screen.getAllByText('Statut : Inscriptions')[0]).toBeInTheDocument()
+    expect(screen.getAllByText(fullText('Statut : Inscriptions'))[0]).toBeInTheDocument()
     expect(await screen.findByRole('link', { name: GAME_A.name })).toHaveAttribute('href', `/games/${GAME_A.id}`)
     expect(screen.getByText('32 joueurs maximum')).toBeInTheDocument()
-    expect(screen.getByText('Solo')).toBeInTheDocument()
+    expect(screen.getAllByText('Solo').length).toBeGreaterThan(0)
     expect(screen.getByText('Somme des scores')).toBeInTheDocument()
     expect(screen.getAllByText('Non définie')).toHaveLength(2)
     // Lien vers les pages d'équipes de tournoi existantes, avec le vrai UUID.
@@ -132,7 +132,10 @@ describe('TournamentDetailsPage', () => {
     // Joueur : ni modification, ni suppression, ni cycle de vie.
     expect(screen.queryByRole('link', { name: 'Modifier le tournoi' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Supprimer le tournoi' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Cycle de vie' })).not.toBeInTheDocument()
+    // La frise du cycle de vie est visible par tous (étape actuelle annoncée), sans bouton de transition.
+    const lifecycle = screen.getByRole('heading', { name: 'Cycle de vie' }).closest('section')!
+    expect(within(lifecycle).getByText('Inscriptions').closest('li')).toHaveAttribute('aria-current', 'step')
+    expect(within(lifecycle).queryByRole('button')).not.toBeInTheDocument()
   })
 
   it('liste les inscrits avec leurs vrais statuts et identités', async () => {
@@ -142,10 +145,10 @@ describe('TournamentDetailsPage', () => {
     const list = await screen.findByRole('list', { name: 'Liste des inscrits' })
     const rows = within(list).getAllByRole('listitem')
     expect(await within(rows[0]).findByText('alice')).toBeInTheDocument()
-    expect(within(rows[0]).getByText(/Statut : Inscrit ·/)).toBeInTheDocument()
+    expect(within(rows[0]).getByText(fullText('Statut : Inscrit'))).toBeInTheDocument()
     expect(within(rows[0]).getByRole('link', { name: 'Karmine Corp' })).toHaveAttribute('href', `/tournament-teams/${TT_MINE.id}`)
     expect(await within(rows[1]).findByText('bob')).toBeInTheDocument()
-    expect(within(rows[1]).getByText(/Statut : Présent \(pointé\)/)).toBeInTheDocument()
+    expect(within(rows[1]).getByText(fullText('Statut : Présent (pointé)'))).toBeInTheDocument()
     // Actions selon la propriété : rien sur l'inscription de Bob.
     expect(within(rows[0]).getByRole('button', { name: 'Pointer alice' })).toBeInTheDocument()
     expect(within(rows[1]).queryByRole('button')).not.toBeInTheDocument()
@@ -238,7 +241,7 @@ describe('TournamentDetailsPage', () => {
     await confirm(user, 'Annuler le tournoi')
     expect(await screen.findByText('Le tournoi est maintenant au statut « Annulé ».')).toBeInTheDocument()
     expect(calls(fetchMock, 'POST', '/status')[0].body).toEqual({ status: 'cancelled' })
-    expect(screen.getAllByText('Statut : Annulé')[0]).toBeInTheDocument()
+    expect(screen.getAllByText(fullText('Statut : Annulé'))[0]).toBeInTheDocument()
     expect(within(section).getByText(/état final/)).toBeInTheDocument()
   })
 
@@ -325,7 +328,8 @@ describe('TournamentDetailsPage', () => {
     renderApp(`/tournaments/${SOLO.id}`)
     const rules = await screen.findByRole('list', { name: 'Règles du barème' })
     expect(await within(rules).findByText('Éliminations (kills)')).toBeInTheDocument()
-    expect(within(rules).getByText('Linéaire : 2 point(s) par unité')).toBeInTheDocument()
+    expect(within(rules).getByText('2 point(s) par unité')).toBeInTheDocument()
+    expect(within(rules).getByText('Linéaire')).toBeInTheDocument()
     // Joueur : barème en lecture seule.
     expect(screen.queryByRole('heading', { name: 'Ajouter une règle' })).not.toBeInTheDocument()
 

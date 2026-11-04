@@ -68,3 +68,12 @@ export const RULE_TABLE: ScoringRule = {
   coefficient: null,
   points_table: { '1': 8, '2': 7 },
 }
+
+// Élément dont le texte complet (enfants compris) vaut `text`, le plus profond possible :
+// le statut mêle un préfixe réservé aux lecteurs d'écran et le libellé visible.
+export function fullText(text: string | RegExp) {
+  const matches = (value: string | null | undefined) =>
+    typeof text === 'string' ? value === text : text.test(value ?? '')
+  return (_: string, element: Element | null) =>
+    Boolean(element && matches(element.textContent) && ![...element.children].some((child) => matches(child.textContent)))
+}
