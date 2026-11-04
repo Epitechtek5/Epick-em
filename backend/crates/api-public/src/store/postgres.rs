@@ -64,7 +64,10 @@ fn decode(err: StoreError) -> sqlx::Error {
 fn username_taken(err: sqlx::Error) -> StoreError {
     match &err {
         sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
-            if db.constraint() == Some("users_email_key") {
+            if matches!(
+                db.constraint(),
+                Some("users_email_key" | "users_pending_email_key")
+            ) {
                 StoreError::EmailTaken
             } else {
                 StoreError::UsernameTaken
@@ -622,7 +625,15 @@ async fn stat_locked(
     .await?)
 }
 
-type UserRow = (Uuid, String, String, String, Option<String>);
+type UserRow = (
+    Uuid,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 fn user(row: UserRow) -> Result<UserRecord, StoreError> {
     Ok(UserRecord {
@@ -631,28 +642,229 @@ fn user(row: UserRow) -> Result<UserRecord, StoreError> {
         password_hash: row.2,
         role: row.3.parse::<Role>()?,
         email: row.4,
+        pending_email: row.5,
+        email_verified_at: row.6,
     })
 }
 
 #[async_trait]
 impl AuthStore for PgStore {
-    async fn create_user(
+    async fn create_user_with_token(
         &self,
         username: &str,
         email: Option<&str>,
         password_hash: &str,
+        verification_hash: Option<&str>,
     ) -> Result<UserRecord, StoreError> {
-        sqlx::query_as::<_, UserRow>(
+        let mut tx = self.pool.begin().await?;
+        let user=sqlx::query_as::<_, UserRow>(
             "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) \
-             RETURNING id, username, password_hash, role, email",
+             RETURNING id, username, password_hash, role, email, pending_email, email_verified_at::text",
         )
         .bind(username)
         .bind(email)
         .bind(password_hash)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(username_taken)
-        .and_then(user)
+        .and_then(user)?;
+        if let Some(hash) = verification_hash {
+            sqlx::query(
+                "INSERT INTO email_verification_tokens(user_id,email,token_hash) VALUES ($1,$2,$3)",
+            )
+            .bind(user.id)
+            .bind(email)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    async fn enroll_legacy(
+        &self,
+        id: Uuid,
+        password_hash: &str,
+        email: &str,
+    ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let changed = sqlx::query(
+            "UPDATE users SET pending_email=$3 WHERE id=$1 AND email IS NULL AND password_hash=$2",
+        )
+        .bind(id)
+        .bind(password_hash)
+        .bind(email)
+        .execute(&mut *tx)
+        .await
+        .map_err(username_taken)?
+        .rows_affected();
+        if changed == 1 {
+            sqlx::query(
+                "UPDATE email_verification_tokens SET status='retired' WHERE user_id=$1 AND email<>$2",
+            )
+            .bind(id)
+            .bind(email)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(changed == 1)
+    }
+
+    async fn allow_verification_request(&self, peer_hash: &str) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM verification_request_limits WHERE window_start <= now()-interval '1 hour'",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let allowed = sqlx::query(
+            "INSERT INTO verification_request_limits(peer_hash) VALUES($1)
+            ON CONFLICT(peer_hash) DO UPDATE SET requests=verification_request_limits.requests+1
+            WHERE verification_request_limits.requests<30",
+        )
+        .bind(peer_hash)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1;
+        tx.commit().await?;
+        Ok(allowed)
+    }
+
+    async fn issue_verification(&self, email: &str, hash: &str) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users
+             WHERE pending_email = $1 OR (pending_email IS NULL AND email = $1 AND email_verified_at IS NULL)
+             FOR UPDATE")
+            .bind(email).fetch_optional(&mut *tx).await?;
+        let Some(id) = id else { return Ok(false) };
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 15))")
+            .bind(email)
+            .execute(&mut *tx)
+            .await?;
+        let limited: bool = sqlx::query_scalar(
+            "SELECT count(*) >= 5 OR COALESCE(max(created_at) > now() - interval '1 minute', false)
+             FROM email_verification_tokens
+             WHERE (user_id = $1 OR email = $2) AND created_at > now() - interval '1 hour'",
+        )
+        .bind(id)
+        .bind(email)
+        .fetch_one(&mut *tx)
+        .await?;
+        if limited {
+            return Ok(false);
+        }
+        sqlx::query(
+            "DELETE FROM email_verification_tokens WHERE created_at < now()-interval '1 hour'",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE email_verification_tokens SET status='retired' WHERE user_id=$1 AND status='staged'",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO email_verification_tokens(user_id,email,token_hash,status) VALUES ($1,$2,$3,'staged')",
+        )
+        .bind(id)
+        .bind(email)
+        .bind(hash)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    async fn activate_verification(&self, hash: &str) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let owner: Option<Uuid> = sqlx::query_scalar(
+            "SELECT u.id FROM users u JOIN email_verification_tokens t ON u.id=t.user_id
+             WHERE t.token_hash=$1 AND t.status='staged' AND t.expires_at>clock_timestamp()
+             AND t.email=COALESCE(u.pending_email,u.email)
+             AND (u.pending_email IS NOT NULL OR u.email_verified_at IS NULL) FOR UPDATE OF u",
+        )
+        .bind(hash)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(id) = owner {
+            let activated = sqlx::query(
+                "UPDATE email_verification_tokens SET status='active'
+                 WHERE user_id=$1 AND token_hash=$2 AND status='staged'",
+            )
+            .bind(id)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+                == 1;
+            if activated {
+                sqlx::query(
+                    "UPDATE email_verification_tokens SET status='retired'
+                    WHERE user_id=$1 AND token_hash<>$2 AND status='active'",
+                )
+                .bind(id)
+                .bind(hash)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn consume_verification(&self, hash: &str) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        // Lock the account first, in the same order as issuance and address changes.
+        let owner: Option<(Uuid, Option<String>)> = sqlx::query_as(
+            "SELECT id, email FROM users
+             WHERE id = (SELECT user_id FROM email_verification_tokens WHERE token_hash = $1)
+             FOR UPDATE",
+        )
+        .bind(hash)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((id, previous_email)) = owner else {
+            return Ok(false);
+        };
+        let address: Option<String> = sqlx::query_scalar(
+            "UPDATE email_verification_tokens SET status = 'retired'
+             WHERE token_hash = $1 AND status = 'active' AND expires_at > clock_timestamp()
+             RETURNING email",
+        )
+        .bind(hash)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(email) = address else {
+            return Ok(false);
+        };
+        let result = sqlx::query("UPDATE users SET email = $2, pending_email = NULL, email_verified_at = clock_timestamp()
+             WHERE id = $1 AND COALESCE(pending_email, email) = $2
+             AND (pending_email IS NOT NULL OR email_verified_at IS NULL)")
+            .bind(id).bind(&email).execute(&mut *tx).await;
+        let changed = match result {
+            Ok(row) => row.rows_affected() == 1,
+            Err(err)
+                if err
+                    .as_database_error()
+                    .is_some_and(|db| db.constraint() == Some("users_email_key")) =>
+            {
+                return Ok(false);
+            }
+            Err(err) => return Err(err.into()),
+        };
+        if changed {
+            sqlx::query("UPDATE email_verification_tokens SET status='retired' WHERE user_id=$1 AND status='staged'").bind(id).execute(&mut *tx).await?;
+        }
+        if changed && previous_email.as_deref() != Some(&email) {
+            // A recovery link sent to the former mailbox must not survive an address change.
+            sqlx::query("UPDATE password_reset_tokens SET used_at=now() WHERE user_id=$1 AND used_at IS NULL").bind(id).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(changed)
     }
 
     async fn find_user_by_username(
@@ -660,7 +872,7 @@ impl AuthStore for PgStore {
         username: &str,
     ) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash, role, email FROM users \
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text FROM users \
              WHERE lower(username) = lower($1)",
         )
         .bind(username)
@@ -672,7 +884,7 @@ impl AuthStore for PgStore {
 
     async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash, role, email FROM users WHERE email = $1",
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text FROM users WHERE email = $1",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -683,7 +895,7 @@ impl AuthStore for PgStore {
 
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash, role, email FROM users WHERE id = $1",
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text FROM users WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -736,16 +948,20 @@ impl AuthStore for PgStore {
                          username = COALESCE($2, username), \
                          password_hash = COALESCE($3, password_hash), \
                          role = COALESCE($4, role), \
-                         email = COALESCE($5, email) \
+                         pending_email = CASE WHEN $5::text IS NULL THEN pending_email WHEN $5 = email THEN NULL ELSE $5 END \
                      WHERE id = $1 RETURNING id, username, role",
                 )
                 .bind(id)
                 .bind(update.username)
                 .bind(update.password_hash)
                 .bind(update.role.map(Role::as_str))
-                .bind(update.email)
+                .bind(&update.email)
                 .fetch_optional(&mut *tx)
                 .await?;
+                if let Some(email) = update.email.as_deref() {
+                    sqlx::query("UPDATE email_verification_tokens SET status='retired' WHERE user_id=$1 AND email <> $2 AND status<>'retired'")
+                        .bind(id).bind(email).execute(&mut *tx).await?;
+                }
                 if profile.is_some() && password_changed {
                     sqlx::query(
                         "UPDATE refresh_tokens SET revoked_at = now() \
@@ -2452,10 +2668,22 @@ impl AuthStore for PgStore {
     async fn insert_password_reset_token(
         &self,
         user_id: Uuid,
+        expected_email: Option<&str>,
         token_hash: &str,
         ttl: Duration,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
+        // Serialize against address confirmation before issuing a link for this mailbox.
+        let owner = sqlx::query(
+            "SELECT id FROM users WHERE id=$1 AND email IS NOT DISTINCT FROM $2 FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(expected_email)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if owner.is_none() {
+            return Ok(false);
+        }
         sqlx::query(
             "UPDATE password_reset_tokens SET used_at = now() \
              WHERE user_id = $1 AND used_at IS NULL",
@@ -2473,7 +2701,7 @@ impl AuthStore for PgStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(true)
     }
 
     async fn consume_password_reset_token(
@@ -2482,6 +2710,8 @@ impl AuthStore for PgStore {
         password_hash: &str,
     ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM users WHERE id=(SELECT user_id FROM password_reset_tokens WHERE token_hash=$1) FOR UPDATE")
+            .bind(token_hash).fetch_optional(&mut *tx).await?;
         // L'UPDATE conditionnel verrouille la ligne : deux utilisations simultanées du même
         // jeton ne peuvent pas réussir toutes les deux.
         let user_id = sqlx::query_scalar::<_, Uuid>(

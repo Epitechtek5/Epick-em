@@ -3,7 +3,7 @@ import { validateRegisterForm } from '../src/features/auth/validation';
 describe('Registration form validation', () => {
   const validForm = {
     username: 'TestMobile01',
-    email: '',
+    email: 'alice@example.com',
     password: 'Password123!',
     confirmPassword: 'Password123!',
   };
@@ -51,7 +51,10 @@ describe('Registration form validation', () => {
     ).toEqual({});
   });
 
-  it('accepts an omitted email and validates a supplied one', () => {
+  it('requires a valid email', () => {
+    expect(validateRegisterForm({ ...validForm, email: '' }).email).toBe(
+      'validation.email',
+    );
     expect(validateRegisterForm(validForm)).toEqual({});
     expect(
       validateRegisterForm({ ...validForm, email: 'alice@example.com' }),

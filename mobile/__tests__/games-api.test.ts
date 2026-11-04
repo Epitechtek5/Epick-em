@@ -204,7 +204,10 @@ it('shares the existing rotation across concurrent JSON, file export and raw imp
     expires_in: 60,
   };
   jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
-  await client.authenticate({ username: 'alice', password: 'password' });
+  await client.authenticate({
+    email: 'alice@example.com',
+    password: 'password',
+  });
   client.session!.expiresAt = 0;
   configureSessionRequest(client.request);
   const bytes = new TextEncoder().encode('{"version":1,"games":[]}');
@@ -248,7 +251,10 @@ it('retries a failed file export once after rotation and clears on revoked refre
     expires_in: 60,
   };
   jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
-  await client.authenticate({ username: 'alice', password: 'password' });
+  await client.authenticate({
+    email: 'alice@example.com',
+    password: 'password',
+  });
   configureSessionRequest(client.request);
   const bytes = new TextEncoder().encode('name,description,images,stats\n');
   jest
@@ -277,7 +283,10 @@ it('replays exactly the same raw import body once after a 401', async () => {
     expires_in: 60,
   };
   jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
-  await client.authenticate({ username: 'alice', password: 'password' });
+  await client.authenticate({
+    email: 'alice@example.com',
+    password: 'password',
+  });
   configureSessionRequest(client.request);
   jest
     .mocked(fetch)

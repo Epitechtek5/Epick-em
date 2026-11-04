@@ -59,7 +59,7 @@ async fn register_creates_the_account_without_leaking_the_password() {
     let (status, body) = post(
         &app_default().await,
         "/register",
-        json!({ "username": "alice", "password": "secret123" }),
+        json!({ "username": "alice", "password": "secret123","email":"alice@example.com" }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -130,7 +130,7 @@ async fn register_reports_each_invalid_field() {
         json!({ "username": "a", "password": "b" }),
     )
     .await;
-    assert_eq!(body["errors"].as_object().unwrap().len(), 2);
+    assert_eq!(body["errors"].as_object().unwrap().len(), 3);
 }
 
 #[actix_web::test]
@@ -207,7 +207,7 @@ async fn login_failures_are_indistinguishable() {
 async fn login_requires_both_fields() {
     let (status, body) = login(&app_default().await, "", "").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["errors"]["username"].is_string());
+    assert!(body["errors"]["email"].is_string());
     assert!(body["errors"]["password"].is_string());
 }
 

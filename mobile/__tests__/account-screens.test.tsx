@@ -88,7 +88,7 @@ it('updates own profile without a role field and refreshes displayed identity', 
 it('normalizes and updates only the current account recovery email', async () => {
   jest
     .mocked(accounts.updateMe)
-    .mockResolvedValue({ ...user, email: 'new@example.com' });
+    .mockResolvedValue({ ...user, pending_email: 'new@example.com' });
   await render(
     <PreferencesProvider>
       <ProfileScreen />
@@ -249,4 +249,30 @@ it('keeps the populated user list visible during pull-to-refresh', async () => {
     completeRefresh([user]);
   });
   expect(screen.getByLabelText('Refresh users').props.refreshing).toBe(false);
+});
+
+it('retains the verified address while showing a resend action for its replacement', async () => {
+  jest.mocked(useAuth).mockReturnValue({
+    ...auth,
+    user: {
+      ...user,
+      email_verified_at: '2026-11-03T12:00:00Z',
+      pending_email: 'pending@example.com',
+    },
+  });
+  await render(
+    <PreferencesProvider>
+      <ProfileScreen />
+    </PreferencesProvider>,
+  );
+  expect(await screen.findByText('Verified email')).toBeOnTheScreen();
+  expect(screen.getByText('alice@example.com')).toBeOnTheScreen();
+  expect(
+    screen.getByText(/Unverified email.*pending@example.com/),
+  ).toBeOnTheScreen();
+  await fireEvent.press(screen.getByText('Resend verification email'));
+  expect(router.push).toHaveBeenCalledWith({
+    pathname: '/verification-pending',
+    params: { email: 'pending@example.com' },
+  });
 });

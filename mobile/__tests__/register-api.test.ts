@@ -33,6 +33,7 @@ describe('Registration API', () => {
 
     const result = await register({
       username: 'TestMobile',
+      email: 'alice@example.com',
       password: 'Password123!',
     });
 
@@ -43,6 +44,7 @@ describe('Registration API', () => {
         method: 'POST',
         body: JSON.stringify({
           username: 'TestMobile',
+          email: 'alice@example.com',
           password: 'Password123!',
         }),
       }),
@@ -62,6 +64,7 @@ describe('Registration API', () => {
     await expect(
       register({
         username: 'TestMobile',
+        email: 'alice@example.com',
         password: 'Password123!',
       }),
     ).rejects.toMatchObject({

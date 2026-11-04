@@ -1,4 +1,4 @@
-//! Envoi des e-mails transactionnels (aujourd'hui : la réinitialisation du mot de passe).
+//! Transactional email for account creation, verification and password recovery.
 //!
 //! [`ResendMailer`] passe par l'API HTTP de Resend en production ; [`MemoryMailer`] garde les
 //! messages en mémoire pour les tests, et [`NoopMailer`] sert quand Resend n'est pas configuré.
@@ -26,6 +26,11 @@ impl std::error::Error for MailError {}
 
 #[async_trait]
 pub trait Mailer: Send + Sync {
+    fn available(&self) -> bool {
+        true
+    }
+    async fn send_verification(&self, to: &str, link: &str) -> Result<(), MailError>;
+    async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError>;
     /// Envoie à `to` le message qui contient `link`, le lien de réinitialisation du mot de passe.
     async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError>;
 }
@@ -41,6 +46,8 @@ pub struct MailConfig {
     pub public_url: String,
     /// Published Resend template ID or alias.
     pub password_reset_template: String,
+    pub verification_template: String,
+    pub welcome_template: String,
 }
 
 // Écrit à la main pour ne jamais journaliser la clé d'API.
@@ -68,6 +75,9 @@ impl MailConfig {
             api_key: get("RESEND_API_KEY")?,
             from: get("MAIL_FROM").unwrap_or_else(|| "Epick'em <onboarding@resend.dev>".into()),
             public_url: get("PUBLIC_URL").unwrap_or_else(|| "http://localhost:3000".into()),
+            verification_template: get("RESEND_EMAIL_VERIFICATION_TEMPLATE")
+                .unwrap_or_else(|| "email-address-confirmation".into()),
+            welcome_template: get("RESEND_WELCOME_TEMPLATE").unwrap_or_else(|| "welcome-account".into()),
             password_reset_template: get("RESEND_PASSWORD_RESET_TEMPLATE")
                 .unwrap_or_else(|| DEFAULT_PASSWORD_RESET_TEMPLATE.into()),
         })
@@ -91,6 +101,8 @@ pub struct ResendMailer {
     api_key: String,
     from: String,
     template: String,
+    verification_template: String,
+    welcome_template: String,
     endpoint: String,
 }
 
@@ -109,15 +121,21 @@ impl ResendMailer {
             client,
             api_key: config.api_key.clone(),
             from: config.from.clone(),
+            verification_template: config.verification_template.clone(),
+            welcome_template: config.welcome_template.clone(),
             template: config.password_reset_template.clone(),
             endpoint: endpoint.to_string(),
         })
     }
 }
 
-#[async_trait]
-impl Mailer for ResendMailer {
-    async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError> {
+impl ResendMailer {
+    async fn send_template(
+        &self,
+        to: &str,
+        template: &str,
+        variables: serde_json::Value,
+    ) -> Result<(), MailError> {
         let response = self
             .client
             .post(&self.endpoint)
@@ -126,8 +144,8 @@ impl Mailer for ResendMailer {
                 "from": self.from,
                 "to": [to],
                 "template": {
-                    "id": self.template,
-                    "variables": { "RESET_URL": link },
+                    "id": template,
+                    "variables": variables,
                 },
             }))
             .send()
@@ -142,11 +160,40 @@ impl Mailer for ResendMailer {
     }
 }
 
+#[async_trait]
+impl Mailer for ResendMailer {
+    async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError> {
+        self.send_template(to, &self.template, json!({"RESET_URL":link}))
+            .await
+    }
+    async fn send_verification(&self, to: &str, link: &str) -> Result<(), MailError> {
+        self.send_template(
+            to,
+            &self.verification_template,
+            json!({"VERIFICATION_URL":link}),
+        )
+        .await
+    }
+    async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError> {
+        self.send_template(to, &self.welcome_template, json!({"USERNAME":username}))
+            .await
+    }
+}
+
 /// Resend n'est pas configuré : rien n'est envoyé.
 pub struct NoopMailer;
 
 #[async_trait]
 impl Mailer for NoopMailer {
+    fn available(&self) -> bool {
+        false
+    }
+    async fn send_verification(&self, _to: &str, _link: &str) -> Result<(), MailError> {
+        Err(MailError("Mailer unavailable".into()))
+    }
+    async fn send_welcome(&self, _to: &str, _username: &str) -> Result<(), MailError> {
+        Err(MailError("Mailer unavailable".into()))
+    }
     async fn send_password_reset(&self, _to: &str, _link: &str) -> Result<(), MailError> {
         eprintln!("api-public : RESEND_API_KEY absente, e-mail de réinitialisation non envoyé");
         Ok(())
@@ -156,6 +203,8 @@ impl Mailer for NoopMailer {
 /// Garde les messages envoyés, pour les tests.
 #[derive(Default)]
 pub struct MemoryMailer {
+    pub verification: Mutex<Vec<(String, String)>>,
+    pub welcome: Mutex<Vec<(String, String)>>,
     sent: Mutex<Vec<(String, String)>>,
 }
 
@@ -172,6 +221,20 @@ impl MemoryMailer {
 
 #[async_trait]
 impl Mailer for MemoryMailer {
+    async fn send_verification(&self, to: &str, link: &str) -> Result<(), MailError> {
+        self.verification
+            .lock()
+            .unwrap()
+            .push((to.into(), link.into()));
+        Ok(())
+    }
+    async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError> {
+        self.welcome
+            .lock()
+            .unwrap()
+            .push((to.into(), username.into()));
+        Ok(())
+    }
     async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError> {
         self.sent
             .lock()

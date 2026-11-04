@@ -39,7 +39,7 @@ async fn setup() -> (app_type!(), Arc<MemoryCache>, String, String) {
     let state = AppState::new(store.clone(), config)
         .unwrap()
         .with_cache(cache.clone());
-    let app = test::init_service(app(state)).await;
+    let app = test::init_service(app(common::with_test_mailer(state))).await;
     logged_in_as(&app, "root", "secret123").await;
     store.set_role("root", Role::Admin);
     let (_, session) = login(&app, "root", "secret123").await;

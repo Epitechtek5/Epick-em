@@ -4,14 +4,17 @@
 Uses real API authorization, Argon2 password hashing, registration, scoring and
 match lifecycle logic. Requires a backend containing Tournament, Step and Match.
 
-Run only against a fresh, disposable local development database.
+Run against a fresh local database with migration 0015 and RESEND_API_KEY unset.
+Example: python3 seed_demo.py --bootstrap-admin
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import urllib.error
@@ -19,6 +22,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 PASSWORD = "Password1234!"
 USERS = [
@@ -89,9 +93,9 @@ class Api:
     def get(self, path: str, token: str) -> Any:
         return self.request("GET", path, token=token)
 
-    def login(self, username: str) -> str:
+    def login(self, email: str) -> str:
         return self.request("POST", "/login", {
-            "username": username, "password": PASSWORD
+            "email": email, "password": PASSWORD
         })["access_token"]
 
 
@@ -103,23 +107,35 @@ class TournamentData:
     game_id: str
 
 
-def bootstrap_admin(container: str, username: str) -> None:
-    """Explicit, local-only opt-in; changes role, never inserts password hashes."""
-    if not username.replace("_", "").isalnum():
-        raise RuntimeError("Invalid bootstrap administrator username")
-    sql = "UPDATE users SET role = 'admin' WHERE username = '" + username + "';"
-    cmd = [
-        "docker", "exec", container, "sh", "-lc",
-        'PGPASSWORD="$POSTGRES_PASSWORD" psql '
-        '-v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c '
-        + json.dumps(sql),
-    ]
-    completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
-    if completed.returncode != 0 or "UPDATE 1" not in completed.stdout:
-        raise RuntimeError(
-            "Admin promotion failed. Check container credentials and DB mapping. "
-            + completed.stderr[-400:]
+def bootstrap_account(api: Api, container: str, user_id: str, email: str, admin: bool) -> None:
+    """Claim only the registration token of this newly created local fixture."""
+    token = secrets.token_hex(32)
+    digest = hashlib.sha256(token.encode("ascii")).hexdigest()
+    # psql quotes its variables as SQL literals. Only the hash reaches PostgreSQL.
+    sql = """
+        UPDATE email_verification_tokens AS t
+        SET token_hash = :'digest'
+        FROM users AS u
+        WHERE u.id = :'id'::uuid AND u.email = :'email'
+          AND u.email_verified_at IS NULL AND u.pending_email IS NULL
+          AND t.user_id = u.id AND t.email = u.email
+          AND t.status = 'active' AND t.expires_at > now()
+        RETURNING t.user_id;
+    """
+    def run_sql(statement: str) -> None:
+        result = subprocess.run(
+            ["docker", "exec", "-i", container, "sh", "-c",
+             'exec psql -XqAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"',
+             "psql", "-v", f"id={UUID(user_id)}", "-v", f"email={email}", "-v", f"digest={digest}"],
+            input=statement, text=True, capture_output=True, check=False,
         )
+        if result.returncode or result.stdout.strip() != user_id:
+            raise RuntimeError(f"Local seed bootstrap failed for {email}. Check the database mapping and migration 0015.")
+
+    run_sql(sql)
+    api.request("POST", "/verify-email", {"token": token}, expected=(204,))
+    if admin:
+        run_sql("UPDATE users SET role = 'admin' WHERE id = :'id'::uuid AND email = :'email' AND email_verified_at IS NOT NULL RETURNING id;")
 
 
 def iso(hours: int = 0) -> str:
@@ -127,21 +143,16 @@ def iso(hours: int = 0) -> str:
     return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def create_users(api: Api, admin_name: str, bootstrap: bool, container: str) -> dict[str, dict[str, str]]:
+def create_users(api: Api, admin_name: str, container: str) -> dict[str, dict[str, str]]:
     created: dict[str, dict[str, str]] = {}
     for username in [admin_name, *USERS]:
+        email = f"{username.lower()}@example.test"
         data = api.request("POST", "/register", {
-            "username": username, "password": PASSWORD
+            "username": username, "email": email, "password": PASSWORD
         }, expected=(201,))
-        created[username] = {"id": data["id"]}
-        print(f"  user: {username}")
-
-    if bootstrap:
-        bootstrap_admin(container, admin_name)
-        print("  Admin promoted in the local PostgreSQL container")
-
-    for username in created:
-        created[username]["token"] = api.login(username)
+        bootstrap_account(api, container, data["id"], email, admin=username == admin_name)
+        created[username] = {"id": data["id"], "email": email, "token": api.login(email)}
+        print(f"  user: {username} ({email})")
     return created
 
 
@@ -454,8 +465,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=os.environ.get("API_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--admin", default="seed_admin")
-    parser.add_argument("--bootstrap-admin", action="store_true",
-                        help="Promote the newly registered admin in LOCAL PostgreSQL via docker exec")
+    parser.add_argument("--bootstrap-admin", action="store_true", required=True,
+                        help="Allow local fixture email verification and admin promotion via docker exec")
     parser.add_argument("--postgres-container", default="epickem-postgres-1")
     parser.add_argument("--output", default="epickem-seed-manifest.json")
     args = parser.parse_args()
@@ -465,7 +476,7 @@ def main() -> int:
     api = Api(args.url)
     api.request("GET", "/health")
     spec = api.request("GET", "/openapi.json")
-    for path in ("/tournaments/{id}/steps/{step_id}/matches", "/tournaments/{id}/steps"):
+    for path in ("/tournaments/{id}/steps/{step_id}/matches", "/tournaments/{id}/steps", "/verify-email"):
         if path not in spec.get("paths", {}):
             raise RuntimeError(f"Running backend is missing required route {path}")
 
@@ -476,7 +487,7 @@ def main() -> int:
         raise RuntimeError("DEMO tournaments already exist: reset the local DB before reseeding")
 
     print("Creating accounts via /register (backend hashes passwords)...")
-    users = create_users(api, args.admin, args.bootstrap_admin, args.postgres_container)
+    users = create_users(api, args.admin, args.postgres_container)
     admin = users[args.admin]["token"]
 
     print("Creating games and statistics...")
@@ -528,6 +539,7 @@ def main() -> int:
     manifest = {
         "api": args.url,
         "users": {username: info["id"] for username, info in users.items()},
+        "login_emails": {username: info["email"] for username, info in users.items()},
         "global_teams": {name: team["id"] for name, team in global_teams.items()},
         "tournaments": {
             key: {"id": value.id, "steps": value.step_ids, "registrations": value.registrations}

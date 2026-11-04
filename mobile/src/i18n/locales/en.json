@@ -3,7 +3,6 @@
     "username": "Username",
     "password": "Password",
     "email": "Email address",
-    "emailOptional": "Email address (optional)",
     "confirmPassword": "Confirm password",
     "newPassword": "New password",
     "confirmNewPassword": "Confirm new password",
@@ -28,8 +27,8 @@
     "submitting": "Signing in…",
     "noAccount": "Don't have an account?",
     "create": "Create one",
-    "missing": "Enter your username and password.",
-    "invalid": "Invalid username or password.",
+    "missing": "Enter your email and password.",
+    "invalid": "Invalid email or password.",
     "failed": "Unable to sign in. Please try again.",
     "forgotPassword": "Forgot password?"
   },
@@ -44,7 +43,7 @@
     "failed": "Unable to create account. Please try again.",
     "completeTitle": "Account created",
     "completeDescription": "Your next prediction starts here.",
-    "emailHint": "Add an email address to recover your account if you forget your password."
+    "emailHint": "Use this address to sign in and recover your account."
   },
   "settings": {
     "title": "Settings",
@@ -78,7 +77,7 @@
     "identifier": "Account UUID",
     "recoveryEmail": "Recovery email",
     "recoveryEmailMissing": "No recovery email configured",
-    "recoveryEmailHint": "Used only to send password reset links."
+    "recoveryEmailHint": "Use this address to sign in and recover your account."
   },
   "users": {
     "title": "Users",
@@ -773,5 +772,21 @@
       "conflict": "This action conflicts with the tournament or stage lifecycle.",
       "locked": "Stage configuration is locked once the tournament starts."
     }
+  },
+  "verification": {
+    "title": "Verify your email",
+    "pending": "Check your inbox",
+    "instructions": "Open the verification link within 15 minutes.",
+    "resend": "Resend verification email",
+    "sent": "If this address is eligible, a link will be sent.",
+    "loading": "Verifying…",
+    "invalid": "This link is missing, expired, invalid, or already used.",
+    "failed": "The request failed. Please try again.",
+    "success": "Email confirmed. You can now sign in.",
+    "enroll": "Add email to an older account",
+    "legacy": "Enter the public username and password of your account without an email address.",
+    "denied": "Unable to confirm these credentials for an account without email.",
+    "verified": "Verified email",
+    "unverified": "Unverified email"
   }
 }

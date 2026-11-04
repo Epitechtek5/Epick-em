@@ -9,13 +9,13 @@ import {
 import { AppState } from 'react-native';
 import { configureSessionRequest } from '@/lib/api';
 import { SessionClient } from './client';
-import type { AccountUser, RegisterRequest } from './types';
+import type { AccountUser, LoginRequest } from './types';
 
 interface AuthSession {
   token: string | null;
   user: AccountUser | null;
   initializing: boolean;
-  signIn: (credentials: RegisterRequest) => Promise<void>;
+  signIn: (credentials: LoginRequest) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   updateCurrentUser: (user: AccountUser) => void;

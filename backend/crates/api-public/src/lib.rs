@@ -13,9 +13,9 @@ pub mod export_cache;
 pub mod game_io;
 pub mod games;
 pub mod guard;
+pub mod mail;
 pub mod match_io;
 pub mod matches;
-pub mod mail;
 pub mod openapi;
 pub mod password_reset;
 pub mod ranking;
@@ -32,6 +32,7 @@ pub mod tournament_team_io;
 pub mod tournament_teams;
 pub mod tournaments;
 pub mod users;
+mod verification;
 
 pub use auth::AppState;
 pub use router::app;

@@ -28,3 +28,5 @@ databaseChangeLog:
       file: changelog/0013-match-in-step.yaml
   - include:
       file: changelog/0014-password-reset.yaml
+  - include:
+      file: changelog/0015-email-verification.yaml

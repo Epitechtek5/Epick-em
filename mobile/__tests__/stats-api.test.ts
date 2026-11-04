@@ -247,7 +247,10 @@ it('reuses the shared token refresh for list, import and export', async () => {
     expires_in: 60,
   };
   jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
-  await client.authenticate({ username: 'alice', password: 'password' });
+  await client.authenticate({
+    email: 'alice@example.com',
+    password: 'password',
+  });
   client.session!.expiresAt = 0;
   configureSessionRequest(client.request);
   const bytes = new TextEncoder().encode('{"version":1,"stats":[]}');

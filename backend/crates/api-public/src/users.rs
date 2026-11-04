@@ -44,6 +44,8 @@ struct UpdateUserRequest {
 /// Private account view, only returned to the authenticated owner.
 #[derive(Serialize, ToSchema)]
 struct SelfProfile {
+    pending_email: Option<String>,
+    email_verified_at: Option<String>,
     id: Uuid,
     username: String,
     role: Role,
@@ -57,6 +59,8 @@ impl From<crate::store::UserRecord> for SelfProfile {
             username: user.username,
             role: user.role,
             email: user.email,
+            pending_email: user.pending_email,
+            email_verified_at: user.email_verified_at,
         }
     }
 }
@@ -320,7 +324,7 @@ async fn update(
         None => None,
     };
 
-    state
+    let profile = state
         .store
         .update_user(
             id,
@@ -328,7 +332,7 @@ async fn update(
                 username,
                 password_hash,
                 role,
-                email,
+                email: email.clone(),
             },
         )
         .await
@@ -337,7 +341,11 @@ async fn update(
             StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?
-        .ok_or(ApiError::NotFound)
+        .ok_or(ApiError::NotFound)?;
+    if let Some(email) = email {
+        crate::verification::dispatch(state, email).await?;
+    }
+    Ok(profile)
 }
 
 async fn delete(state: &AppState, id: Uuid) -> Result<(), ApiError> {

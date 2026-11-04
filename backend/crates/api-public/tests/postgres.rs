@@ -2617,11 +2617,11 @@ async fn password_reset_tokens_work_once_and_end_sessions() {
         .unwrap();
 
     store
-        .insert_password_reset_token(user.id, &hash_a, ttl)
+        .insert_password_reset_token(user.id, None, &hash_a, ttl)
         .await
         .unwrap();
     store
-        .insert_password_reset_token(user.id, &hash_b, ttl)
+        .insert_password_reset_token(user.id, None, &hash_b, ttl)
         .await
         .unwrap();
     assert!(
@@ -2674,7 +2674,7 @@ async fn expired_password_reset_tokens_are_refused() {
         .unwrap();
     let hash = format!("{:0>64}", unique("exp"));
     store
-        .insert_password_reset_token(user.id, &hash, Duration::from_millis(50))
+        .insert_password_reset_token(user.id, None, &hash, Duration::from_millis(50))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;

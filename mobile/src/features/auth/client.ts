@@ -3,14 +3,14 @@ import { apiRequest, ApiError } from '@/lib/api';
 import type { ApiRequestOptions } from '@/lib/api';
 import type {
   AccountUser,
-  RegisterRequest,
+  LoginRequest,
   StoredSession,
   TokenResponse,
 } from './types';
 
 const STORAGE_KEY = 'epickem.session';
 
-export function login(credentials: RegisterRequest) {
+export function login(credentials: LoginRequest) {
   return apiRequest<TokenResponse>('/login', {
     method: 'POST',
     body: JSON.stringify(credentials),
@@ -48,7 +48,7 @@ export class SessionClient {
     await this.store(null);
   }
 
-  async authenticate(credentials: RegisterRequest) {
+  async authenticate(credentials: LoginRequest) {
     const generation = ++this.generation;
     const tokens = await login(credentials);
     if (generation !== this.generation) return;

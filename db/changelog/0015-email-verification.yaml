@@ -1,0 +1,54 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0015-email-verification
+      author: epickem
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE users ADD COLUMN email_verified_at timestamptz,
+                ADD COLUMN pending_email varchar(254) UNIQUE;
+              CREATE TABLE email_verification_tokens (
+                token_hash char(64) PRIMARY KEY,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                email varchar(254) NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                expires_at timestamptz NOT NULL DEFAULT (now() + interval '15 minutes'),
+                status varchar(8) NOT NULL DEFAULT 'active' CHECK (status IN ('staged','active','retired'))
+              );
+              CREATE INDEX verification_account_time ON email_verification_tokens(user_id, created_at);
+              CREATE INDEX verification_address_time ON email_verification_tokens(email, created_at);
+              CREATE TABLE verification_request_limits (
+                peer_hash char(64) PRIMARY KEY,
+                window_start timestamptz NOT NULL DEFAULT now(),
+                requests integer NOT NULL DEFAULT 1
+              );
+              CREATE INDEX verification_limits_cleanup ON verification_request_limits(window_start);
+              CREATE INDEX verification_cleanup ON email_verification_tokens(created_at);
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE FUNCTION reserve_user_email() RETURNS trigger LANGUAGE plpgsql AS $$
+              DECLARE address text;
+              BEGIN
+                FOR address IN SELECT DISTINCT value FROM unnest(ARRAY[NEW.email,NEW.pending_email]) AS value
+                               WHERE value IS NOT NULL ORDER BY value LOOP
+                  PERFORM pg_advisory_xact_lock(hashtextextended(address, 15));
+                  IF EXISTS (SELECT 1 FROM users WHERE id <> NEW.id AND
+                             (email = address OR pending_email = address)) THEN
+                    RAISE unique_violation USING CONSTRAINT = 'users_email_key';
+                  END IF;
+                END LOOP;
+                RETURN NEW;
+              END $$;
+        - sql:
+            sql: |
+              CREATE TRIGGER reserve_user_email BEFORE INSERT OR UPDATE OF email,pending_email ON users
+              FOR EACH ROW EXECUTE FUNCTION reserve_user_email();
+      rollback:
+        - sql:
+            sql: |
+              DROP TRIGGER reserve_user_email ON users;
+              DROP FUNCTION reserve_user_email();
+              DROP TABLE verification_request_limits;
+              DROP TABLE email_verification_tokens;
+              ALTER TABLE users DROP COLUMN pending_email, DROP COLUMN email_verified_at;

@@ -22,12 +22,16 @@ async fn register_with_email(
     username: &str,
     email: &str,
 ) -> (StatusCode, Value) {
-    post(
+    let response = post(
         app,
         "/register",
         json!({ "username": username, "password": "secret123", "email": email }),
     )
-    .await
+    .await;
+    if response.0 == StatusCode::CREATED {
+        common::confirm(app, email).await;
+    }
+    response
 }
 
 /// L'envoi part en tâche de fond : attend qu'il ait eu lieu.
@@ -258,7 +262,12 @@ async fn expired_links_are_refused() {
     let (_, user) = register_with_email(&app, "alice", "alice@example.com").await;
     let id = user["id"].as_str().unwrap().parse().unwrap();
     store
-        .insert_password_reset_token(id, &sha256_hex("expire"), Duration::from_millis(1))
+        .insert_password_reset_token(
+            id,
+            Some("alice@example.com"),
+            &sha256_hex("expire"),
+            Duration::from_millis(1),
+        )
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -273,7 +282,7 @@ async fn expired_links_are_refused() {
 }
 
 #[actix_web::test]
-async fn email_is_optional_and_unique() {
+async fn email_is_required_and_unique() {
     let app = app_with_mailer(Arc::new(MemoryStore::new()), Arc::new(MemoryMailer::new())).await;
     assert_eq!(
         common::register(&app, "bob", "secret123").await,
@@ -295,7 +304,7 @@ async fn email_is_optional_and_unique() {
 }
 
 #[actix_web::test]
-async fn an_existing_account_can_add_its_email() {
+async fn recovery_accepts_the_current_address_after_an_idempotent_profile_update() {
     let mailer = Arc::new(MemoryMailer::new());
     let app = app_with_mailer(Arc::new(MemoryStore::new()), mailer.clone()).await;
     common::register(&app, "bob", "secret123").await;
@@ -368,6 +377,8 @@ fn mail_config() -> MailConfig {
         from: "Epick'em <no-reply@epickem.test>".into(),
         public_url: PUBLIC_URL.into(),
         password_reset_template: "password-reset".into(),
+        verification_template: "email-address-confirmation".into(),
+        welcome_template: "welcome-account".into(),
     }
 }
 
@@ -417,4 +428,32 @@ fn auth_config_is_unaffected_by_mail_settings() {
     let vars = |name: &str| (name == "JWT_SECRET").then(|| common::SECRET.to_string());
     assert!(AuthConfig::from_lookup(vars).is_ok());
     assert!(MailConfig::from_lookup(|_| None).is_none());
+}
+
+#[tokio::test]
+async fn verification_and_welcome_use_distinct_hosted_templates() {
+    for welcome in [false, true] {
+        let (endpoint, server) = fake_resend(200).await;
+        let mailer = ResendMailer::with_endpoint(&mail_config(), &endpoint).unwrap();
+        let (alias, variables) = if welcome {
+            mailer
+                .send_welcome("alice@example.test", "Alice")
+                .await
+                .unwrap();
+            ("welcome-account", json!({"USERNAME":"Alice"}))
+        } else {
+            mailer
+                .send_verification("alice@example.test", "epickem://verify-email?token=fixture")
+                .await
+                .unwrap();
+            (
+                "email-address-confirmation",
+                json!({"VERIFICATION_URL":"epickem://verify-email?token=fixture"}),
+            )
+        };
+        let request = server.await.unwrap();
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["template"], json!({"id":alias,"variables":variables}));
+        assert!(body.get("html").is_none());
+    }
 }

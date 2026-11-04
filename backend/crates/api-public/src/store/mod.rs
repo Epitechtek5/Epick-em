@@ -85,6 +85,8 @@ pub struct UserRecord {
     pub role: Role,
     /// Adresse e-mail en minuscules, si le compte en a une.
     pub email: Option<String>,
+    pub pending_email: Option<String>,
+    pub email_verified_at: Option<String>,
 }
 
 /// Vue publique d'un compte : jamais l'empreinte du mot de passe. C'est aussi la valeur mise en
@@ -198,7 +200,29 @@ pub trait AuthStore: Send + Sync {
         username: &str,
         email: Option<&str>,
         password_hash: &str,
+    ) -> Result<UserRecord, StoreError> {
+        self.create_user_with_token(username, email, password_hash, None)
+            .await
+    }
+
+    async fn create_user_with_token(
+        &self,
+        username: &str,
+        email: Option<&str>,
+        password_hash: &str,
+        verification_hash: Option<&str>,
     ) -> Result<UserRecord, StoreError>;
+
+    async fn allow_verification_request(&self, peer_hash: &str) -> Result<bool, StoreError>;
+    async fn issue_verification(&self, email: &str, hash: &str) -> Result<bool, StoreError>;
+    async fn activate_verification(&self, hash: &str) -> Result<(), StoreError>;
+    async fn consume_verification(&self, hash: &str) -> Result<bool, StoreError>;
+    async fn enroll_legacy(
+        &self,
+        id: Uuid,
+        password_hash: &str,
+        email: &str,
+    ) -> Result<bool, StoreError>;
 
     /// Cherche un compte par nom d'utilisateur, sans tenir compte de la casse.
     async fn find_user_by_username(&self, username: &str)
@@ -657,9 +681,10 @@ pub trait AuthStore: Send + Sync {
     async fn insert_password_reset_token(
         &self,
         user_id: Uuid,
+        expected_email: Option<&str>,
         token_hash: &str,
         ttl: Duration,
-    ) -> Result<(), StoreError>;
+    ) -> Result<bool, StoreError>;
 
     /// Consomme le jeton s'il est valide (existant, non utilisé, non expiré) : remplace le mot de
     /// passe du compte par `password_hash` et révoque tous ses jetons de rafraîchissement, en une

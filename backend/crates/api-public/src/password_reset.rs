@@ -85,11 +85,19 @@ async fn forgot_password(
         .map_err(ApiError::internal)?;
     if let Some(user) = user {
         let token = new_token();
-        state
+        let issued = state
             .store
-            .insert_password_reset_token(user.id, &hash_token(&token), RESET_TOKEN_TTL)
+            .insert_password_reset_token(
+                user.id,
+                Some(&email),
+                &hash_token(&token),
+                RESET_TOKEN_TTL,
+            )
             .await
             .map_err(ApiError::internal)?;
+        if !issued {
+            return Ok(HttpResponse::NoContent().finish());
+        }
         let link = reset_link(&state.public_url, &token);
         let mailer = state.mailer.clone();
         // En tâche de fond : la durée de la réponse ne dépend pas de l'existence du compte, et

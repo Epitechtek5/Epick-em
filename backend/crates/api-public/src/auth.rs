@@ -11,11 +11,11 @@
 use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
+use crate::mail::{Mailer, NoopMailer};
 use crate::match_io::InSteps;
+use crate::password_reset::{email_error, normalize_email};
 use crate::stat_io::StoreStats;
 use crate::step_io::StoreSteps;
-use crate::mail::{Mailer, NoopMailer};
-use crate::password_reset::{email_error, normalize_email};
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
 use crate::tournament_io::TournamentChild;
 use crate::tournament_team_io::StoreTournamentTeams;
@@ -46,7 +46,7 @@ pub struct AppState {
     pub(crate) config: Arc<AuthConfig>,
     /// Empreinte factice, vérifiée quand le compte n'existe pas pour que « compte inconnu »
     /// et « mauvais mot de passe » prennent le même temps.
-    dummy_hash: Arc<str>,
+    pub(crate) dummy_hash: Arc<str>,
     /// Statistiques des jeux, importées et exportées avec eux (opaques pour les jeux). Par défaut
     /// celles de la base ([`StoreStats`]).
     pub(crate) stats: Arc<dyn GameStats>,
@@ -134,21 +134,25 @@ pub fn routes(cfg: &mut ServiceConfig) {
 
 #[derive(Deserialize, ToSchema)]
 struct Credentials {
-    #[schema(min_length = 3, max_length = 32, example = "alice")]
-    username: String,
-    #[schema(min_length = 8, max_length = 128, format = Password)]
+    #[serde(default)]
+    #[schema(required = true, format = Email)]
+    email: String,
+    #[serde(default)]
+    #[schema(required = true, min_length = 8, max_length = 128, format = Password)]
     password: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 struct RegisterRequest {
-    #[schema(min_length = 3, max_length = 32, example = "alice")]
+    #[serde(default)]
+    #[schema(required = true, min_length = 3, max_length = 32, example = "alice")]
     username: String,
-    #[schema(min_length = 8, max_length = 128, format = Password)]
+    #[serde(default)]
+    #[schema(required = true, min_length = 8, max_length = 128, format = Password)]
     password: String,
-    /// Facultative ; sert à réinitialiser le mot de passe.
-    #[schema(max_length = 254, format = Email, example = "alice@example.com")]
-    email: Option<String>,
+    #[serde(default)]
+    #[schema(required = true, max_length = 254, format = Email, example = "alice@example.com")]
+    email: String,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -221,22 +225,33 @@ fn decode_claims(token: &str, secret: &str, check_expiry: bool) -> Option<Claims
 #[post("/register")]
 async fn register(
     state: web::Data<AppState>,
+    http: actix_web::HttpRequest,
     request: web::Json<RegisterRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let request = request.into_inner();
     validate_registration(&request)?;
-    let email = request.email.as_deref().map(normalize_email);
+    if !crate::verification::within_peer_limit(&state, &http).await? {
+        return Err(ApiError::VerificationLimited);
+    }
+    let email = normalize_email(&request.email);
 
     let password_hash = hash_password_blocking(request.password).await?;
+    let token = new_token();
     let user = state
         .store
-        .create_user(&request.username, email.as_deref(), &password_hash)
+        .create_user_with_token(
+            &request.username,
+            Some(&email),
+            &password_hash,
+            Some(&hash_token(&token)),
+        )
         .await
         .map_err(|err| match err {
             StoreError::UsernameTaken => ApiError::Conflict,
             StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?;
+    crate::verification::send(&state, email, token, Some(user.username.clone()));
     Ok(HttpResponse::Created().json(RegisterResponse {
         id: user.id,
         username: user.username,
@@ -253,6 +268,7 @@ async fn register(
         (status = 200, description = "Jetons émis", body = TokenResponse),
         (status = 400, description = "Requête invalide", body = ErrorResponse),
         (status = 401, description = "Identifiants refusés", body = ErrorResponse),
+        (status = 403, description = "Adresse e-mail non vérifiée", body = ErrorResponse),
     ),
 )]
 #[post("/login")]
@@ -262,8 +278,9 @@ async fn login(
 ) -> Result<HttpResponse, ApiError> {
     let credentials = credentials.into_inner();
     let mut missing = Vec::new();
-    if credentials.username.is_empty() {
-        missing.push(("username", "Saisissez votre nom d'utilisateur.".to_string()));
+    let email = normalize_email(&credentials.email);
+    if let Some(message) = email_error(&email) {
+        missing.push(("email", message));
     }
     if credentials.password.is_empty() {
         missing.push(("password", "Saisissez votre mot de passe.".to_string()));
@@ -278,7 +295,7 @@ async fn login(
 
     let user = state
         .store
-        .find_user_by_username(&credentials.username)
+        .find_user_by_email(&email)
         .await
         .map_err(ApiError::internal)?;
     let hash = user
@@ -289,6 +306,9 @@ async fn login(
         .await
         .map_err(ApiError::internal)?;
     match user {
+        Some(user) if verified && user.email_verified_at.is_none() => {
+            Err(ApiError::EmailUnverified)
+        }
         Some(user) if verified => {
             let refresh_token = new_token();
             state
@@ -385,11 +405,7 @@ fn validate_registration(request: &RegisterRequest) -> Result<(), ApiError> {
     if let Some(message) = password_error(&request.password) {
         errors.push(("password", message));
     }
-    if let Some(message) = request
-        .email
-        .as_deref()
-        .and_then(|email| email_error(&normalize_email(email)))
-    {
+    if let Some(message) = email_error(&normalize_email(&request.email)) {
         errors.push(("email", message));
     }
     if errors.is_empty() {
@@ -469,7 +485,7 @@ fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error>
         .map(|hash| hash.to_string())
 }
 
-fn verify_password(password: &str, hash: &str) -> bool {
+pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .and_then(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed))
         .is_ok()
@@ -534,6 +550,8 @@ mod tests {
             password_hash: String::new(),
             role: Role::Admin,
             email: None,
+            email_verified_at: None,
+            pending_email: None,
         };
         let response = token_response(&config, &user, "r".into()).unwrap();
         let claims = decode_access_token(&response.access_token, secret).unwrap();

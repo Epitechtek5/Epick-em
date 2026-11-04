@@ -1868,7 +1868,7 @@ async fn steps_and_matches_are_delegated_to_their_levels() {
         .unwrap()
         .with_steps(steps.clone())
         .with_matches(matches.clone());
-    let app = actix_web::test::init_service(app(state)).await;
+    let app = actix_web::test::init_service(app(common::with_test_mailer(state))).await;
     logged_in_as(&app, "root", "secret123").await;
     store.set_role("root", Role::Admin);
     let (_, session) = login(&app, "root", "secret123").await;

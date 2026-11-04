@@ -112,7 +112,8 @@ Minimal payload shapes are:
       {
         "appIDs": ["<APPLE_TEAM_ID>.com.epickem.mobile"],
         "components": [
-          { "/": "/reset-password", "comment": "Password reset links" }
+          { "/": "/reset-password", "comment": "Password reset links" },
+          { "/": "/verify-email", "comment": "Email verification links" }
         ]
       }
     ]
@@ -131,3 +132,18 @@ adb shell am start -W -a android.intent.action.VIEW -d 'epickem://reset-password
 This checks route handling only. To test HTTPS verification, use a test HTTPS domain with a real `assetlinks.json` containing the installed build certificate, rebuild with that domain as `PUBLIC_URL`, and invoke `adb shell am start -W -a android.intent.action.VIEW -d 'https://test.example/reset-password?token=TEST_TOKEN'`. A custom-scheme success is not evidence that production App Links or Universal Links are verified. Never use a real reset token in shell history or test logs.
 
 `RESEND_API_KEY`, `MAIL_FROM`, and `PUBLIC_URL` remain backend configuration. The mobile application contains no Resend credential or SDK. The backend generates inline HTML and plain-text bodies; no Resend-hosted template is selected. In local development without Resend, verify the reset lifecycle through backend tests or a controlled test mailer rather than exposing reset tokens through user-facing API responses.
+
+## Account email verification
+
+Publish both hosted templates in Resend using the verified sender `Epick'em <no-reply@epickem.eu>`. Keep the existing password reset template and its public web origin. Set `PUBLIC_URL` to the existing web origin (for example `http://localhost:5173` when the reset page is served there).
+
+| Template alias       | String variable    | Subject and content                                                                                                                                                                                                                        |
+| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `email-address-confirmation` | `VERIFICATION_URL` | **Confirmez votre adresse e-mail Epick'em**. Confirm the address for the newly created account or requested address change within 15 minutes. Ignore the message if you did not initiate the request. Use the variable as the link target. |
+| `welcome-account`            | `USERNAME`         | **Bienvenue sur Epick'em !** Welcome the named player and describe Epick'em as a place to predict tournament results. Omit credentials, links with tokens and any claim that verification has succeeded.                                   |
+
+The API accepts alias overrides through `RESEND_EMAIL_VERIFICATION_TEMPLATE` and `RESEND_WELCOME_TEMPLATE`. The server alone receives `RESEND_API_KEY`. Registration commits the account and verification hash together, then dispatches the two messages in the background. Each successful insert schedules one welcome attempt. If delivery fails or the process exits after commit, the account remains unverified. Public resend stages a replacement. The previous link remains usable until the provider accepts the new message and the store activates its token. Welcome delivery is best effort with no automatic retry.
+
+Public resend returns 204 for any syntactically valid address. The database enforces a 60-second cooldown and five issuances per account or address per hour. Registration, enrollment and resend share a limit of 30 requests per hour per direct network peer. Instances behind the same proxy share its allowance. The API ignores forwarded IP headers. Configure trusted ingress limits for larger deployments.
+
+Verification and password reset share `PUBLIC_URL`. The verification email opens `/verify-email?token=...`. The browser offers confirmation and a link to the installed app. Verified HTTPS links can open the native screen directly after rebuilding the app with the public host and deploying the platform association files. A localhost URL works only on the device hosting the web service. Disable click tracking for transactional links.

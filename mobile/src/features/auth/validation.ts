@@ -63,10 +63,8 @@ export function validateRegisterForm(form: RegisterForm): RegisterErrors {
   const usernameError = validateUsername(form.username);
   if (usernameError) errors.username = usernameError;
 
-  if (form.email.trim()) {
-    const emailError = validateEmail(form.email);
-    if (emailError) errors.email = emailError;
-  }
+  const emailError = validateEmail(form.email);
+  if (emailError) errors.email = emailError;
 
   const passwordError = validateNewPassword(form.password);
   if (passwordError) errors.password = passwordError;

@@ -46,6 +46,7 @@ it('keeps validation errors as translatable keys', async () => {
   });
   expect(errors).toEqual({
     username: 'validation.username',
+    email: 'validation.email',
     password: 'validation.passwordLength',
     confirmPassword: 'validation.match',
   });

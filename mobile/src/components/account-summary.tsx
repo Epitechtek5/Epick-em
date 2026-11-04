@@ -1,3 +1,5 @@
+import { router } from 'expo-router';
+import { Button } from './ui/button';
 import { View } from 'react-native';
 import UserCircleIcon from '@hugeicons/core-free-icons/UserCircleIcon';
 import ShieldUserIcon from '@hugeicons/core-free-icons/ShieldUserIcon';
@@ -48,6 +50,32 @@ export function AccountSummary({ user }: { user: AccountUser }) {
             {user.email ?? t('account.recoveryEmailMissing')}
           </Text>
         </View>
+        {user.email && (
+          <Text>
+            {t(
+              user.email_verified_at
+                ? 'verification.verified'
+                : 'verification.unverified',
+            )}
+          </Text>
+        )}
+        {user.pending_email && (
+          <Text>
+            {t('verification.unverified')} · {user.pending_email}
+          </Text>
+        )}
+        {(user.pending_email || (user.email && !user.email_verified_at)) && (
+          <Button
+            onPress={() =>
+              router.push({
+                pathname: '/verification-pending',
+                params: { email: user.pending_email ?? user.email ?? '' },
+              })
+            }
+          >
+            <Text>{t('verification.resend')}</Text>
+          </Button>
+        )}
         <View className="gap-1 border-t border-border pt-3">
           <Text variant="muted">{t('account.identifier')}</Text>
           <Text className="text-xs leading-5 text-muted-foreground" selectable>

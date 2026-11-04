@@ -29,18 +29,20 @@ module.exports = ({ config }) => ({
       ? {
           intentFilters: [
             ...(config.android?.intentFilters || []),
-            {
+            ...['/reset-password', '/verify-email'].map((path) => ({
               action: 'VIEW',
               autoVerify: true,
               data: [
                 {
                   scheme: 'https',
                   host: linkHost,
-                  pathPrefix: '/reset-password',
+                  ...(path === '/reset-password'
+                    ? { pathPrefix: path }
+                    : { path }),
                 },
               ],
               category: ['BROWSABLE', 'DEFAULT'],
-            },
+            })),
           ],
         }
       : {}),

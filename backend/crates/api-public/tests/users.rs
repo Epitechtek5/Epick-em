@@ -121,11 +121,8 @@ async fn private_email_is_only_visible_to_its_owner() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["email"], "alice@example.com");
 
-    let (status, private) = call(
-        &app,
-        request(TestRequest::get(), "/me", Some(&alice_token)),
-    )
-    .await;
+    let (status, private) =
+        call(&app, request(TestRequest::get(), "/me", Some(&alice_token))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(private["email"], "alice@example.com");
 
@@ -147,7 +144,13 @@ async fn private_email_is_only_visible_to_its_owner() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(users.as_array().unwrap().iter().all(|user| user.get("email").is_none()));
+    assert!(
+        users
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|user| user.get("email").is_none())
+    );
 }
 
 #[actix_web::test]
@@ -221,10 +224,10 @@ async fn an_admin_updates_another_account() {
 
     // Le nouveau mot de passe est celui qui fonctionne, et le rôle est dans le jeton.
     assert_eq!(
-        login(&app, "robert", "secret123").await.0,
+        login(&app, "bob", "secret123").await.0,
         StatusCode::UNAUTHORIZED
     );
-    let (status, session) = login(&app, "robert", "nouveau-mdp-1").await;
+    let (status, session) = login(&app, "bob", "nouveau-mdp-1").await;
     assert_eq!(status, StatusCode::OK);
     let claims = api_public::auth::decode_access_token(access(&session), common::SECRET).unwrap();
     assert_eq!(claims.role, Role::Watcher);
@@ -432,12 +435,13 @@ async fn a_user_updates_their_own_account() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert!(updated["email_verified_at"].is_string());
     assert_eq!(
         updated,
-        json!({ "id": alice, "username": "alicia", "role": "user", "email": null })
+        json!({ "id": alice, "username": "alicia", "role": "user", "email": "alice@example.com", "pending_email":null, "email_verified_at":updated["email_verified_at"] })
     );
     assert_eq!(
-        login(&app, "alicia", "nouveau-mdp-1").await.0,
+        login(&app, "alice", "nouveau-mdp-1").await.0,
         StatusCode::OK
     );
     assert_eq!(

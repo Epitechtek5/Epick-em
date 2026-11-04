@@ -3,7 +3,6 @@
     "username": "Nom d’utilisateur",
     "password": "Mot de passe",
     "email": "Adresse e-mail",
-    "emailOptional": "Adresse e-mail (facultative)",
     "confirmPassword": "Confirmer le mot de passe",
     "newPassword": "Nouveau mot de passe",
     "confirmNewPassword": "Confirmer le nouveau mot de passe",
@@ -28,8 +27,8 @@
     "submitting": "Connexion…",
     "noAccount": "Vous n’avez pas de compte ?",
     "create": "Créer un compte",
-    "missing": "Saisissez votre nom d’utilisateur et votre mot de passe.",
-    "invalid": "Nom d’utilisateur ou mot de passe incorrect.",
+    "missing": "Saisissez votre adresse e-mail et votre mot de passe.",
+    "invalid": "Adresse e-mail ou mot de passe incorrect.",
     "failed": "Connexion impossible. Veuillez réessayer.",
     "forgotPassword": "Mot de passe oublié ?"
   },
@@ -44,7 +43,7 @@
     "failed": "Création du compte impossible. Veuillez réessayer.",
     "completeTitle": "Compte créé",
     "completeDescription": "Votre prochain pronostic commence ici.",
-    "emailHint": "Ajoutez une adresse e-mail pour récupérer votre compte en cas d’oubli du mot de passe."
+    "emailHint": "Cette adresse sert à vous connecter et à récupérer votre compte."
   },
   "settings": {
     "title": "Paramètres",
@@ -78,7 +77,7 @@
     "identifier": "UUID du compte",
     "recoveryEmail": "Adresse e-mail de récupération",
     "recoveryEmailMissing": "Aucune adresse de récupération configurée",
-    "recoveryEmailHint": "Utilisée uniquement pour envoyer les liens de réinitialisation."
+    "recoveryEmailHint": "Cette adresse sert à vous connecter et à récupérer votre compte."
   },
   "users": {
     "title": "Utilisateurs",
@@ -773,5 +772,21 @@
       "conflict": "Cette action est incompatible avec le cycle de vie du tournoi ou de l’étape.",
       "locked": "La configuration des étapes est verrouillée dès le démarrage du tournoi."
     }
+  },
+  "verification": {
+    "title": "Vérification de votre adresse e-mail",
+    "pending": "Consultez votre boîte de réception",
+    "instructions": "Ouvrez le lien de vérification dans les 15 minutes.",
+    "resend": "Renvoyer le lien",
+    "sent": "Si cette adresse est éligible, un lien vous sera envoyé.",
+    "loading": "Vérification en cours…",
+    "invalid": "Ce lien est manquant, expiré ou déjà utilisé.",
+    "failed": "La demande a échoué. Réessayez.",
+    "success": "Adresse confirmée. Vous pouvez vous connecter.",
+    "enroll": "Ajouter une adresse à un ancien compte",
+    "legacy": "Utilisez le nom public et le mot de passe du compte sans adresse e-mail.",
+    "denied": "Impossible de confirmer ces identifiants pour un compte sans e-mail.",
+    "verified": "Adresse vérifiée",
+    "unverified": "Adresse non vérifiée"
   }
 }

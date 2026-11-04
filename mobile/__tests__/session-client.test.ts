@@ -31,7 +31,10 @@ beforeEach(() => {
 });
 async function authenticate() {
   jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
-  await client.authenticate({ username: 'alice', password: 'password' });
+  await client.authenticate({
+    email: 'alice@example.com',
+    password: 'password',
+  });
 }
 it('sends the exact login contract and stores both tokens securely', async () => {
   await authenticate();
@@ -39,7 +42,10 @@ it('sends the exact login contract and stores both tokens securely', async () =>
     'http://localhost:8080/login',
     expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ username: 'alice', password: 'password' }),
+      body: JSON.stringify({
+        email: 'alice@example.com',
+        password: 'password',
+      }),
     }),
   );
   expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
@@ -50,7 +56,7 @@ it('sends the exact login contract and stores both tokens securely', async () =>
 it('does not surface server-controlled credentials in errors', async () => {
   jest.mocked(fetch).mockResolvedValue(response(401, { message: 'secret' }));
   await expect(
-    login({ username: 'alice', password: 'wrong' }),
+    login({ email: 'alice@example.com', password: 'wrong' }),
   ).rejects.toMatchObject({ status: 401, message: 'HTTP error 401' });
 });
 it('restores storage and obtains the private self profile', async () => {
