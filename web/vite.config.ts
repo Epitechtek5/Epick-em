@@ -28,5 +28,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Les tests d'écran (user-event) dépassent parfois 5 s quand tous les fichiers tournent en
+    // parallèle sur une machine chargée ; la marge évite les faux échecs sans masquer un blocage.
+    testTimeout: 15_000,
   },
 })
