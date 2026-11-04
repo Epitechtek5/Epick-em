@@ -110,7 +110,11 @@ export default function TournamentTeamDetailsPage() {
               { label: t('tournamentTeams.kind'), value: t('tournamentTeams.kindValue') },
               {
                 label: t('tournamentTeams.tournament'),
-                value: <span className="font-mono">{team.tournament_id}</span>,
+                value: (
+                  <Link to={`/tournaments/${team.tournament_id}`} className="font-mono text-primary underline underline-offset-4">
+                    {team.tournament_id}
+                  </Link>
+                ),
               },
               {
                 label: t('teams.owner'),
