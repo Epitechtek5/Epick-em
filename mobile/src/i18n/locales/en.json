@@ -370,7 +370,10 @@
       "finished": "Finished",
       "cancelled": "Cancelled"
     },
-    "participantType": { "solo": "Solo", "team": "Team" },
+    "participantType": {
+      "solo": "Solo",
+      "team": "Team"
+    },
     "participantStatus": {
       "registered": "Registered",
       "checked_in": "Checked in",
@@ -422,7 +425,10 @@
       "success": "Registration completed successfully.",
       "checkedIn": "Check-in completed successfully."
     },
-    "scoringMode": { "linear": "Linear", "table": "Table" },
+    "scoringMode": {
+      "linear": "Linear",
+      "table": "Table"
+    },
     "validation": {
       "game": "Select a game.",
       "name": "Enter a name of 1–128 characters.",
@@ -543,6 +549,93 @@
     "filterByGame": "Filter by game",
     "filterSelection": "Game filter: {{game}}",
     "noGames": "No games available."
+  },
+  "matches": {
+    "title": "View matches",
+    "detail": "Match details",
+    "create": "Schedule a match",
+    "edit": "Edit match",
+    "results": "Enter results",
+    "group": "Group",
+    "all": "All",
+    "statusLabel": "Match status",
+    "bracket": "Elimination bracket",
+    "list": "Show match list",
+    "bracketHelp": "Pinch to zoom and drag to explore. Lines show recorded match progression.",
+    "zoomOut": "Zoom out",
+    "zoomIn": "Zoom in",
+    "resetZoom": "Reset zoom to 100%",
+    "fitToScreen": "Fit bracket to screen",
+    "fit": "Fit",
+    "focusRegion": "Focus {{region}}",
+    "bracketCanvas": "Interactive tournament bracket",
+    "openDetails": "Opens match details",
+    "winner": "Winner",
+    "winnerOf": "Winner of Match {{number}}",
+    "toBeDetermined": "To be determined",
+    "number": "Match {{number}}",
+    "roundNumber": "Round {{round}}",
+    "unknownRound": "Round unassigned",
+    "round": "Round (1–1,000)",
+    "next": "Next match for the winner",
+    "outside": "Match outside this view",
+    "empty": "No matches for this selection.",
+    "awaiting": "Awaiting participant",
+    "noResults": "No results yet",
+    "unset": "Unassigned",
+    "date": "Scheduled date and time",
+    "participants": "Participants",
+    "search": "Search participants",
+    "rank": "Placement (optional)",
+    "outcomeLabel": "Outcome (optional)",
+    "stats": "Statistics",
+    "scored": "Counts toward points",
+    "saved": "Results saved",
+    "updated": "Match updated.",
+    "closed": "Match finished. The server closed this stage and updated tournament progression.",
+    "confirm": "Apply this change to the match?",
+    "conflict": "The match or stage no longer allows this action. Reopen the match to see its current state.",
+    "invalidRequest": "Check the participants, bracket links and results. Finishing requires results and consistent ranks.",
+    "notFound": "The match, stage or tournament could not be found.",
+    "invalidStats": "Use registered statistics with finite values from −1 billion to 1 billion. Percentages must be between 0 and 100.",
+    "invalidRank": "Enter a whole placement between 1 and the number of participants.",
+    "action": {
+      "ongoing": "Start match",
+      "finished": "Finish match",
+      "cancelled": "Cancel match",
+      "delete": "Delete match"
+    },
+    "region": {
+      "winners": "Winners bracket",
+      "losers": "Losers bracket",
+      "grand_final": "Grand final"
+    },
+    "status": {
+      "scheduled": "Scheduled",
+      "ongoing": "In progress",
+      "finished": "Finished",
+      "cancelled": "Cancelled"
+    },
+    "outcome": {
+      "win": "Win",
+      "loss": "Loss",
+      "draw": "Draw"
+    },
+    "validation": {
+      "group": "Choose a group in this stage.",
+      "round": "Enter a whole round from 1 to 1,000.",
+      "date": "Choose a valid date and time.",
+      "bracket": "Bracket regions require double elimination.",
+      "next": "Select another match in this elimination stage.",
+      "participants": "Choose distinct group members within the match capacity."
+    },
+    "manage": "Match options",
+    "entryScope": "Enter statistics for",
+    "teamTotals": "Team total",
+    "showPlayers": "Player breakdown ({{count}})",
+    "hidePlayers": "Hide player breakdown",
+    "noNext": "No next match",
+    "nextHelp": "Choose an existing match to receive the winner. Leave this empty for a final."
   },
   "steps": {
     "title": "Tournament stages",
