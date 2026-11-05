@@ -12,6 +12,7 @@ module.exports = ({ config }) => ({
     ...(config.plugins || []),
     'expo-secure-store',
     'expo-localization',
+    '@react-native-community/datetimepicker',
     ['./plugins/with-android-network-security', { profile }],
   ],
 });

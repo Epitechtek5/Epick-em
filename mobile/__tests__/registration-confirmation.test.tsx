@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, act } from '@testing-library/react-native';
-import RegisterScreen from '../src/screens/RegisterScreen';
+import RegisterScreen from '../src/screens/auth/RegisterScreen';
 import { useAuth } from '../src/features/auth/session';
 import { register } from '../src/features/auth/register';
 import i18n from '../src/i18n';
@@ -33,16 +33,16 @@ it('centers confirmation and explanation in both languages while preserving regi
   expect(screen.getByLabelText('Confirm password').props.secureTextEntry).toBe(
     true,
   );
-  await fireEvent.changeText(screen.getByLabelText('Username'), 'alice');
-  await fireEvent.changeText(screen.getByLabelText('Password'), 'password');
+  await fireEvent.changeText(screen.getByLabelText('Username'), '  alice  ');
+  await fireEvent.changeText(screen.getByLabelText('Password'), 'Password1!');
   await fireEvent.changeText(
     screen.getByLabelText('Confirm password'),
-    'password',
+    'Password1!',
   );
   await fireEvent.press(screen.getByLabelText('Create account'));
   expect(register).toHaveBeenCalledWith({
     username: 'alice',
-    password: 'password',
+    password: 'Password1!',
   });
   expect(
     (await screen.findByText(en.register.success)).props.className,
