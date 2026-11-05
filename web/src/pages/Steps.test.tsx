@@ -448,7 +448,7 @@ describe('Page d’une étape', () => {
     await user.click(await screen.findByRole('button', { name: 'Supprimer l’étape' }))
     await confirm(user, 'Supprimer l’étape')
     expect(await screen.findByText('L’étape 2 a été supprimée.')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { level: 1, name: 'TFT Open' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'TFT Open' })).toBeInTheDocument()
     expect(calls(fetchMock, 'DELETE', `/steps/${STEP_FINAL.id}`)).toHaveLength(1)
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Voir l’étape 2' })).not.toBeInTheDocument())
   })
