@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useI18n } from '@/i18n/context'
 
 export function ThemeToggle() {
+  const { t } = useI18n()
   const [dark, setDark] = useState(() => {
     try {
       return localStorage.getItem('epickem-theme') !== 'light'
@@ -22,7 +24,7 @@ export function ThemeToggle() {
 
   return (
     <Button variant="outline" size="sm" aria-pressed={dark} onClick={() => setDark(!dark)}>
-      {dark ? 'Passer en mode clair' : 'Passer en mode sombre'}
+      {dark ? t('shell.lightMode') : t('shell.darkMode')}
     </Button>
   )
 }
