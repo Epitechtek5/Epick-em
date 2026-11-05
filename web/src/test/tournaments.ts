@@ -1,3 +1,4 @@
+import type { Step } from '@/features/steps/types'
 import type { ScoringRule, Tournament, TournamentParticipant } from '@/features/tournaments/types'
 import { BOB, GAME_A, ME, STAT_A, STAT_B, TOURNAMENT_ID, TT_MINE } from './render'
 
@@ -76,4 +77,34 @@ export function fullText(text: string | RegExp) {
     typeof text === 'string' ? value === text : text.test(value ?? '')
   return (_: string, element: Element | null) =>
     Boolean(element && matches(element.textContent) && ![...element.children].some((child) => matches(child.textContent)))
+}
+
+// Étapes : 32 inscrits → 4 poules de 8 (4 qualifiés chacune) → finale de 16, 1 vainqueur.
+export const STEP_POOLS: Step = {
+  id: '13131313-1313-4313-8313-131313131313',
+  tournament_id: SOLO.id,
+  position: 1,
+  format: 'pool',
+  match_type: 'ffa',
+  group_count: 4,
+  group_size: 8,
+  matches_per_group: 3,
+  advance_per_group: 4,
+  tiebreak: ['wins', 'best_placement'],
+  status: 'pending',
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+
+export const STEP_FINAL: Step = {
+  ...STEP_POOLS,
+  id: '14141414-1414-4414-8414-141414141414',
+  position: 2,
+  format: 'single_elim',
+  match_type: 'duel',
+  group_count: 1,
+  group_size: 16,
+  matches_per_group: 1,
+  advance_per_group: 1,
+  tiebreak: [],
 }

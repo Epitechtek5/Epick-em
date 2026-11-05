@@ -158,3 +158,29 @@ export function PageHero({
     </header>
   )
 }
+
+// Groupe de champs en carte : pastille d'icône et titre (légende), consigne éventuelle.
+export function FormSection({
+  icon,
+  title,
+  hint,
+  children,
+}: {
+  icon: IconSvgElement
+  title: string
+  hint?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <fieldset className="grid min-w-0 gap-4 rounded-2xl bg-card p-4 text-card-foreground shadow-sm ring-1 ring-foreground/10 sm:p-6">
+      <legend className="float-left flex w-full items-center gap-3">
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:bg-primary/25 dark:text-violet-200">
+          <Icon icon={icon} size={20} />
+        </span>
+        <span className="text-lg font-semibold tracking-tight">{title}</span>
+      </legend>
+      {hint}
+      {children}
+    </fieldset>
+  )
+}
