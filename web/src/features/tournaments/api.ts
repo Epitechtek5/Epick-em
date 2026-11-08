@@ -113,6 +113,17 @@ export async function listParticipants(
   return apiRequest<TournamentParticipant[]>(`${base(id)}/participants?${params}`, { signal })
 }
 
+// Tous les inscrits, par pages de 100 (identité des participants des étapes).
+export async function listAllParticipants(id: string, signal?: AbortSignal): Promise<TournamentParticipant[]> {
+  const all: TournamentParticipant[] = []
+  for (let offset = 0; offset < 10_000; offset += 100) {
+    const page = await listParticipants(id, { limit: 100, offset }, signal)
+    all.push(...page)
+    if (page.length < 100) break
+  }
+  return all
+}
+
 // Solo : soi-même (ou un autre joueur pour un administrateur), éventuellement pour une équipe
 // du tournoi dont on est membre. Par équipes : une équipe du tournoi, par son propriétaire.
 export async function registerParticipant(id: string, input: RegisterInput = {}) {

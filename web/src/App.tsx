@@ -15,6 +15,8 @@ import RegisterPage from '@/pages/RegisterPage'
 import StatEditorPage from '@/pages/StatEditorPage'
 import StatTransferPage from '@/pages/StatTransferPage'
 import StatsPage from '@/pages/StatsPage'
+import StepDetailsPage from '@/pages/StepDetailsPage'
+import StepEditorPage from '@/pages/StepEditorPage'
 import TeamDetailsPage from '@/pages/TeamDetailsPage'
 import TeamEditorPage from '@/pages/TeamEditorPage'
 import TeamTransferPage from '@/pages/TeamTransferPage'
@@ -51,6 +53,8 @@ export default function App() {
             <Route path="/tournaments/new" element={<TournamentEditorPage />} />
             <Route path="/tournaments/transfer" element={<TournamentTransferPage />} />
             <Route path="/tournaments/:id/edit" element={<TournamentEditorPage />} />
+            <Route path="/tournaments/:tournamentId/steps/new" element={<StepEditorPage />} />
+            <Route path="/tournaments/:tournamentId/steps/:stepId/edit" element={<StepEditorPage />} />
           </Route>
           <Route path="/games/:id" element={<GameDetailsPage />} />
           <Route path="/stats" element={<StatsPage />} />
@@ -63,6 +67,7 @@ export default function App() {
           <Route path="/tournaments" element={<TournamentsPage />} />
           <Route path="/tournaments/:id" element={<TournamentDetailsPage />} />
           {/* Équipes de tournoi : l'UUID du tournoi vient de l'URL. */}
+          <Route path="/tournaments/:tournamentId/steps/:stepId" element={<StepDetailsPage />} />
           <Route path="/tournaments/:tournamentId/teams" element={<TournamentTeamsPage />} />
           <Route path="/tournaments/:tournamentId/teams/new" element={<TournamentTeamEditorPage />} />
           <Route path="/tournaments/:tournamentId/teams/copy" element={<TournamentTeamCopyPage />} />
