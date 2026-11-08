@@ -14,6 +14,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
 import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog'
 import { StateMessage } from '@/components/games/StateMessage'
+import { StepsSection } from '@/components/steps/StepsSection'
 import { ParticipantsSection } from '@/components/tournaments/ParticipantsSection'
 import { RankingSection } from '@/components/tournaments/RankingSection'
 import { ScoringRulesSection } from '@/components/tournaments/ScoringRulesSection'
@@ -37,7 +38,7 @@ import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
 
-// Fiche d'un tournoi (GET /tournaments/{id}) : informations, inscriptions, barème et
+// Fiche d'un tournoi (GET /tournaments/{id}) : informations, inscriptions, étapes, barème et
 // classements ; cycle de vie, modification et suppression pour les administrateurs.
 export default function TournamentDetailsPage() {
   const { id = '' } = useParams()
@@ -284,6 +285,7 @@ export default function TournamentDetailsPage() {
             teamsReady={teamsState.state.status === 'success'}
             onChanged={() => setRankingVersion((v) => v + 1)}
           />
+          <StepsSection tournament={tournament} canManage={isAdmin} />
           <ScoringRulesSection tournament={tournament} />
           <RankingSection tournament={tournament} teams={teams} version={rankingVersion} />
         </>

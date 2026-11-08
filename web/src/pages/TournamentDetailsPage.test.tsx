@@ -83,6 +83,7 @@ function server(initial: Partial<ServerState> = {}) {
       state.rules = state.rules.map((r) => (r.id === rule[1] ? { ...r, coefficient: null, points_table: null, ...body } : r))
       return jsonResponse(200, state.rules.find((r) => r.id === rule[1]))
     }
+    if (path === `${base}/steps`) return jsonResponse(200, [])
     if (path === `${base}/ranking`) {
       return jsonResponse(200, [
         { rank: 1, participant_id: P_BOB.id, user_id: BOB.id, tournament_team_id: null, points: 12.5 },

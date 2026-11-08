@@ -7,7 +7,6 @@ import {
   UserIcon,
   UserMultipleIcon,
 } from '@hugeicons/core-free-icons'
-import type { IconSvgElement } from '@hugeicons/react'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { ErrorSummary, type ErrorSummaryItem } from '@/components/form/ErrorSummary'
@@ -37,6 +36,7 @@ import {
 } from '@/features/tournaments/validation'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { cn } from '@/lib/utils'
+import { FormSection } from './ui'
 
 const IDS: Record<TournamentField, string> = {
   game_id: 'tournament-game',
@@ -81,22 +81,6 @@ interface TournamentFormProps {
   onCancel: () => void
   // Aperçu en direct, affiché à côté du formulaire sur grand écran.
   preview?: (values: TournamentValues) => ReactNode
-}
-
-// Groupe de champs en carte : pastille d'icône et titre (légende), consigne éventuelle.
-function FormSection({ icon, title, hint, children }: { icon: IconSvgElement; title: string; hint?: ReactNode; children: ReactNode }) {
-  return (
-    <fieldset className="grid min-w-0 gap-4 rounded-2xl bg-card p-4 text-card-foreground shadow-sm ring-1 ring-foreground/10 sm:p-6">
-      <legend className="float-left flex w-full items-center gap-3">
-        <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:bg-primary/25 dark:text-violet-200">
-          <Icon icon={icon} size={20} />
-        </span>
-        <span className="text-lg font-semibold tracking-tight">{title}</span>
-      </legend>
-      {hint}
-      {children}
-    </fieldset>
-  )
 }
 
 const TYPE_ICONS = { solo: UserIcon, team: UserGroupIcon } as const
