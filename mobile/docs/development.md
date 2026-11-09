@@ -137,8 +137,8 @@ This checks route handling only. To test HTTPS verification, use a test HTTPS do
 
 Publish both hosted templates in Resend using the verified sender `Epick'em <no-reply@epickem.eu>`. Keep the existing password reset template and its public web origin. Set `PUBLIC_URL` to the existing web origin (for example `http://localhost:5173` when the reset page is served there).
 
-| Template alias       | String variable    | Subject and content                                                                                                                                                                                                                        |
-| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Template alias               | String variable    | Subject and content                                                                                                                                                                                                                        |
+| ---------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `email-address-confirmation` | `VERIFICATION_URL` | **Confirmez votre adresse e-mail Epick'em**. Confirm the address for the newly created account or requested address change within 15 minutes. Ignore the message if you did not initiate the request. Use the variable as the link target. |
 | `welcome-account`            | `USERNAME`         | **Bienvenue sur Epick'em !** Welcome the named player and describe Epick'em as a place to predict tournament results. Omit credentials, links with tokens and any claim that verification has succeeded.                                   |
 
