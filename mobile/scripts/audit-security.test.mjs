@@ -211,10 +211,7 @@ test('summarizes clean results, accepted exceptions and new or expired findings 
   ]);
 
   assert.match(summary, /No unexpected advisories/);
-  assert.match(
-    summary,
-    /braces GHSA-vfj7-8cjw-p6xm \(existing exception\)/,
-  );
+  assert.match(summary, /braces GHSA-vfj7-8cjw-p6xm \(existing exception\)/);
   assert.match(summary, /New or expired advisories require action/);
   assert.match(summary, /GHSA-xxxx-yyyy-zzzz/);
 });

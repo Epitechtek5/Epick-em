@@ -156,10 +156,7 @@ export function inspectAudit(result) {
   };
 }
 
-export function runAudits(
-  execute = spawnSync,
-  log = console.log,
-) {
+export function runAudits(execute = spawnSync, log = console.log) {
   const failures = [];
   const auditResults = [];
 
