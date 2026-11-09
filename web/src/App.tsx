@@ -4,6 +4,9 @@ import { AdminRoute } from '@/components/auth/AdminRoute'
 import { GuestRoute } from '@/components/auth/GuestRoute'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
 import { AppShell } from '@/components/layout/AppShell'
+import AccountPage from '@/pages/AccountPage'
+import EnrollEmailPage from '@/pages/EnrollEmailPage'
+import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import GameDetailsPage from '@/pages/GameDetailsPage'
 import GameEditorPage from '@/pages/GameEditorPage'
 import GameTransferPage from '@/pages/GameTransferPage'
@@ -14,6 +17,7 @@ import MatchDetailsPage from '@/pages/MatchDetailsPage'
 import MatchEditorPage from '@/pages/MatchEditorPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import RegisterPage from '@/pages/RegisterPage'
+import ResetPasswordPage from '@/pages/ResetPasswordPage'
 import StatEditorPage from '@/pages/StatEditorPage'
 import StatTransferPage from '@/pages/StatTransferPage'
 import StatsPage from '@/pages/StatsPage'
@@ -32,7 +36,6 @@ import TournamentDetailsPage from '@/pages/TournamentDetailsPage'
 import TournamentEditorPage from '@/pages/TournamentEditorPage'
 import TournamentTransferPage from '@/pages/TournamentTransferPage'
 import TournamentsPage from '@/pages/TournamentsPage'
-import ResetPasswordPage from '@/pages/ResetPasswordPage'
 import VerifyEmailPage from '@/pages/VerifyEmailPage'
 
 export default function App() {
@@ -40,14 +43,18 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/app" replace />} />
+        {/* Liens reçus par e-mail : accessibles connecté ou non (pas de GuestRoute). */}
         <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route element={<GuestRoute />}>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/enroll-email" element={<EnrollEmailPage />} />
         </Route>
         <Route element={<ProtectedRoute />}>
           <Route path="/app" element={<HomePage />} />
+          <Route path="/account" element={<AccountPage />} />
           <Route path="/games" element={<GamesPage />} />
           <Route element={<AdminRoute />}>
             <Route path="/games/new" element={<GameEditorPage />} />

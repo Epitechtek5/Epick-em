@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 
 import {
   login as loginRequest,
@@ -14,13 +14,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Le store est la source de vérité : il change aussi quand le client API renouvelle
   // ou ferme la session de lui-même.
   const tokens = useSyncExternalStore(tokenStore.subscribe, tokenStore.get)
-  const [loginName, setLoginName] = useState<string | null>(null)
 
   const claims = useMemo(() => (tokens ? decodeClaims(tokens.accessToken) : null), [tokens])
 
   const login = useCallback(async (credentials: Credentials) => {
     const received = await loginRequest(credentials)
-    setLoginName(credentials.username)
     tokenStore.set(received)
   }, [])
 
@@ -29,7 +27,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // La session locale est fermée tout de suite ; la révocation serveur se fait
     // en arrière-plan et son échec ne bloque jamais la déconnexion.
     tokenStore.clear()
-    setLoginName(null)
     if (snapshot?.refreshToken) {
       void revokeSession({
         accessToken: snapshot.accessToken,
@@ -46,7 +43,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const role = claims?.role ?? null
     return {
       isAuthenticated: tokens !== null,
-      username: tokens ? (claims?.username ?? loginName ?? '') : null,
+      // Nom affiché lu dans le jeton (la connexion se fait par adresse e-mail).
+      username: tokens ? (claims?.username ?? '') : null,
       userId: tokens ? (claims?.sub ?? null) : null,
       role,
       isAdmin: role === 'admin',
@@ -54,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       refreshRole,
     }
-  }, [tokens, claims, loginName, login, logout, refreshRole])
+  }, [tokens, claims, login, logout, refreshRole])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

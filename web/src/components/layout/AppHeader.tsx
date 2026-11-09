@@ -61,6 +61,17 @@ export function AppHeader() {
               <span className="font-medium text-foreground">{username}</span>
             </p>
           ) : null}
+          <NavLink
+            to="/account"
+            className={({ isActive }) =>
+              cn(
+                'inline-flex min-h-8 items-center rounded-lg px-2.5 text-sm font-medium underline-offset-4 outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50',
+                isActive && 'bg-accent underline',
+              )
+            }
+          >
+            {t('nav.account')}
+          </NavLink>
           <Button variant="outline" size="sm" onClick={logout}>
             {t('shell.logout')}
           </Button>

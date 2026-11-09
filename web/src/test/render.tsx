@@ -41,15 +41,16 @@ export function mockFetch(...responses: Array<Response | Error>) {
 }
 
 // Se connecte via l'écran de login (réponse /login simulée) et arrive sur /app.
+// La connexion se fait par adresse e-mail ; le nom affiché vient du jeton.
 export async function renderSignedIn(username = 'alice') {
   mockFetch(
-    jsonResponse(200, { access_token: 'jwt', refresh_token: 'refresh-1' }),
+    jsonResponse(200, { access_token: makeJwt('user', username), refresh_token: 'refresh-1' }),
     jsonResponse(204), // POST /logout éventuel
   )
   const user = userEvent.setup()
   renderApp('/login')
 
-  await user.type(screen.getByLabelText("Nom d'utilisateur"), username)
+  await user.type(screen.getByLabelText('Adresse e-mail'), `${username}@example.com`)
   await user.type(screen.getByLabelText('Mot de passe'), 'secret123')
   await user.click(screen.getByRole('button', { name: 'Se connecter' }))
   await screen.findByRole('heading', { level: 1, name: /Bonjour/ })

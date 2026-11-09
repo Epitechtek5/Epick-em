@@ -1,5 +1,7 @@
 import { forwardRef } from 'react'
 
+import { useI18n } from '@/i18n/context'
+
 export interface ErrorSummaryItem {
   fieldId?: string
   message: string
@@ -7,7 +9,7 @@ export interface ErrorSummaryItem {
 
 interface ErrorSummaryProps {
   items: ErrorSummaryItem[]
-  // Titre déjà traduit ; par défaut, le libellé français historique.
+  // Titre déjà traduit ; par défaut, le nombre d'erreurs détectées.
   title?: string
 }
 
@@ -15,6 +17,7 @@ interface ErrorSummaryProps {
 // en erreur. Chaque erreur de champ est un lien qui place le focus sur le champ.
 export const ErrorSummary = forwardRef<HTMLDivElement, ErrorSummaryProps>(
   function ErrorSummary({ items, title }, ref) {
+    const { t } = useI18n()
     if (items.length === 0) return null
 
     return (
@@ -28,8 +31,8 @@ export const ErrorSummary = forwardRef<HTMLDivElement, ErrorSummaryProps>(
         <h2 id="error-summary-title" className="mb-2 font-semibold text-destructive">
           {title ??
             (items.length === 1
-              ? 'Une erreur a été détectée'
-              : `${items.length} erreurs ont été détectées`)}
+              ? t('common.errorSummaryOne')
+              : t('common.errorSummaryMany', { count: items.length }))}
         </h2>
         <ul className="list-disc space-y-1 pl-5">
           {items.map((item) => (

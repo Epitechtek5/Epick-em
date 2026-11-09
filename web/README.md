@@ -18,10 +18,11 @@ npm run build     # typecheck + build de production dans dist/
 
 | Dossier | Contenu |
 |---|---|
-| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `StatsPage`, `StatEditorPage`, `StatTransferPage`, `TeamsPage`, `TeamDetailsPage`, `TeamEditorPage`, `TeamTransferPage`, `TournamentTeamsPage`, `TournamentTeamDetailsPage`, `TournamentTeamEditorPage`, `TournamentTeamCopyPage`, `TournamentsPage`, `TournamentDetailsPage`, `TournamentEditorPage`, `TournamentTransferPage`, `StepDetailsPage`, `StepEditorPage`, `StepBracketPage`, `MatchDetailsPage`, `MatchEditorPage`, `NotFoundPage` |
-| `src/components/` | `ui/` (shadcn, liste filtrable `searchable-select`), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin), `games/` (carte, image, formulaire), `stats/` (formulaire, section « statistiques » d'un jeu), `teams/` (carte, photo avec repli, formulaire, en-tête de fiche, section membres partagée entre équipes globales et de tournoi), `tournaments/` (carte, statut en texte, formulaire, cycle de vie, inscrits, barème, classements), `steps/` (section de la fiche du tournoi, statuts en texte, formulaire, critères de départage réordonnables, aperçu et vérification du chaînage, déroulement, groupes), `matches/` (section des matchs d'une étape, vues par format, carte de match, tableau graphique, formulaires de match et de résultats, statuts et résultats en texte), `common/` (confirmations de suppression et d'action, écran d'import/export partagé avec confirmation facultative) |
-| `src/lib/api/` | Client HTTP (`client.ts`), appels d'authentification (`auth.ts`), lecture des erreurs serveur |
-| `src/lib/auth/` | `AuthProvider`, `useAuth` (rôle, `isAdmin`), stockage observable des tokens (`token-store.ts`), renouvellement de session (`session.ts`), lecture des claims JWT (`jwt.ts`) |
+| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `ForgotPasswordPage`, `ResetPasswordPage`, `VerifyEmailPage`, `EnrollEmailPage`, `AccountPage` (« Mon compte »), `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `StatsPage`, `StatEditorPage`, `StatTransferPage`, `TeamsPage`, `TeamDetailsPage`, `TeamEditorPage`, `TeamTransferPage`, `TournamentTeamsPage`, `TournamentTeamDetailsPage`, `TournamentTeamEditorPage`, `TournamentTeamCopyPage`, `TournamentsPage`, `TournamentDetailsPage`, `TournamentEditorPage`, `TournamentTransferPage`, `StepDetailsPage`, `StepEditorPage`, `StepBracketPage`, `MatchDetailsPage`, `MatchEditorPage`, `NotFoundPage` |
+| `src/components/` | `ui/` (shadcn, liste filtrable `searchable-select`), `form/` (champ accessible, résumé d'erreurs, `use-form-errors` : erreurs traduites et focus sur le résumé), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin ; renvoi du lien de confirmation), `games/` (carte, image, formulaire), `stats/` (formulaire, section « statistiques » d'un jeu), `teams/` (carte, photo avec repli, formulaire, en-tête de fiche, section membres partagée entre équipes globales et de tournoi), `tournaments/` (carte, statut en texte, formulaire, cycle de vie, inscrits, barème, classements), `steps/` (section de la fiche du tournoi, statuts en texte, formulaire, critères de départage réordonnables, aperçu et vérification du chaînage, déroulement, groupes), `matches/` (section des matchs d'une étape, vues par format, carte de match, tableau graphique, formulaires de match et de résultats, statuts et résultats en texte), `common/` (confirmations de suppression et d'action, écran d'import/export partagé avec confirmation facultative) |
+| `src/lib/api/` | Client HTTP (`client.ts`), appels d'authentification et de récupération de compte (`auth.ts`), lecture des erreurs serveur |
+| `src/lib/auth/` | `AuthProvider`, `useAuth` (rôle, `isAdmin`), stockage observable des tokens (`token-store.ts`), renouvellement de session (`session.ts`), lecture des claims JWT (`jwt.ts`), lecture du jeton de réinitialisation (`reset-token.ts`) |
+| `src/features/account/` | Profil du compte connecté (`GET /me`) et changement d'adresse e-mail (`PATCH /me/update`) |
 | `src/features/games/` | Types, appels API, validation, import/export de fichiers, messages d'erreur |
 | `src/features/stats/` | Types, appels API (définitions et associations jeu/statistique), validation, messages d'erreur |
 | `src/features/teams/` | Types, appels API (équipes globales, membres, équipes de tournoi, import/export), validation, messages d'erreur, libellés de rôles |
@@ -30,28 +31,85 @@ npm run build     # typecheck + build de production dans dist/
 | `src/features/matches/` | Types, appels API (matchs, résultats, statut), validation alignée sur le serveur (formulaire, résultats, droits et transitions), organisation pour l'affichage (groupes, tours, tableaux, disposition du tableau graphique), messages d'erreur, libellés |
 | `src/features/users/` | Lecture des comptes (`GET /users`, `GET /user/{id}`) pour afficher les noms et proposer des membres |
 | `src/i18n/` | Traductions FR/EN (`fr.ts`, `en.ts`), `I18nProvider`, `LanguageSwitcher` |
-| `src/lib/validation/` | Règles de validation alignées sur le backend |
+| `src/lib/validation/` | Règles de validation alignées sur le backend (nom d'utilisateur, adresse e-mail, mot de passe) ; renvoient des clés de traduction |
+| `src/hooks/` | Titre de page, politique `no-referrer` des pages à jeton |
 
-Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs), `/stats` (tous les rôles), `/stats/new`, `/stats/:id/edit`, `/stats/transfer` (administrateurs), `/teams`, `/teams/new`, `/teams/:id`, `/teams/:id/edit` (tout compte connecté ; modification réservée au propriétaire), `/teams/transfer` (administrateurs), `/tournaments`, `/tournaments/:id` (tout compte connecté), `/tournaments/new`, `/tournaments/:id/edit`, `/tournaments/transfer` (administrateurs), `/tournaments/:tournamentId/steps/:stepId`, `/tournaments/:tournamentId/steps/:stepId/bracket`, `/tournaments/:tournamentId/steps/:stepId/matches/:matchId` (tout compte connecté), `/tournaments/:tournamentId/steps/new`, `/tournaments/:tournamentId/steps/:stepId/edit`, `/tournaments/:tournamentId/steps/:stepId/matches/new`, `/tournaments/:tournamentId/steps/:stepId/matches/:matchId/edit` (administrateurs), `/tournaments/:tournamentId/teams`, `/tournaments/:tournamentId/teams/new`, `/tournaments/:tournamentId/teams/copy`, `/tournament-teams/:id`, `/tournament-teams/:id/edit`.
+Routes : `/login`, `/register`, `/forgot-password`, `/enroll-email` (visiteurs), `/reset-password`, `/verify-email` (liens reçus par e-mail, connecté ou non), `/app`, `/account` (protégées, redirigent vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs), `/stats` (tous les rôles), `/stats/new`, `/stats/:id/edit`, `/stats/transfer` (administrateurs), `/teams`, `/teams/new`, `/teams/:id`, `/teams/:id/edit` (tout compte connecté ; modification réservée au propriétaire), `/teams/transfer` (administrateurs), `/tournaments`, `/tournaments/:id` (tout compte connecté), `/tournaments/new`, `/tournaments/:id/edit`, `/tournaments/transfer` (administrateurs), `/tournaments/:tournamentId/steps/:stepId`, `/tournaments/:tournamentId/steps/:stepId/bracket`, `/tournaments/:tournamentId/steps/:stepId/matches/:matchId` (tout compte connecté), `/tournaments/:tournamentId/steps/new`, `/tournaments/:tournamentId/steps/:stepId/edit`, `/tournaments/:tournamentId/steps/:stepId/matches/new`, `/tournaments/:tournamentId/steps/:stepId/matches/:matchId/edit` (administrateurs), `/tournaments/:tournamentId/teams`, `/tournaments/:tournamentId/teams/new`, `/tournaments/:tournamentId/teams/copy`, `/tournament-teams/:id`, `/tournament-teams/:id/edit`.
 
 `/app` est la page principale, atteinte après connexion : en-tête avec navigation principale, nom du compte et déconnexion, puis un tableau de bord en quatre blocs (tournois en direct, mes pronostics, classement général, mes groupes). Les blocs affichent « Bientôt disponible » tant que les API correspondantes n'existent pas ; pour en brancher un, passer le contenu réel en `children` de `DashboardSection` (`src/components/home/`). Pour ajouter une entrée de navigation, compléter `NAV_ITEMS` dans `src/components/layout/AppHeader.tsx`.
 
 ## Authentification
 
-Contrat de l'API publique (voir `backend/crates/api-public`) :
+Contrat de l'API publique (voir `backend/crates/api-public`). La **connexion se fait par adresse e-mail** ; le nom d'utilisateur reste le nom affiché (lu dans le JWT). Une adresse doit être **confirmée** par lien avant la première connexion.
 
 | Appel | Succès | Erreurs gérées |
 |---|---|---|
-| `POST /register` | 201 jetons (corps ignoré par le web) | 400 (`errors` par champ), 409 (nom déjà pris) |
-| `POST /login` | 200 `{ access_token, refresh_token, token_type, expires_in }` | 400, 401 |
+| `POST /register` `{ username, email, password }` | 201 (corps ignoré) ; le serveur envoie le lien de confirmation | 400 (`errors` par champ), 409 `username_taken` / `email_taken` (sur le champ concerné), 429 `verification_limited` |
+| `POST /login` `{ email, password }` | 200 `{ access_token, refresh_token, token_type, expires_in }` | 400, 401, 403 `email_unverified` (propose de renvoyer le lien) |
+| `POST /resend-verification-email` `{ email }` | 204 dans tous les cas (réponse neutre) | 400, réseau |
+| `POST /verify-email` `{ token }` | 204 | 400 (lien invalide ou expiré) |
+| `POST /enroll-email` `{ username, password, email }` | 204 : rattache une adresse à un compte créé sans e-mail, puis envoie le lien | 400, 401, 409 `email_taken`, 429 |
+| `GET /me`, `PATCH /me/update` `{ email }` (Bearer) | 200 `{ id, username, role, email, pending_email, email_verified_at }` | 400, 401, 409 `email_taken`, réseau |
 | `POST /logout` (Bearer JWT + `{ refresh_token }`) | 204 (révoque le refresh token) | ignorées : la session locale est fermée quoi qu'il arrive |
 
-- `register` n'accepte que le **201** : un autre 2xx (proxy mal ciblé, squelette) est traité comme une erreur inattendue plutôt qu'un faux « Compte créé ».
-- Après connexion, `GuestRoute` envoie vers la page visée avant la connexion, sinon vers `/app` ; un utilisateur déjà connecté qui ouvre `/login` ou `/register` est renvoyé vers `/app`.
-- Seul mécanisme d'authentification : `Authorization: Bearer <JWT>`. Jamais d'en-tête `X-User-Id`.
+- `register` n'accepte que le **201** : un autre 2xx (proxy mal ciblé, squelette) est traité comme une erreur inattendue plutôt qu'un faux « Compte créé ». Après l'inscription, la page de connexion annonce l'envoi du lien, pré-remplit l'adresse et propose de renvoyer le lien.
+- **Adresse e-mail** : validée côté client avec la règle du serveur (`local@domaine.tld`, sans espace, 254 caractères max, comparée après trim et minuscules) mais **envoyée telle que saisie** : le serveur la normalise et compare sans tenir compte de la casse.
+- **Anciens comptes sans adresse** : la connexion par e-mail leur est impossible ; le lien « Ajouter une adresse » de la page de connexion mène à `/enroll-email` (nom d'utilisateur + mot de passe + adresse), puis à la confirmation habituelle.
+- **Mon compte** (`/account`, lien dans l'en-tête) : affiche le nom d'utilisateur, l'adresse du compte et son état (confirmée, en attente, nouvelle adresse en attente) via `GET /me`, qui ne renvoie que le compte connecté. Le champ « Nouvelle adresse » n'est jamais pré-rempli ; `PATCH /me/update { email }` envoie un lien de confirmation à la nouvelle adresse, l'ancienne restant utilisée jusqu'à la confirmation. Les adresses des autres comptes ne sont jamais affichées.
+- Après connexion, `GuestRoute` envoie vers la page visée avant la connexion, sinon vers `/app` ; un utilisateur déjà connecté qui ouvre `/login`, `/register`, `/forgot-password` ou `/enroll-email` est renvoyé vers `/app`. `/reset-password` et `/verify-email` ne sont pas derrière `GuestRoute` : un lien reçu par e-mail s'ouvre connecté ou non.
+- Seul mécanisme d'authentification : `Authorization: Bearer <JWT>`. Jamais d'en-tête `X-User-Id`. Les routes de récupération (`/forgot-password`, `/reset-password`, `/verify-email`, `/resend-verification-email`, `/enroll-email`) partent sans jeton.
 - Les tokens restent **en mémoire** (pas de `localStorage`, exposé au XSS) : la session est perdue au rechargement de la page.
 - **Renouvellement automatique** (`apiRequest`) : sur 401, `POST /refresh` (Bearer expiré toléré + `{ refresh_token }`, à usage unique) est appelé **une seule fois à la fois**, puis la requête est rejouée une fois. Si le serveur refuse le refresh token, ou si le rejeu est encore en 401, la session locale est fermée et l'utilisateur revient à `/login`. Une panne réseau pendant le renouvellement laisse la session intacte.
 - **Rôle** : lu dans les claims du JWT (`role` : `user`, `admin`, `watcher`) pour adapter l'interface uniquement, sans vérifier la signature. Le serveur reste l'autorité (il relit le rôle en base et répond 403). Sur un 403 inattendu, la session est renouvelée pour relire le rôle ; l'écran d'administration disparaît si le rôle n'est plus `admin`.
+
+## Mot de passe oublié
+
+| Appel | Succès | Erreurs gérées |
+|---|---|---|
+| `POST /forgot-password` `{ email }` | 204, que l'adresse corresponde à un compte ou non | 400 (adresse mal formée, sur le champ), réseau |
+| `POST /reset-password` `{ token, password }` | 204 ; le serveur révoque **tous** les refresh tokens du compte | 400 `invalid_reset_token` (inconnu, expiré ou déjà utilisé), 400 `errors.password`, réseau |
+
+- **Demande** (`/forgot-password`, lien « Mot de passe oublié ? » de la connexion) : le format est vérifié avant l'envoi ; la confirmation est **toujours le même message neutre**, sans l'adresse et sans jamais dire si un compte existe. Bouton désactivé pendant l'envoi, erreur réseau annoncée, nouvelle demande possible.
+- **Lien** : le serveur envoie `<PUBLIC_URL>/reset-password?token=…`, valable **15 minutes**, à usage unique (une nouvelle demande invalide les précédents).
+- **Jeton** : lu une seule fois dans l'URL, **retiré aussitôt de la barre d'adresse** (remplacement de l'entrée d'historique, aucune entrée ajoutée) et gardé uniquement dans l'état de la page. Il n'est jamais écrit dans `localStorage`/`sessionStorage`, journalisé ni transmis ailleurs qu'à `POST /reset-password`. La page pose `<meta name="referrer" content="no-referrer">` (et nginx l'en-tête `Referrer-Policy: no-referrer`, sans journal d'accès). Après un rechargement, le jeton n'est donc plus là : la page explique de rouvrir le lien ou d'en demander un nouveau, comme pour un lien sans jeton.
+- **Nouveau mot de passe** : mêmes règles qu'à l'inscription (8 à 128 caractères Unicode, confirmation identique), `autocomplete="new-password"`.
+- **Succès** : la session locale éventuelle est fermée (le serveur a révoqué les refresh tokens : une ancienne session ne peut pas être restaurée, et un 401 renvoie à la connexion), puis l'utilisateur arrive sur `/login` avec un message de confirmation, **sans connexion automatique**.
+- **Jeton invalide, expiré ou réutilisé** : message clair et bouton « Demander un nouveau lien » vers `/forgot-password`.
+- Aucune clé Resend ni aucun secret dans le front : l'envoi des e-mails reste côté backend.
+
+### Déploiement
+
+- `PUBLIC_URL` (backend, voir [`.env.example`](../.env.example)) doit être **l'origine publique du front web**, sans chemin ni `/` final (ex. `https://epickem.eu`, ou `http://localhost:3000` avec Compose, `http://localhost:5173` avec `npm run dev`) : les liens `…/reset-password?token=…` et `…/verify-email?token=…` doivent ouvrir cette application.
+- nginx (`nginx.conf.template`) sert `/reset-password`, `/forgot-password` et `/verify-email` avec le fallback SPA (`index.html`), `Referrer-Policy: no-referrer`, `Cache-Control: no-store` et sans journal d'accès (l'URL contient le jeton). Toute autre route garde le fallback SPA habituel. Le proxy `/api` est inchangé.
+- Envoi des e-mails (backend uniquement) : `RESEND_API_KEY` (secret, jamais dans le front ni dans le dépôt), `MAIL_FROM` (adresse d'un domaine vérifié chez Resend), `PUBLIC_URL`, et les modèles `RESEND_PASSWORD_RESET_TEMPLATE`, `RESEND_EMAIL_VERIFICATION_TEMPLATE`, `RESEND_WELCOME_TEMPLATE`.
+
+### Développement local et test de bout en bout
+
+Sans `RESEND_API_KEY`, l'API démarre normalement mais **n'envoie aucun e-mail** (message `RESEND_API_KEY absente` au démarrage) : `/forgot-password` répond 204 sans lien, et un compte fraîchement inscrit ne peut pas confirmer son adresse. Seule l'empreinte SHA-256 des jetons est stockée en base ; pour obtenir un lien utilisable en local, on crée un jeton connu et on n'écrit que son empreinte (jamais de vrai jeton dans un ticket, un journal ou l'historique partagé) :
+
+```sh
+# Comptes de démonstration déjà confirmés (inscription + confirmation via la base) :
+python3 seed_demo.py --bootstrap-admin
+
+# Lien de réinitialisation local pour alice@example.com (valable 15 minutes) :
+TOKEN=$(openssl rand -hex 32)
+HASH=$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<SQL
+INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+SELECT id, '$HASH', now() + interval '15 minutes' FROM users WHERE email = 'alice@example.com';
+SQL
+echo "http://localhost:5173/reset-password?token=$TOKEN"
+```
+
+Parcours à vérifier (dev : `npm run dev`, API sur `VITE_DEV_API_TARGET`) :
+
+1. `/login` → « Mot de passe oublié ? » → saisir une adresse connue puis une inconnue : même message neutre.
+2. Ouvrir le lien (Resend configuré, ou lien généré ci-dessus) : l'adresse devient `/reset-password` sans `?token=`.
+3. Choisir un mot de passe → arrivée sur `/login` avec « Mot de passe modifié », non connecté ; la connexion fonctionne avec le nouveau mot de passe, plus avec l'ancien.
+4. Rouvrir le même lien : « Lien invalide ou expiré » et lien vers une nouvelle demande.
+5. Ouvrir un lien pendant qu'une session est ouverte dans l'onglet : le formulaire s'affiche ; après le changement, la session est fermée.
+
+Avec Resend : définir `RESEND_API_KEY`, `MAIL_FROM` et `PUBLIC_URL` dans `.env`, relancer `make up`, puis suivre le parcours avec une vraie boîte de réception. Les tests automatisés (`npm test`) couvrent appels API, validation, navigation, manipulation du jeton, message neutre et cas d'erreur.
 
 ## Jeux
 
@@ -161,7 +219,7 @@ Matchs d'une étape (`features/matches/`, `components/matches/`, libellés `matc
 
 ## Langues
 
-Les écrans de jeux, de statistiques, d'équipes, de tournois, l'en-tête et le sélecteur de langue sont disponibles en **français** (défaut) et en **anglais** (`src/i18n/`, choix mémorisé dans `localStorage` sous `epickem-lang`, attribut `lang` du document mis à jour). Les écrans de connexion, d'inscription et d'accueil restent en français pour l'instant. Toute nouvelle clé doit exister dans `fr.ts` et `en.ts` (le type `Messages` le vérifie).
+Les écrans de jeux, de statistiques, d'équipes, de tournois, de connexion, d'inscription, de récupération du mot de passe, de confirmation d'adresse et « Mon compte », l'en-tête et le sélecteur de langue sont disponibles en **français** (défaut) et en **anglais** (`src/i18n/`, choix mémorisé dans `localStorage` sous `epickem-lang`, attribut `lang` du document mis à jour). L'écran d'accueil reste en français pour l'instant. Toute nouvelle clé doit exister dans `fr.ts` et `en.ts` (le type `Messages` le vérifie).
 
 ## API
 
