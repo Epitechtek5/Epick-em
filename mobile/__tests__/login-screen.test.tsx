@@ -44,3 +44,15 @@ it('submits credentials and displays invalid credentials without exposing secret
   ).toBeOnTheScreen();
   expect(screen.queryByText('secret')).toBeNull();
 });
+
+it('trims username boundaries without changing the password', async () => {
+  signIn.mockResolvedValue(undefined);
+  await render(<LoginScreen />);
+  await fireEvent.changeText(screen.getByLabelText('Username'), '  alice  ');
+  await fireEvent.changeText(screen.getByLabelText('Password'), ' pass word ');
+  await fireEvent.press(screen.getByLabelText('Sign in'));
+  expect(signIn).toHaveBeenCalledWith({
+    username: 'alice',
+    password: ' pass word ',
+  });
+});

@@ -30,6 +30,26 @@ describe('Registration form validation', () => {
     ).toBeDefined();
   });
 
+  it.each([
+    ['Password!', 'validation.passwordDigit'],
+    ['password1!', 'validation.passwordUppercase'],
+    ['Password1', 'validation.passwordSpecial'],
+  ])('returns a specific password requirement for %s', (password, key) => {
+    expect(
+      validateRegisterForm({
+        ...validForm,
+        password,
+        confirmPassword: password,
+      }).password,
+    ).toBe(key);
+  });
+
+  it('validates the trimmed username', () => {
+    expect(
+      validateRegisterForm({ ...validForm, username: '  TestMobile01  ' }),
+    ).toEqual({});
+  });
+
   it('rejects mismatched passwords', () => {
     expect(
       validateRegisterForm({

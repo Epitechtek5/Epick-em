@@ -63,7 +63,10 @@ export default function TournamentTeamsPage() {
           <h1 className="text-3xl font-semibold tracking-tight">{t('tournamentTeams.title')}</h1>
           <p className="text-muted-foreground">{t('tournamentTeams.description')}</p>
           <p className="text-sm text-muted-foreground">
-            {t('tournamentTeams.tournament')} : <span className="break-all font-mono">{tournamentId}</span>
+            {t('tournamentTeams.tournament')} :{' '}
+            <Link to={`/tournaments/${tournamentId}`} className="break-all font-mono text-primary underline underline-offset-4">
+              {tournamentId}
+            </Link>
           </p>
         </div>
         <div className="flex flex-wrap gap-2" role="group" aria-label={t('tournamentTeams.actions')}>

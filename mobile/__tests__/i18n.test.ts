@@ -45,10 +45,10 @@ it('keeps validation errors as translatable keys', async () => {
   });
   expect(errors).toEqual({
     username: 'validation.username',
-    password: 'validation.password',
+    password: 'validation.passwordLength',
     confirmPassword: 'validation.match',
   });
   await i18n.changeLanguage('fr');
-  expect(i18n.t(errors.password!)).toBe(fr.validation.password);
+  expect(i18n.t(errors.password!)).toBe(fr.validation.passwordLength);
   await i18n.changeLanguage('en');
 });

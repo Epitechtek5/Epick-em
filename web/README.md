@@ -18,18 +18,19 @@ npm run build     # typecheck + build de production dans dist/
 
 | Dossier | Contenu |
 |---|---|
-| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `StatsPage`, `StatEditorPage`, `StatTransferPage`, `TeamsPage`, `TeamDetailsPage`, `TeamEditorPage`, `TeamTransferPage`, `TournamentTeamsPage`, `TournamentTeamDetailsPage`, `TournamentTeamEditorPage`, `TournamentTeamCopyPage`, `NotFoundPage` |
-| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin), `games/` (carte, image, formulaire), `stats/` (formulaire, section « statistiques » d'un jeu), `teams/` (carte, photo avec repli, formulaire, en-tête de fiche, section membres partagée entre équipes globales et de tournoi), `common/` (confirmation de suppression, écran d'import/export partagé) |
+| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `StatsPage`, `StatEditorPage`, `StatTransferPage`, `TeamsPage`, `TeamDetailsPage`, `TeamEditorPage`, `TeamTransferPage`, `TournamentTeamsPage`, `TournamentTeamDetailsPage`, `TournamentTeamEditorPage`, `TournamentTeamCopyPage`, `TournamentsPage`, `TournamentDetailsPage`, `TournamentEditorPage`, `TournamentTransferPage`, `NotFoundPage` |
+| `src/components/` | `ui/` (shadcn, liste filtrable `searchable-select`), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin), `games/` (carte, image, formulaire), `stats/` (formulaire, section « statistiques » d'un jeu), `teams/` (carte, photo avec repli, formulaire, en-tête de fiche, section membres partagée entre équipes globales et de tournoi), `tournaments/` (carte, statut en texte, formulaire, cycle de vie, inscrits, barème, classements), `common/` (confirmations de suppression et d'action, écran d'import/export partagé avec confirmation facultative) |
 | `src/lib/api/` | Client HTTP (`client.ts`), appels d'authentification (`auth.ts`), lecture des erreurs serveur |
 | `src/lib/auth/` | `AuthProvider`, `useAuth` (rôle, `isAdmin`), stockage observable des tokens (`token-store.ts`), renouvellement de session (`session.ts`), lecture des claims JWT (`jwt.ts`) |
 | `src/features/games/` | Types, appels API, validation, import/export de fichiers, messages d'erreur |
 | `src/features/stats/` | Types, appels API (définitions et associations jeu/statistique), validation, messages d'erreur |
 | `src/features/teams/` | Types, appels API (équipes globales, membres, équipes de tournoi, import/export), validation, messages d'erreur, libellés de rôles |
+| `src/features/tournaments/` | Types, appels API (tournois, statut, barème, inscriptions, classements, import/export), validation et conversion des dates, règles du cycle de vie et des droits d'interface, messages d'erreur, libellés |
 | `src/features/users/` | Lecture des comptes (`GET /users`, `GET /user/{id}`) pour afficher les noms et proposer des membres |
 | `src/i18n/` | Traductions FR/EN (`fr.ts`, `en.ts`), `I18nProvider`, `LanguageSwitcher` |
 | `src/lib/validation/` | Règles de validation alignées sur le backend |
 
-Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs), `/stats` (tous les rôles), `/stats/new`, `/stats/:id/edit`, `/stats/transfer` (administrateurs), `/teams`, `/teams/new`, `/teams/:id`, `/teams/:id/edit` (tout compte connecté ; modification réservée au propriétaire), `/teams/transfer` (administrateurs), `/tournaments/:tournamentId/teams`, `/tournaments/:tournamentId/teams/new`, `/tournaments/:tournamentId/teams/copy`, `/tournament-teams/:id`, `/tournament-teams/:id/edit`.
+Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs), `/stats` (tous les rôles), `/stats/new`, `/stats/:id/edit`, `/stats/transfer` (administrateurs), `/teams`, `/teams/new`, `/teams/:id`, `/teams/:id/edit` (tout compte connecté ; modification réservée au propriétaire), `/teams/transfer` (administrateurs), `/tournaments`, `/tournaments/:id` (tout compte connecté), `/tournaments/new`, `/tournaments/:id/edit`, `/tournaments/transfer` (administrateurs), `/tournaments/:tournamentId/teams`, `/tournaments/:tournamentId/teams/new`, `/tournaments/:tournamentId/teams/copy`, `/tournament-teams/:id`, `/tournament-teams/:id/edit`.
 
 `/app` est la page principale, atteinte après connexion : en-tête avec navigation principale, nom du compte et déconnexion, puis un tableau de bord en quatre blocs (tournois en direct, mes pronostics, classement général, mes groupes). Les blocs affichent « Bientôt disponible » tant que les API correspondantes n'existent pas ; pour en brancher un, passer le contenu réel en `children` de `DashboardSection` (`src/components/home/`). Pour ajouter une entrée de navigation, compléter `NAV_ITEMS` dans `src/components/layout/AppHeader.tsx`.
 
@@ -86,14 +87,38 @@ Définitions de statistiques (`flat` ou `percent`) et leurs associations aux jeu
 - **Droits** : tout compte connecté consulte et crée une équipe (il en devient propriétaire et premier membre). Seul le propriétaire (claim `sub` du JWT = `owner_id`) voit les contrôles de modification, suppression et gestion des membres ; un administrateur n'a aucun droit particulier sur une équipe qui n'est pas la sienne. Le serveur reste l'autorité (403). L'import/export est réservé aux administrateurs.
 - **Liste** : filtre par jeu (`?game=`) et pagination (`?page=`, taille 12, `limit=13`) dans l'URL ; nom, tag, photo (tuile de repli si absente ou cassée), jeu et propriétaire.
 - **Membres** : le propriétaire ajoute un compte existant comme `member` ou `substitute`, change le rôle d'un membre ou le retire après confirmation. Le propriétaire n'est jamais modifiable et le rôle `owner` n'est jamais proposé. La liste est relue après chaque opération (succès ou échec). Les anciens membres (équipes globales uniquement) sont affichés à part, avec leur période.
-- **Équipes de tournoi** : l'UUID du tournoi vient de l'URL (aucun tournoi fictif ; les liens depuis les pages de tournoi seront ajoutés avec elles). Création de zéro, ou copie d'une équipe globale possédée avec choix des membres actifs (`member_ids`, propriétaire toujours copié). La copie reste indépendante de l'équipe globale.
+- **Équipes de tournoi** : l'UUID du tournoi vient de l'URL (aucun tournoi fictif ; la fiche d'un tournoi y mène, et les pages d'équipes de tournoi renvoient à la fiche du tournoi). Création de zéro, ou copie d'une équipe globale possédée avec choix des membres actifs (`member_ids`, propriétaire toujours copié). La copie reste indépendante de l'équipe globale.
 - **Validation** (`features/teams/validation.ts`), identique au serveur : nom 1–64 caractères après trim (unique par jeu sans tenir compte de la casse : **409 `team_name_taken`** affiché sur le champ), tag facultatif 1–8 caractères, photo facultative en URL `http(s)` ≤ 2048 octets, identifiants UUID (un identifiant invalide ne déclenche aucune requête).
 - **Erreurs** : 400 (détail par champ), 401 (retour à la connexion), 403, 404, 409 `already_team_member`, `team_already_registered`, `player_already_registered` ont chacun leur message.
 - **Import / export** : écran partagé (`TransferView`), fichiers `teams.json` / `teams.csv`. JSON `{ "version": 1, "teams": [{ "game", "name", "tag", "picture_url", "owner", "members": [{ "username", "role", "joined_at", "left_at" }] }] }`, CSV `game,name,tag,picture_url,owner,members` (membres en JSON). Importer une équipe existante (même jeu et nom) **remplace** ses membres ; l'historique est conservé. Les équipes de tournoi ne sont pas exportées.
 
+## Tournois
+
+Catalogue, fiche, administration, inscriptions, barème et classements des tournois (`features/tournaments/`, `components/tournaments/`, libellés `tournaments.*`). Contrat (PR #88, `api-public/tournaments.rs`, `tournament_io.rs`) :
+
+| Ressource | Appels |
+|---|---|
+| Tournois | `GET /tournaments?game_id=&status=&limit=&offset=` (par date de début), `GET /tournaments/{id}`, `POST /tournaments` (201, créé en `draft`), `PATCH /tournaments/{id}` (champs modifiés ; `null` efface une valeur facultative), `DELETE /tournaments/{id}` (204) |
+| Statut | `POST /tournaments/{id}/status` (`{ status }`) |
+| Barème | `GET`/`POST /tournaments/{id}/scoring-rules`, `PATCH`/`DELETE /tournaments/{id}/scoring-rules/{rule_id}` |
+| Inscrits | `GET /tournaments/{id}/participants?limit=&offset=`, `POST /tournaments/{id}/participants` (`{ user_id?, tournament_team_id? }`), `PATCH`/`DELETE /tournaments/{id}/participants/{participant_id}`, `POST …/check-in` |
+| Classements | `GET /tournaments/{id}/ranking`, `GET /tournaments/{id}/team-ranking` |
+| Fichiers | `GET /tournaments/export?format=json\|csv`, `POST /tournaments/import?format=json\|csv` (corps brut, 256 Kio max) |
+
+- **Catalogue** : filtres par jeu (liste filtrable) et par statut, page dans l'URL (`?game=`, `?status=`, `?page=`, taille 12, `limit=13`). Chaque carte affiche nom, statut **en texte** (jamais par la couleur seule), jeu, dates, type de participants et capacité.
+- **Fiche** : jeu, description, dates, fenêtre d'inscription, type, taille d'équipe, capacité, score d'équipe ; lien vers les équipes du tournoi (`/tournaments/{id}/teams`, vrai UUID). Puis inscrits, barème et classements.
+- **Administration** (rôle `admin`, `AdminRoute` ; le serveur reste juge) : création, modification, suppression après confirmation (masquée pour un tournoi `ongoing`). Le type de participants et le jeu sont fixés à la création ; `team_size` est obligatoire en équipe, `team_scoring_n` avec `top_n`. Pour un tournoi `ongoing` ou `finished`, la capacité, la taille d'équipe et le score d'équipe sont désactivés et jamais envoyés (409 `tournament_locked`).
+- **Cycle de vie** : `draft → registration → ongoing → finished`, `cancelled` depuis `draft`, `registration` ou `ongoing`. Seules les transitions valides sont proposées, chacune après confirmation ; un 400 au démarrage affiche le détail du serveur (`errors.status` : trop peu d'inscrits, équipes incomplètes), un 409 la transition impossible.
+- **Inscriptions** : formulaire affiché seulement au statut `registration` et dans la fenêtre d'inscription. Solo : le joueur s'inscrit, éventuellement pour une équipe du tournoi dont il est membre ; un administrateur peut choisir un autre compte (`GET /users`). Par équipes : le propriétaire inscrit une de ses équipes du tournoi (toutes pour un administrateur). Pointage (`registration`, inscrit `registered`), retrait (suppression avant le début, statut `withdrawn` pendant le tournoi) pour l'inscrit ou le propriétaire de l'équipe ; tout changement de statut (disqualification…) pour un administrateur, après confirmation. 409 `registration_closed`, `already_registered`, `tournament_full`, `player_already_registered` ont chacun leur message.
+- **Barème** : une règle par statistique, `linear` (coefficient) ou `table` (valeur → points). Seules les statistiques liées au jeu du tournoi (`GET /games/{id}/stats`) et sans règle sont proposées. Modifiable en `draft` et `registration` uniquement ; 400 (statistique non liée), 409 `scoring_rule_taken` et `tournament_locked` expliqués.
+- **Classements** : affichés tels que renvoyés par le serveur (rang, points), jamais recalculés ; classement des joueurs en solo, classement des équipes en tournoi par équipes ou en solo avec un mode de score autre que `none`.
+- **Dates** : saisies en heure locale (`datetime-local`), envoyées en UTC RFC 3339 ; la fin ne précède pas le début, ni la clôture des inscriptions leur ouverture.
+- **Import / export** : écran partagé (`TransferView`), fichiers `tournaments.json` / `tournaments.csv`. Avertissement permanent et **confirmation explicite** avant l'envoi : un tournoi existant (même jeu et nom) est mis à jour et son barème, ses inscrits, ses équipes, ses étapes et ses matchs sont **remplacés** ; un tournoi `ongoing` ou `finished` est refusé (`errors.file` affiché tel quel).
+- Hors périmètre : étapes (#52), génération des matchs, cycle de vie des étapes et calcul des scores côté client.
+
 ## Langues
 
-Les écrans de jeux, de statistiques, d'équipes, l'en-tête et le sélecteur de langue sont disponibles en **français** (défaut) et en **anglais** (`src/i18n/`, choix mémorisé dans `localStorage` sous `epickem-lang`, attribut `lang` du document mis à jour). Les écrans de connexion, d'inscription et d'accueil restent en français pour l'instant. Toute nouvelle clé doit exister dans `fr.ts` et `en.ts` (le type `Messages` le vérifie).
+Les écrans de jeux, de statistiques, d'équipes, de tournois, l'en-tête et le sélecteur de langue sont disponibles en **français** (défaut) et en **anglais** (`src/i18n/`, choix mémorisé dans `localStorage` sous `epickem-lang`, attribut `lang` du document mis à jour). Les écrans de connexion, d'inscription et d'accueil restent en français pour l'instant. Toute nouvelle clé doit exister dans `fr.ts` et `en.ts` (le type `Messages` le vérifie).
 
 ## API
 
@@ -106,7 +131,7 @@ Variables : voir [`.env.example`](.env.example) (`.env.local` pour surcharger).
 
 ## Accessibilité
 
-Formulaires : libellés reliés, aide et erreurs liées aux champs (`aria-describedby`, `aria-invalid`), résumé d'erreurs annoncé (`role="alert"`) qui reçoit le focus, `autocomplete` adaptés, titre de page par écran, lien d'évitement, focus ramené sur le contenu à chaque navigation. Cible : WCAG 2.2 AA.
+Formulaires : libellés reliés, aide et erreurs liées aux champs (`aria-describedby`, `aria-invalid`), résumé d'erreurs annoncé (`role="alert"`) qui reçoit le focus, `autocomplete` adaptés, titre de page par écran, lien d'évitement, focus ramené sur le contenu à chaque navigation. Listes filtrables (`components/ui/searchable-select.tsx`) au motif « combobox » WAI-ARIA 1.2 : saisie pour filtrer, flèches, Entrée, Échap. Actions irréversibles toujours confirmées dans une boîte de dialogue (focus piégé, Échap annule). Cible : WCAG 2.2 AA.
 
 ## Ajouter un composant shadcn/ui
 
