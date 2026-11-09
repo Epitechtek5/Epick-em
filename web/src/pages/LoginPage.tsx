@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 
-import { ErrorSummary, type ErrorSummaryItem } from '@/components/form/ErrorSummary'
+import { ResendVerification } from '@/components/auth/ResendVerification'
+import { ErrorSummary } from '@/components/form/ErrorSummary'
 import { TextField } from '@/components/form/TextField'
+import { useFormErrors } from '@/components/form/use-form-errors'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -13,50 +15,50 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError, NetworkError } from '@/lib/api/client'
-import { getErrorMessage, getFieldErrors } from '@/lib/api/errors'
+import { getErrorCode, getFieldErrors } from '@/lib/api/errors'
 import { useAuth } from '@/lib/auth/auth-context'
 import {
+  AUTH_LIMITS,
+  serverFieldErrors,
   validateLogin,
-  type FieldErrors,
   type LoginField,
 } from '@/lib/validation/auth'
 
 const FIELD_IDS: Record<LoginField, string> = {
-  username: 'login-username',
+  email: 'login-email',
   password: 'login-password',
 }
+const FIELDS = Object.keys(FIELD_IDS) as LoginField[]
 
-interface LocationState {
+// Messages transmis par les pages qui renvoient vers la connexion.
+export interface LoginLocationState {
   registered?: boolean
+  email?: string
+  passwordReset?: boolean
 }
 
+const linkClass = 'text-primary underline underline-offset-2'
+
 export default function LoginPage() {
-  useDocumentTitle('Connexion')
+  const { t } = useI18n()
+  useDocumentTitle(t('auth.login.title'))
   const { login } = useAuth()
   const location = useLocation()
-  const state = (location.state ?? {}) as LocationState
-  const summaryRef = useRef<HTMLDivElement>(null)
+  const state = (location.state ?? {}) as LoginLocationState
+  const form = useFormErrors<LoginField>()
+  const { summaryRef } = form
 
-  const [values, setValues] = useState({ username: '', password: '' })
-  const [errors, setErrors] = useState<FieldErrors<LoginField>>({})
-  const [formError, setFormError] = useState<string | null>(null)
+  const [values, setValues] = useState({ email: state.email ?? '', password: '' })
   const [submitting, setSubmitting] = useState(false)
-  const [errorVersion, setErrorVersion] = useState(0)
+  // Adresse refusée parce que non confirmée : propose de renvoyer le lien.
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (errorVersion > 0) summaryRef.current?.focus()
-  }, [errorVersion])
-
-  const fail = (nextErrors: FieldErrors<LoginField>, nextFormError: string | null) => {
-    setErrors(nextErrors)
-    setFormError(nextFormError)
-    setErrorVersion((version) => version + 1)
+  const onChange = (field: LoginField) => (event: ChangeEvent<HTMLInputElement>) => {
+    setValues((current) => ({ ...current, [field]: event.target.value }))
+    form.clearField(field)
   }
-
-  const onChange =
-    (field: LoginField) => (event: React.ChangeEvent<HTMLInputElement>) =>
-      setValues((current) => ({ ...current, [field]: event.target.value }))
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -64,90 +66,125 @@ export default function LoginPage() {
 
     const validationErrors = validateLogin(values)
     if (Object.keys(validationErrors).length > 0) {
-      fail(validationErrors, null)
+      form.fail(validationErrors)
       return
     }
 
     setSubmitting(true)
-    setErrors({})
-    setFormError(null)
+    setUnverifiedEmail(null)
+    form.clear()
     try {
       // Succès : GuestRoute redirige vers la page visée (ou l'accueil).
       await login(values)
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        fail({}, "Nom d'utilisateur ou mot de passe incorrect.")
+      if (error instanceof ApiError && error.status === 403 && getErrorCode(error.body) === 'email_unverified') {
+        setUnverifiedEmail(values.email)
+        form.fail({})
+      } else if (error instanceof ApiError && error.status === 401) {
+        form.fail({}, 'auth.login.invalidCredentials')
       } else if (error instanceof ApiError && error.status === 400) {
-        const fieldErrors = getFieldErrors(error.body, ['username', 'password'])
-        fail(
+        const fieldErrors = serverFieldErrors(
+          getFieldErrors(error.body, FIELDS),
+          (field) => validateLogin(values)[field] ?? null,
+          FIELDS,
+        )
+        form.fail(
           fieldErrors,
-          Object.keys(fieldErrors).length > 0
-            ? null
-            : (getErrorMessage(error.body) ?? 'Les informations saisies sont refusées par le serveur.'),
+          Object.keys(fieldErrors).length > 0 ? null : 'auth.errors.rejected',
         )
       } else if (error instanceof NetworkError) {
-        fail({}, 'Impossible de joindre le serveur. Vérifiez votre connexion et réessayez.')
+        form.fail({}, 'auth.errors.network')
       } else {
-        fail({}, 'Une erreur inattendue est survenue. Réessayez dans un instant.')
+        form.fail({}, 'auth.errors.unexpected')
       }
     } finally {
       setSubmitting(false)
     }
   }
 
-  const summaryItems: ErrorSummaryItem[] = [
-    ...(Object.keys(FIELD_IDS) as LoginField[]).flatMap((field) =>
-      errors[field] ? [{ fieldId: FIELD_IDS[field], message: errors[field] }] : [],
-    ),
-    ...(formError ? [{ message: formError }] : []),
-  ]
+  const tl = (key: MessageKey) => t(key, AUTH_LIMITS)
 
   return (
     <Card className="w-full max-w-md">
       <CardHeader>
-        <CardTitle>Connexion</CardTitle>
-        <CardDescription>Tous les champs sont obligatoires.</CardDescription>
+        <CardTitle>{t('auth.login.title')}</CardTitle>
+        <CardDescription>{t('auth.login.description')}</CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit} noValidate aria-busy={submitting}>
         <CardContent className="grid gap-5">
           {state.registered ? (
-            <p
-              role="status"
-              className="rounded-lg border border-primary p-4 text-sm"
-            >
-              <span className="font-semibold">Compte créé.</span> Vous pouvez
-              maintenant vous connecter.
+            <div role="status" className="grid gap-3 rounded-lg border border-primary p-4 text-sm">
+              <p>
+                <span className="font-semibold">{t('auth.login.registeredTitle')}</span>{' '}
+                {t('auth.login.registered', { email: state.email ?? '' })}
+              </p>
+              {state.email ? <ResendVerification email={state.email} /> : null}
+            </div>
+          ) : null}
+          {state.passwordReset ? (
+            <p role="status" className="rounded-lg border border-primary p-4 text-sm">
+              {t('auth.login.passwordReset')}
             </p>
           ) : null}
-          <ErrorSummary ref={summaryRef} items={summaryItems} />
+          {unverifiedEmail ? (
+            <div
+              ref={summaryRef}
+              role="alert"
+              tabIndex={-1}
+              className="grid gap-3 rounded-lg border border-destructive p-4 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <p>
+                <span className="font-semibold text-destructive">
+                  {t('auth.login.unverifiedTitle')}
+                </span>{' '}
+                {t('auth.login.unverified')}
+              </p>
+              <ResendVerification email={unverifiedEmail} />
+            </div>
+          ) : (
+            <ErrorSummary ref={summaryRef} items={form.summaryItems(FIELD_IDS, tl)} />
+          )}
           <TextField
-            id={FIELD_IDS.username}
-            label="Nom d'utilisateur"
-            autoComplete="username"
+            id={FIELD_IDS.email}
+            label={t('auth.fields.email')}
+            type="email"
+            inputMode="email"
+            autoComplete="email"
             autoCapitalize="none"
             spellCheck={false}
-            value={values.username}
-            onChange={onChange('username')}
-            error={errors.username}
+            value={values.email}
+            onChange={onChange('email')}
+            error={form.errors.email ? tl(form.errors.email) : undefined}
           />
-          <TextField
-            id={FIELD_IDS.password}
-            label="Mot de passe"
-            type="password"
-            autoComplete="current-password"
-            value={values.password}
-            onChange={onChange('password')}
-            error={errors.password}
-          />
+          <div className="grid gap-2">
+            <TextField
+              id={FIELD_IDS.password}
+              label={t('auth.fields.password')}
+              type="password"
+              autoComplete="current-password"
+              value={values.password}
+              onChange={onChange('password')}
+              error={form.errors.password ? tl(form.errors.password) : undefined}
+            />
+            <Link to="/forgot-password" className={`justify-self-start text-sm ${linkClass}`}>
+              {t('auth.login.forgot')}
+            </Link>
+          </div>
         </CardContent>
         <CardFooter className="mt-6 flex-col items-stretch gap-4">
           <Button type="submit" disabled={submitting}>
-            {submitting ? 'Connexion en cours…' : 'Se connecter'}
+            {submitting ? t('auth.login.submitting') : t('auth.login.submit')}
           </Button>
           <p className="text-center text-sm text-muted-foreground">
-            Pas encore de compte ?{' '}
-            <Link to="/register" className="text-primary underline underline-offset-2">
-              Créer un compte
+            {t('auth.login.noAccount')}{' '}
+            <Link to="/register" className={linkClass}>
+              {t('auth.login.createAccount')}
+            </Link>
+          </p>
+          <p className="text-center text-sm text-muted-foreground">
+            {t('auth.login.legacy')}{' '}
+            <Link to="/enroll-email" className={linkClass}>
+              {t('auth.login.legacyLink')}
             </Link>
           </p>
         </CardFooter>

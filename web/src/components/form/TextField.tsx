@@ -2,6 +2,7 @@ import type { ComponentProps } from 'react'
 
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useI18n } from '@/i18n/context'
 
 interface TextFieldProps extends Omit<ComponentProps<typeof Input>, 'id'> {
   id: string
@@ -12,6 +13,7 @@ interface TextFieldProps extends Omit<ComponentProps<typeof Input>, 'id'> {
 
 // Libellé relié, aide et erreur liées au champ (aria-describedby), aria-invalid.
 export function TextField({ id, label, hint, error, ...inputProps }: TextFieldProps) {
+  const { t } = useI18n()
   const hintId = `${id}-hint`
   const errorId = `${id}-error`
   const describedBy =
@@ -35,7 +37,7 @@ export function TextField({ id, label, hint, error, ...inputProps }: TextFieldPr
       ) : null}
       {error ? (
         <p id={errorId} className="text-sm text-destructive">
-          <span className="font-medium">Erreur :</span> {error}
+          <span className="font-medium">{t('common.error')}</span> {error}
         </p>
       ) : null}
     </div>

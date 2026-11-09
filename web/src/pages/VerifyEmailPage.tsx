@@ -1,30 +1,36 @@
 import { useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useDocumentTitle } from '@/hooks/use-document-title'
-import { ApiError, apiRequest } from '@/lib/api/client'
+import { useNoReferrer } from '@/hooks/use-no-referrer'
+import { useI18n } from '@/i18n/context'
+import { verifyEmail } from '@/lib/api/auth'
+import { ApiError } from '@/lib/api/client'
 
 export default function VerifyEmailPage() {
-  useDocumentTitle('Confirmer mon adresse e-mail')
+  const { t } = useI18n()
+  useDocumentTitle(t('auth.verify.title'))
+  useNoReferrer()
   const [params] = useSearchParams()
   const values = params.getAll('token')
   const token = values.length === 1 ? values[0] : ''
   return <Confirmation key={token} token={token} />
 }
 
+type Status = 'ready' | 'sending' | 'success' | 'invalid' | 'retry'
+
+// La confirmation n'est envoyée qu'au clic : un aperçu de lien (messagerie, antivirus)
+// ne consomme pas le jeton à usage unique.
 function Confirmation({ token }: { token: string }) {
-  const [status, setStatus] = useState<'ready' | 'sending' | 'success' | 'invalid' | 'retry'>(
-    token ? 'ready' : 'invalid',
-  )
+  const { t } = useI18n()
+  const [status, setStatus] = useState<Status>(token ? 'ready' : 'invalid')
 
   async function confirm() {
     setStatus('sending')
     try {
-      await apiRequest('/verify-email', {
-        method: 'POST', body: { token }, skipAuth: true, expectedStatus: 204,
-      })
+      await verifyEmail(token)
       setStatus('success')
     } catch (error) {
       setStatus(error instanceof ApiError && error.status === 400 ? 'invalid' : 'retry')
@@ -34,24 +40,42 @@ function Confirmation({ token }: { token: string }) {
   return (
     <Card className="w-full max-w-md">
       <CardHeader>
-        <CardTitle>{status === 'success' ? 'Adresse e-mail confirmée' : 'Confirmer mon adresse e-mail'}</CardTitle>
+        <CardTitle>
+          {status === 'success' ? t('auth.verify.successTitle') : t('auth.verify.title')}
+        </CardTitle>
         <CardDescription aria-live="polite">
-          {status === 'success' ? 'Vous pouvez maintenant vous connecter dans Epick’em.'
-            : status === 'invalid' ? 'Lien invalide, expiré ou déjà utilisé. Demandez un nouveau lien dans l’application.'
-            : 'Confirmez votre adresse pour votre compte Epick’em. Ce lien est valable 15 minutes.'}
+          {status === 'success'
+            ? t('auth.verify.success')
+            : status === 'invalid'
+              ? t('auth.verify.invalid')
+              : t('auth.verify.intro')}
         </CardDescription>
       </CardHeader>
-      {status !== 'success' && status !== 'invalid' && (
-        <CardContent className="grid gap-3">
-          {status === 'retry' && <p role="alert">La confirmation a échoué. Réessayez dans un instant.</p>}
-          <Button disabled={status === 'sending'} onClick={confirm}>
-            {status === 'sending' ? 'Confirmation en cours…' : 'Confirmer mon adresse'}
+      <CardContent className="grid gap-3">
+        {status === 'success' || status === 'invalid' ? (
+          <Button asChild>
+            <Link to="/login">{t('auth.verify.goToLogin')}</Link>
           </Button>
-          {status !== 'sending' && <Button asChild variant="outline">
-            <a href={`epickem://verify-email?token=${encodeURIComponent(token)}`}>Ouvrir dans l’application mobile</a>
-          </Button>}
-        </CardContent>
-      )}
+        ) : (
+          <>
+            {status === 'retry' ? (
+              <p role="alert" className="text-sm text-destructive">
+                {t('auth.verify.retry')}
+              </p>
+            ) : null}
+            <Button disabled={status === 'sending'} onClick={confirm}>
+              {status === 'sending' ? t('auth.verify.confirming') : t('auth.verify.confirm')}
+            </Button>
+            {status !== 'sending' ? (
+              <Button asChild variant="outline">
+                <a href={`epickem://verify-email?token=${encodeURIComponent(token)}`}>
+                  {t('auth.verify.openMobile')}
+                </a>
+              </Button>
+            ) : null}
+          </>
+        )}
+      </CardContent>
     </Card>
   )
 }

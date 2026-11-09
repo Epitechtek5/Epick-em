@@ -27,7 +27,10 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location = /verify-email {
+    # Liens reçus par e-mail (<PUBLIC_URL>/reset-password?token=…, /verify-email?token=…) et
+    # demande de lien : fallback SPA, sans journal d'accès (l'URL contient le jeton), sans
+    # Referer vers d'autres sites, sans cache.
+    location ~ ^/(verify-email|reset-password|forgot-password)/?$ {
         access_log off;
         add_header Referrer-Policy no-referrer always;
         add_header Cache-Control no-store always;
