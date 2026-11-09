@@ -38,6 +38,14 @@ pub enum ApiError {
     StatKeyTaken,
     /// Statistique utilisée par un tournoi en cours.
     StatInUse,
+    /// Nom d'équipe déjà pris pour ce jeu.
+    TeamNameTaken,
+    /// Le compte est déjà membre de l'équipe.
+    AlreadyTeamMember,
+    /// Équipe globale déjà inscrite à ce tournoi.
+    TeamAlreadyRegistered,
+    /// Joueur déjà dans une équipe de ce tournoi.
+    PlayerAlreadyRegistered,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -80,6 +88,26 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "stat_in_use",
                 "Cette statistique est utilisée par un tournoi en cours",
+            ),
+            ApiError::TeamNameTaken => (
+                StatusCode::CONFLICT,
+                "team_name_taken",
+                "Ce nom d'équipe est déjà pris pour ce jeu",
+            ),
+            ApiError::AlreadyTeamMember => (
+                StatusCode::CONFLICT,
+                "already_team_member",
+                "Ce compte est déjà membre de l'équipe",
+            ),
+            ApiError::TeamAlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "team_already_registered",
+                "Cette équipe est déjà inscrite à ce tournoi",
+            ),
+            ApiError::PlayerAlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "player_already_registered",
+                "Ce joueur est déjà dans une équipe de ce tournoi",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

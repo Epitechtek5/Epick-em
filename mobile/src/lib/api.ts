@@ -58,6 +58,13 @@ export async function apiRequest<T>(
               'images',
               'file',
               'body',
+              'game_id',
+              'tag',
+              'picture_url',
+              'user_id',
+              'role',
+              'team_id',
+              'member_ids',
             ].includes(field),
           )
         : [];

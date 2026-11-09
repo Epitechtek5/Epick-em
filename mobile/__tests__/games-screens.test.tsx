@@ -8,13 +8,13 @@ import {
 import { Alert } from 'react-native';
 import { colorScheme } from 'nativewind';
 import { router } from 'expo-router';
-import GamesScreen from '../src/screens/GamesScreen';
-import GameDetailsScreen from '../src/screens/GameDetailsScreen';
+import GamesScreen from '../src/screens/games/GamesScreen';
+import GameDetailsScreen from '../src/screens/games/GameDetailsScreen';
 import {
   CreateGameScreen,
   EditGameScreen,
-} from '../src/screens/GameEditorScreen';
-import GameTransferScreen from '../src/screens/GameTransferScreen';
+} from '../src/screens/games/GameEditorScreen';
+import GameTransferScreen from '../src/screens/games/GameTransferScreen';
 import { GameForm } from '../src/components/games/game-form';
 import { useAuth } from '../src/features/auth/session';
 import * as api from '../src/features/games/api';

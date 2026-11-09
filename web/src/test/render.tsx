@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router'
 import { vi } from 'vitest'
 
 import App from '@/App'
+import type { Team, TournamentTeam } from '@/features/teams/types'
 import { I18nProvider } from '@/i18n/I18nProvider'
 import { AuthProvider } from '@/lib/auth/AuthProvider'
 import type { Role } from '@/lib/auth/jwt'
@@ -96,4 +97,50 @@ export const STAT_B = {
   name: 'Précision',
   key: 'accuracy',
   type: 'percent' as const,
+}
+
+// Comptes : ME correspond au `sub` du faux JWT (makeJwt).
+export const ME = { id: '00000000-0000-4000-8000-000000000001', username: 'alice', role: 'user' as const }
+export const BOB = { id: '00000000-0000-4000-8000-000000000002', username: 'bob', role: 'user' as const }
+export const CAROL = { id: '00000000-0000-4000-8000-000000000003', username: 'carol', role: 'user' as const }
+export const USERS = [ME, BOB, CAROL]
+
+export const TEAM_MINE: Team = {
+  id: '77777777-7777-4777-8777-777777777777',
+  game_id: GAME_A.id,
+  name: 'Karmine Corp',
+  tag: 'KC',
+  picture_url: 'https://img.example/kc.png',
+  owner_id: ME.id,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+export const TEAM_OTHER: Team = {
+  id: '88888888-8888-4888-8888-888888888888',
+  game_id: GAME_B.id,
+  name: 'Vitality',
+  tag: null,
+  picture_url: null,
+  owner_id: BOB.id,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+export const TOURNAMENT_ID = '99999999-9999-4999-8999-999999999999'
+export const TT_MINE: TournamentTeam = {
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  tournament_id: TOURNAMENT_ID,
+  team_id: TEAM_MINE.id,
+  name: 'Karmine Corp',
+  tag: 'KC',
+  picture_url: null,
+  owner_id: ME.id,
+  created_at: '2026-01-01T00:00:00Z',
+}
+
+// Réponse GET /user/{id} à partir des comptes connus.
+export function userResponse(path: string): Response | null {
+  const match = /^\/user\/([0-9a-f-]+)$/.exec(path)
+  if (!match) return null
+  const user = USERS.find((candidate) => candidate.id === match[1])
+  return user ? jsonResponse(200, user) : jsonResponse(404, { error: 'not_found' })
 }

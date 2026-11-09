@@ -18,16 +18,18 @@ npm run build     # typecheck + build de production dans dist/
 
 | Dossier | Contenu |
 |---|---|
-| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `StatsPage`, `StatEditorPage`, `StatTransferPage`, `NotFoundPage` |
-| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin), `games/` (carte, image, formulaire), `stats/` (formulaire, section « statistiques » d'un jeu), `common/` (confirmation de suppression, écran d'import/export partagé) |
+| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `StatsPage`, `StatEditorPage`, `StatTransferPage`, `TeamsPage`, `TeamDetailsPage`, `TeamEditorPage`, `TeamTransferPage`, `TournamentTeamsPage`, `TournamentTeamDetailsPage`, `TournamentTeamEditorPage`, `TournamentTeamCopyPage`, `NotFoundPage` |
+| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin), `games/` (carte, image, formulaire), `stats/` (formulaire, section « statistiques » d'un jeu), `teams/` (carte, photo avec repli, formulaire, en-tête de fiche, section membres partagée entre équipes globales et de tournoi), `common/` (confirmation de suppression, écran d'import/export partagé) |
 | `src/lib/api/` | Client HTTP (`client.ts`), appels d'authentification (`auth.ts`), lecture des erreurs serveur |
 | `src/lib/auth/` | `AuthProvider`, `useAuth` (rôle, `isAdmin`), stockage observable des tokens (`token-store.ts`), renouvellement de session (`session.ts`), lecture des claims JWT (`jwt.ts`) |
 | `src/features/games/` | Types, appels API, validation, import/export de fichiers, messages d'erreur |
 | `src/features/stats/` | Types, appels API (définitions et associations jeu/statistique), validation, messages d'erreur |
+| `src/features/teams/` | Types, appels API (équipes globales, membres, équipes de tournoi, import/export), validation, messages d'erreur, libellés de rôles |
+| `src/features/users/` | Lecture des comptes (`GET /users`, `GET /user/{id}`) pour afficher les noms et proposer des membres |
 | `src/i18n/` | Traductions FR/EN (`fr.ts`, `en.ts`), `I18nProvider`, `LanguageSwitcher` |
 | `src/lib/validation/` | Règles de validation alignées sur le backend |
 
-Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs), `/stats` (tous les rôles), `/stats/new`, `/stats/:id/edit`, `/stats/transfer` (administrateurs).
+Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs), `/stats` (tous les rôles), `/stats/new`, `/stats/:id/edit`, `/stats/transfer` (administrateurs), `/teams`, `/teams/new`, `/teams/:id`, `/teams/:id/edit` (tout compte connecté ; modification réservée au propriétaire), `/teams/transfer` (administrateurs), `/tournaments/:tournamentId/teams`, `/tournaments/:tournamentId/teams/new`, `/tournaments/:tournamentId/teams/copy`, `/tournament-teams/:id`, `/tournament-teams/:id/edit`.
 
 `/app` est la page principale, atteinte après connexion : en-tête avec navigation principale, nom du compte et déconnexion, puis un tableau de bord en quatre blocs (tournois en direct, mes pronostics, classement général, mes groupes). Les blocs affichent « Bientôt disponible » tant que les API correspondantes n'existent pas ; pour en brancher un, passer le contenu réel en `children` de `DashboardSection` (`src/components/home/`). Pour ajouter une entrée de navigation, compléter `NAV_ITEMS` dans `src/components/layout/AppHeader.tsx`.
 
@@ -69,9 +71,29 @@ Définitions de statistiques (`flat` ou `percent`) et leurs associations aux jeu
 - **Import / export** : écran partagé avec les jeux (`components/common/TransferView.tsx`), fichiers `stats.json` / `stats.csv`. JSON `{ "version": 1, "stats": [{ "name", "key", "type", "games": [] }] }`, CSV `name,key,type,games`. Importer une statistique dont la clé existe la met à jour et **remplace** ses jeux liés ; un fichier invalide renvoie `errors.file`, affiché tel quel.
 - Hors périmètre : saisie de valeurs de statistiques par match. Les types de `/stats` sont écrits à la main (l'OpenAPI du dépôt ne les décrit pas encore).
 
+## Équipes
+
+Équipes globales (liées à un jeu) et équipes de tournoi, séparées dans le code (`features/teams/api.ts` en deux blocs), les routes (`/teams/*` et `/tournaments/:id/teams`, `/tournament-teams/*`) et les libellés (`teams.*`, `tournamentTeams.*`). Contrat (PR #84) :
+
+| Ressource | Appels |
+|---|---|
+| Équipes globales | `GET /teams?game_id=&limit=&offset=` (alphabétique), `GET /teams/{id}`, `POST /teams` (201), `PATCH /teams/{id}` (champs modifiés ; `""` efface le tag ou la photo), `DELETE /teams/{id}` (204) |
+| Membres | `GET /teams/{id}/members` (actifs et anciens, `left_at`), `POST /teams/{id}/members` (201, `{ user_id, role }`), `PATCH /teams/{id}/members/{user_id}` (`{ role }`), `DELETE /teams/{id}/members/{user_id}` (204) |
+| Équipes de tournoi | `GET /tournaments/{tournament_id}/teams?limit=&offset=`, `POST /tournaments/{tournament_id}/teams` (de zéro, ou `{ team_id, member_ids }`), `GET`/`PATCH`/`DELETE /tournament-teams/{id}`, mêmes routes de membres sous `/tournament-teams/{id}/members` |
+| Comptes | `GET /users` (comptes proposés à l'ajout), `GET /user/{id}` (noms affichés) |
+| Fichiers | `GET /teams/export?format=json\|csv`, `POST /teams/import?format=json\|csv` (corps brut, 256 Kio max) |
+
+- **Droits** : tout compte connecté consulte et crée une équipe (il en devient propriétaire et premier membre). Seul le propriétaire (claim `sub` du JWT = `owner_id`) voit les contrôles de modification, suppression et gestion des membres ; un administrateur n'a aucun droit particulier sur une équipe qui n'est pas la sienne. Le serveur reste l'autorité (403). L'import/export est réservé aux administrateurs.
+- **Liste** : filtre par jeu (`?game=`) et pagination (`?page=`, taille 12, `limit=13`) dans l'URL ; nom, tag, photo (tuile de repli si absente ou cassée), jeu et propriétaire.
+- **Membres** : le propriétaire ajoute un compte existant comme `member` ou `substitute`, change le rôle d'un membre ou le retire après confirmation. Le propriétaire n'est jamais modifiable et le rôle `owner` n'est jamais proposé. La liste est relue après chaque opération (succès ou échec). Les anciens membres (équipes globales uniquement) sont affichés à part, avec leur période.
+- **Équipes de tournoi** : l'UUID du tournoi vient de l'URL (aucun tournoi fictif ; les liens depuis les pages de tournoi seront ajoutés avec elles). Création de zéro, ou copie d'une équipe globale possédée avec choix des membres actifs (`member_ids`, propriétaire toujours copié). La copie reste indépendante de l'équipe globale.
+- **Validation** (`features/teams/validation.ts`), identique au serveur : nom 1–64 caractères après trim (unique par jeu sans tenir compte de la casse : **409 `team_name_taken`** affiché sur le champ), tag facultatif 1–8 caractères, photo facultative en URL `http(s)` ≤ 2048 octets, identifiants UUID (un identifiant invalide ne déclenche aucune requête).
+- **Erreurs** : 400 (détail par champ), 401 (retour à la connexion), 403, 404, 409 `already_team_member`, `team_already_registered`, `player_already_registered` ont chacun leur message.
+- **Import / export** : écran partagé (`TransferView`), fichiers `teams.json` / `teams.csv`. JSON `{ "version": 1, "teams": [{ "game", "name", "tag", "picture_url", "owner", "members": [{ "username", "role", "joined_at", "left_at" }] }] }`, CSV `game,name,tag,picture_url,owner,members` (membres en JSON). Importer une équipe existante (même jeu et nom) **remplace** ses membres ; l'historique est conservé. Les équipes de tournoi ne sont pas exportées.
+
 ## Langues
 
-Les écrans de jeux, l'en-tête et le sélecteur de langue sont disponibles en **français** (défaut) et en **anglais** (`src/i18n/`, choix mémorisé dans `localStorage` sous `epickem-lang`, attribut `lang` du document mis à jour). Les écrans de connexion, d'inscription et d'accueil restent en français pour l'instant. Toute nouvelle clé doit exister dans `fr.ts` et `en.ts` (le type `Messages` le vérifie).
+Les écrans de jeux, de statistiques, d'équipes, l'en-tête et le sélecteur de langue sont disponibles en **français** (défaut) et en **anglais** (`src/i18n/`, choix mémorisé dans `localStorage` sous `epickem-lang`, attribut `lang` du document mis à jour). Les écrans de connexion, d'inscription et d'accueil restent en français pour l'instant. Toute nouvelle clé doit exister dans `fr.ts` et `en.ts` (le type `Messages` le vérifie).
 
 ## API
 

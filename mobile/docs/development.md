@@ -16,6 +16,18 @@ Keep the checkout in the Linux filesystem for file watcher and installation perf
 
 An Android emulator may run on Windows while Metro runs in WSL. Configure ADB connectivity explicitly; do not assume Windows and Linux share ADB devices. Alternatively, build and run Android on a native Linux environment with Android SDK tooling. iOS compilation and simulators require macOS.
 
+### Signed Git commits
+
+Keep Git commit signing enabled and use the configured personal signing key. In an interactive WSL terminal, unlock the key and prime the agent cache:
+
+```sh
+export GPG_TTY="$(tty)"
+gpg-connect-agent updatestartuptty /bye
+printf 'Epickem commit signing cache check\n' | gpg --clearsign >/dev/null
+```
+
+The local GPG agent caches the unlocked key for at most eight hours. Codex can then create signed commits without an interactive TTY until that bounded cache expires. The shell profiles set `GPG_TTY` only when a terminal is available. After the cache expires, repeat the unlock procedure in an interactive terminal and retry the commit. Never store or pass the key passphrase through Git, shell arguments, environment variables or files.
+
 ## macOS
 
 Install Xcode and its command line tools for iOS, accept the Xcode license and install a simulator runtime. SDK 58 requires Xcode 26.4 or newer. Install CocoaPods 1.17.0 (`gem install cocoapods -v 1.17.0 --user-install`) before using `npm run build:ios:simulator`. Android needs Android Studio or command line SDK tools, the generated project's SDK versions, and a compatible JDK (CI uses 17).

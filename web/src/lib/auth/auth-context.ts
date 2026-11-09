@@ -6,6 +6,8 @@ import type { Role } from './jwt'
 export interface AuthContextValue {
   isAuthenticated: boolean
   username: string | null
+  // Identifiant du compte (claim `sub`) ; sert à reconnaître le propriétaire d'une équipe.
+  userId: string | null
   // Rôle lu dans le jeton d'accès ; sert uniquement à adapter l'interface.
   role: Role | null
   isAdmin: boolean
