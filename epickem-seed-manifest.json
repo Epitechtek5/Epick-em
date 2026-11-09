@@ -1,0 +1,137 @@
+{
+  "api": "http://127.0.0.1:8080",
+  "users": {
+    "seed_admin": "fe0888cd-af7b-48b4-821d-74499488c95e",
+    "alice_test": "20db8380-86aa-4b24-ad72-a3edd3dead3a",
+    "bob_test": "8a5317d9-e949-4281-b5f5-5975e1feaad4",
+    "charlie_test": "770c0b16-b823-4bfb-816b-3025559f167a",
+    "david_test": "5797a562-f342-4d0e-a969-1eeaf1c0ff7d",
+    "emma_test": "5fae03f7-187e-4936-a6ea-2d12e82688bd",
+    "felix_test": "bb27c194-91c5-4fee-8aa0-d901248e48be",
+    "grace_test": "beae6167-14bb-4ff4-bc32-e85eccee4c90",
+    "henry_test": "6fcd997e-0c62-461e-8385-46cdc078c857",
+    "ivan_test": "60aabce8-0db6-4bb5-8464-3fa746a11259",
+    "jane_test": "c5c78d9f-bf40-47dd-9346-d70bc9d9fbde",
+    "karl_test": "0ec235b9-42fe-4b09-8f52-c8b2b982f3d1",
+    "luna_test": "596f86f2-9141-47f3-b542-67989c140ee5",
+    "mike_test": "8f812f41-00e6-40a4-a0ec-dc5a16938cbd",
+    "nina_test": "c354ab88-ea8e-4532-8c93-8f4ebb72a489",
+    "oliver_test": "c2fae3b2-6cc9-44c5-9602-7a14e265c289",
+    "paul_test": "7913e4f5-4a24-4e7a-9c7c-9eac68e4fc0b"
+  },
+  "global_teams": {
+    "Alpha": "ddafc384-99c4-4857-8e7c-de6b1cef65af",
+    "Bravo": "ccb56da4-6022-4734-bb5c-cad3a6bdfc74",
+    "Charlie": "8a22dfe5-0c24-419d-9ca1-35bfd48e9c8e",
+    "Delta": "8b40d34e-da15-4c2d-9c0b-694ddab06733"
+  },
+  "tournaments": {
+    "cs2": {
+      "id": "cd418e6d-e14a-4805-8081-77e2c1472a79",
+      "steps": [
+        "56260178-a4b8-4efe-9f09-231853af3ca4",
+        "7bec4150-536b-4d7c-9235-ca5f2e84851f"
+      ],
+      "registrations": [
+        "8a837660-81aa-4615-932e-b5b900636b00",
+        "2c82afef-ce75-4aeb-9602-aa0155fd76bf",
+        "df17bad2-c3a2-41e1-84f0-15e2330df3c0",
+        "18b8221f-5ac7-4b0e-aee9-68359a043014"
+      ]
+    },
+    "tft_live": {
+      "id": "07e29a43-356c-4926-8041-994e298c76d3",
+      "steps": [
+        "6ef9b663-6939-4213-8104-beb203b4c47b",
+        "422c33ef-0404-4b36-b7f6-59faa0aee608"
+      ],
+      "registrations": [
+        "3a777a9c-9ad5-4d5d-9585-b0e643f25582",
+        "d33bdb82-2549-4e09-8985-88728e2c994d",
+        "99071ef3-a909-463c-911c-139d69053ed1",
+        "bac78d40-5000-4616-924d-96b35d7b8f3b",
+        "1d444954-301c-42b6-bad0-3487346416c5",
+        "2e02c089-a290-42c8-a88a-ea556a72b2ba",
+        "6f5c62e2-063a-4f99-9b0f-967889298951",
+        "001aacf1-f470-4437-a046-fb0baec14aeb"
+      ]
+    },
+    "tft_registration": {
+      "id": "1e9f34e2-9910-42bd-87c3-dc95a35f7adb",
+      "steps": [
+        "1ccd1ca0-b68f-45bb-968e-96788b9dbfeb",
+        "625b191d-0580-4ed3-a2df-777b5a107839"
+      ],
+      "registrations": [
+        "3ec89061-4141-4477-a7b8-232de4761f5a",
+        "afc4a518-dc57-4fd6-b37d-3ccd1dccc78b",
+        "74f1dd0f-fb1e-4cac-bb6f-87d2e17b41c3",
+        "dd717b26-98c5-4868-b524-2db6eb14f624",
+        "4ef6b23d-d298-46ae-b775-80fb0a5d600f",
+        "67295a90-5938-4f9c-a47d-7ea8ac5dacdb",
+        "b7d4db14-f050-4b92-aeb1-f205c91096e8",
+        "3cb512a6-a2fc-47c7-8d1d-be7b261788d2"
+      ]
+    },
+    "single_elimination": {
+      "id": "da25f5c8-ef56-4d60-a2e0-55076b3d33fa",
+      "steps": [
+        "02ddf18c-dcd0-4889-b769-6edaaa70ea68"
+      ],
+      "registrations": [
+        "29e0e456-c0d1-4708-90b7-e9da27a0c51b",
+        "2b5ce165-2a90-403d-8682-301f82ed6527",
+        "2e5e7f85-a442-482b-9851-33f5f7f3f06e",
+        "1bab9cf4-5075-4172-9764-dec937287e7b"
+      ]
+    },
+    "double_elimination": {
+      "id": "eaf09978-2290-42eb-9581-a52995e63ed3",
+      "steps": [
+        "aec04aef-0b28-4ab4-9064-4c1f17ed1888"
+      ],
+      "registrations": [
+        "c1dee460-a361-472b-b2fa-aeee707dd79c",
+        "262e9dd7-5238-431a-90d6-0e9a62387f2a",
+        "948f575c-4790-413a-95e0-26bc684b7c21",
+        "c0e054b6-6302-4703-bff6-99d9ef12bf26"
+      ]
+    },
+    "swiss": {
+      "id": "e8bc8978-7055-46eb-9c1a-da1fe19d6465",
+      "steps": [
+        "192c1023-a209-4953-b423-fb369856cb34"
+      ],
+      "registrations": [
+        "d7f7cee9-57a1-46a1-b6df-5c858787c3b8",
+        "ae88a701-b5d2-4a33-99c4-da72f070ccd6",
+        "4e793f7c-3eba-438a-b393-a4af4584ae1e",
+        "b4dc9c24-118c-490b-b684-cc132c1f0b25",
+        "11452237-9990-4449-bf42-716f1db7da55",
+        "eae1ebc7-8df6-42d5-a3b8-a99bc66aa996",
+        "1e6b6e52-2036-4ca4-8e8a-ec175acfe20a",
+        "fbb183d1-c81f-4403-a21f-36febaa8d67e"
+      ]
+    },
+    "completed": {
+      "id": "7eac2158-5c23-4466-8345-3f57b18f359e",
+      "steps": [
+        "53a25f8a-817a-424c-8806-9e834d8a5ebd"
+      ],
+      "registrations": [
+        "d2abc166-ff68-46aa-b5cb-33627da6fd9d",
+        "2ccf856e-c30c-4071-8e5a-f628a6f92384"
+      ]
+    },
+    "cancelled": {
+      "id": "8eee5b15-0934-4a96-a53a-427e94a4cd1d",
+      "steps": [],
+      "registrations": []
+    },
+    "draft": {
+      "id": "794dae2f-f36f-48b2-9253-1a4283219902",
+      "steps": [],
+      "registrations": []
+    }
+  }
+}

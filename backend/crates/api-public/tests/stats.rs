@@ -701,3 +701,67 @@ async fn games_files_carry_their_stats() {
     .await;
     assert_eq!(names(&list), ["Placement", "Précision"]);
 }
+
+#[actix_web::test]
+async fn stat_files_in_json_and_csv_give_the_same_stats() {
+    let (_, app, admin, _) = setup().await;
+    let valorant = create_game(&app, &admin, "Valorant").await;
+    let kills = create_stat(&app, &admin, "Éliminations, \"kills\"", "kills").await;
+    create_stat(&app, &admin, "Orpheline", "orphan").await;
+    link(&app, &admin, &valorant, &kills).await;
+    let (_, as_json) = export(&app, "/stats/export?format=json", &admin).await;
+    let (_, as_csv) = export(&app, "/stats/export?format=csv", &admin).await;
+    let parsed: Value = serde_json::from_str(&as_json).unwrap();
+    assert_eq!(parsed["version"], 1);
+    assert_eq!(parsed["stats"].as_array().unwrap().len(), 2);
+    assert!(as_csv.lines().count() >= 3, "{as_csv}");
+
+    // Chaque fichier importé dans une base vierge redonne les deux exports d'origine.
+    for (format, file) in [("json", &as_json), ("csv", &as_csv)] {
+        let (_, fresh, fresh_admin, _) = setup().await;
+        create_game(&fresh, &fresh_admin, "Valorant").await;
+        let import = format!("/stats/import?format={format}");
+        let (status, report) = send_raw(&fresh, &import, &fresh_admin, file).await;
+        assert_eq!(status, StatusCode::OK, "{format}: {report}");
+        assert_eq!(report, json!({ "created": 2, "updated": 0 }), "{format}");
+        let (_, json_again) = export(&fresh, "/stats/export?format=json", &fresh_admin).await;
+        let (_, csv_again) = export(&fresh, "/stats/export?format=csv", &fresh_admin).await;
+        assert_eq!(json_again, as_json, "{format}");
+        assert_eq!(csv_again, as_csv, "{format}");
+    }
+}
+
+#[actix_web::test]
+async fn invalid_stat_files_are_refused_in_both_formats() {
+    let (_, app, admin, _) = setup().await;
+    let valorant = create_game(&app, &admin, "Valorant").await;
+    let kills = create_stat(&app, &admin, "Kills", "kills").await;
+    link(&app, &admin, &valorant, &kills).await;
+    let (_, as_json) = export(&app, "/stats/export?format=json", &admin).await;
+    let (_, as_csv) = export(&app, "/stats/export?format=csv", &admin).await;
+    let header = as_csv.lines().next().unwrap().to_string();
+
+    let bad = [
+        ("json", "pas du json".to_string()),
+        ("json", r#"{ "version": 9, "stats": [] }"#.to_string()),
+        ("json", as_csv.clone()),
+        ("csv", as_json.clone()),
+        ("csv", String::new()),
+        ("csv", "name\nKills\n".to_string()),
+        ("csv", format!("{header}\nKills\n")),
+        ("xml", "<stats/>".to_string()),
+    ];
+    for (format, file) in bad {
+        let (status, error) = send_raw(
+            &app,
+            &format!("/stats/import?format={format}"),
+            &admin,
+            &file,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{format}: {file}");
+        assert!(error.is_object(), "{error}");
+    }
+    let (_, after) = export(&app, "/stats/export?format=json", &admin).await;
+    assert_eq!(after, as_json);
+}

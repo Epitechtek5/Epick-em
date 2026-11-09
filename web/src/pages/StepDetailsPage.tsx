@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
 import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog'
+import { MatchesSection } from '@/components/matches/MatchesSection'
 import { StateMessage } from '@/components/games/StateMessage'
 import { StepStatusBadge } from '@/components/steps/StepBadges'
 import { StepGroups } from '@/components/steps/StepGroups'
@@ -222,6 +223,7 @@ export default function StepDetailsPage() {
 
           <StepLifecycle key={step.id} tournament={tournament} step={step} steps={steps} canManage={isAdmin} onChanged={applyChanges} />
           <StepGroups tournament={tournament} step={step} version={version} />
+          <MatchesSection tournament={tournament} step={step} version={version} canManage={isAdmin} />
         </>
       ) : null}
     </div>

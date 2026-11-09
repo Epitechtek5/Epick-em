@@ -2,6 +2,7 @@
 
 use crate::auth::AppState;
 use crate::error::ApiError;
+use crate::export_cache::evict_on_write;
 use crate::guard::require_auth;
 use crate::openapi::ApiDoc;
 use actix_web::body::MessageBody;
@@ -30,7 +31,8 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::teams::routes)
         .configure(crate::tournament_teams::routes)
         .configure(crate::tournaments::routes)
-        .configure(crate::steps::routes);
+        .configure(crate::steps::routes)
+        .configure(crate::matches::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).
@@ -68,12 +70,14 @@ pub fn app(
         .openapi(ApiDoc::openapi())
         .configure(api_routes)
         .split_for_parts();
-    app.wrap(from_fn(require_auth)).service(
-        // URL relative à la page : fonctionne aussi sous `/api/docs/` derrière nginx ou Vite.
-        SwaggerUi::new(format!("{DOCS_PATH}/{{_:.*}}"))
-            .url(SPEC_PATH, spec)
-            .config(Config::from("../openapi.json")),
-    )
+    app.wrap(from_fn(evict_on_write))
+        .wrap(from_fn(require_auth))
+        .service(
+            // URL relative à la page : fonctionne aussi sous `/api/docs/` derrière nginx ou Vite.
+            SwaggerUi::new(format!("{DOCS_PATH}/{{_:.*}}"))
+                .url(SPEC_PATH, spec)
+                .config(Config::from("../openapi.json")),
+        )
 }
 
 /// Vérifie que le service répond.

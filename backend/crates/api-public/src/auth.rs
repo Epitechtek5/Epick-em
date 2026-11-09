@@ -12,16 +12,18 @@ use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
 use crate::mail::{Mailer, NoopMailer};
+use crate::match_io::InSteps;
 use crate::password_reset::{email_error, normalize_email};
 use crate::stat_io::StoreStats;
 use crate::step_io::StoreSteps;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
-use crate::tournament_io::{NoChild, TournamentChild};
+use crate::tournament_io::TournamentChild;
 use crate::tournament_team_io::StoreTournamentTeams;
 use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use infra::{Cache, MemoryCache};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -50,10 +52,13 @@ pub struct AppState {
     pub(crate) stats: Arc<dyn GameStats>,
     /// Équipes, étapes et matchs des tournois, importés et exportés avec eux (opaques pour les
     /// tournois). Par défaut les équipes et les étapes sont celles de la base
-    /// ([`StoreTournamentTeams`], [`StoreSteps`]) ; les matchs ne sont pas encore pris en charge.
+    /// ([`StoreTournamentTeams`], [`StoreSteps`]) ; les matchs voyagent avec leur étape
+    /// ([`StoreMatches`](crate::match_io::StoreMatches)), le niveau des tournois n'en accepte pas.
     pub(crate) tournament_teams: Arc<dyn TournamentChild>,
     pub(crate) steps: Arc<dyn TournamentChild>,
     pub(crate) matches: Arc<dyn TournamentChild>,
+    /// Cache des fichiers d'export ([`export_cache`](crate::export_cache)). Par défaut en mémoire.
+    pub(crate) cache: Arc<dyn Cache>,
     /// Envoi des e-mails ; par défaut [`NoopMailer`] (Resend n'est pas branché).
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
@@ -70,7 +75,8 @@ impl AppState {
             stats: Arc::new(StoreStats(store.clone())),
             tournament_teams: Arc::new(StoreTournamentTeams(store.clone())),
             steps: Arc::new(StoreSteps::new(store.clone())),
-            matches: Arc::new(NoChild("les matchs")),
+            matches: Arc::new(InSteps),
+            cache: Arc::new(MemoryCache::new()),
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
@@ -94,6 +100,12 @@ impl AppState {
     /// Branche le sous-niveau qui importe et exporte les matchs des tournois.
     pub fn with_matches(mut self, matches: Arc<dyn TournamentChild>) -> Self {
         self.matches = matches;
+        self
+    }
+
+    /// Branche le cache des exports (Redis en production).
+    pub fn with_cache(mut self, cache: Arc<dyn Cache>) -> Self {
+        self.cache = cache;
         self
     }
 

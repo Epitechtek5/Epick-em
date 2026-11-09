@@ -17,11 +17,11 @@
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::export_cache;
 use crate::game_io::{Format, FormatQuery};
 use crate::store::{AuthStore, MemberImport, TeamImport, TeamRole};
 use crate::teams::validate;
 use crate::users::require_admin;
-use actix_web::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use actix_web::{HttpResponse, get, post, web};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
@@ -98,6 +98,9 @@ pub(crate) async fn export_teams(
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let format = query.format.unwrap_or_default();
+    if let Some(body) = export_cache::lookup(&state, "teams", format).await {
+        return Ok(export_cache::response("teams", format, body));
+    }
     let store = &state.store;
     let games: HashMap<Uuid, String> = store
         .list_games(i64::MAX, 0)
@@ -137,13 +140,8 @@ pub(crate) async fn export_teams(
         });
     }
     let body = encode(format, teams).map_err(ApiError::internal)?;
-    Ok(HttpResponse::Ok()
-        .insert_header((CONTENT_TYPE, format.content_type()))
-        .insert_header((
-            CONTENT_DISPOSITION,
-            format!("attachment; filename=\"teams.{}\"", format.extension()),
-        ))
-        .body(body))
+    export_cache::save(&state, "teams", format, &body).await;
+    Ok(export_cache::response("teams", format, body))
 }
 
 /// Nom d'utilisateur d'un compte, mémorisé pour la durée de l'export.

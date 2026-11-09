@@ -12,10 +12,10 @@
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::export_cache;
 use crate::games::validate;
 use crate::store::{GameInput, StoreError};
 use crate::users::require_admin;
-use actix_web::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use actix_web::{HttpResponse, get, post, web};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -140,6 +140,9 @@ pub(crate) async fn export_games(
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let format = query.format.unwrap_or_default();
+    if let Some(body) = export_cache::lookup(&state, "games", format).await {
+        return Ok(export_cache::response("games", format, body));
+    }
     let mut games = Vec::new();
     for game in state
         .store
@@ -160,13 +163,8 @@ pub(crate) async fn export_games(
         });
     }
     let body = encode(format, games).map_err(ApiError::internal)?;
-    Ok(HttpResponse::Ok()
-        .insert_header((CONTENT_TYPE, format.content_type()))
-        .insert_header((
-            CONTENT_DISPOSITION,
-            format!("attachment; filename=\"games.{}\"", format.extension()),
-        ))
-        .body(body))
+    export_cache::save(&state, "games", format, &body).await;
+    Ok(export_cache::response("games", format, body))
 }
 
 /// Importe des jeux et leurs statistiques depuis un fichier JSON ou CSV (administrateur).

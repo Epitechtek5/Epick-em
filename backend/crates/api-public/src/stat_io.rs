@@ -12,11 +12,11 @@
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::export_cache;
 use crate::game_io::{Format, FormatQuery, GameStats};
 use crate::stats::validate;
 use crate::store::{AuthStore, Stat, StatInput, StatType, StoreError};
 use crate::users::require_admin;
-use actix_web::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use actix_web::{HttpResponse, get, post, web};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -180,6 +180,9 @@ pub(crate) async fn export_stats(
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let format = query.format.unwrap_or_default();
+    if let Some(body) = export_cache::lookup(&state, "stats", format).await {
+        return Ok(export_cache::response("stats", format, body));
+    }
     let store = &state.store;
     let mut games_by_stat: HashMap<Uuid, Vec<String>> = HashMap::new();
     for game in store
@@ -212,13 +215,8 @@ pub(crate) async fn export_stats(
         })
         .collect();
     let body = encode(format, stats).map_err(ApiError::internal)?;
-    Ok(HttpResponse::Ok()
-        .insert_header((CONTENT_TYPE, format.content_type()))
-        .insert_header((
-            CONTENT_DISPOSITION,
-            format!("attachment; filename=\"stats.{}\"", format.extension()),
-        ))
-        .body(body))
+    export_cache::save(&state, "stats", format, &body).await;
+    Ok(export_cache::response("stats", format, body))
 }
 
 /// Importe des statistiques et leur liaison aux jeux depuis un fichier JSON ou CSV

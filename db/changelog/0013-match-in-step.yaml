@@ -1,0 +1,19 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0013-match-in-step
+      author: epickem
+      changes:
+        - sql:
+            sql: >-
+              DELETE FROM match WHERE step_id IS NULL;
+              ALTER TABLE match ALTER COLUMN step_id SET NOT NULL;
+              ALTER TABLE match DROP CONSTRAINT match_group_step_check;
+              ALTER TABLE match DROP CONSTRAINT match_bracket_step_check;
+              COMMENT ON TABLE match IS 'Match d''un jeu, dans une étape de tournoi';
+              COMMENT ON COLUMN match.step_id IS 'Étape du match : un match appartient toujours à un tournoi'
+      rollback:
+        - sql:
+            sql: >-
+              ALTER TABLE match ALTER COLUMN step_id DROP NOT NULL;
+              ALTER TABLE match ADD CONSTRAINT match_group_step_check CHECK (group_id IS NULL OR step_id IS NOT NULL);
+              ALTER TABLE match ADD CONSTRAINT match_bracket_step_check CHECK (bracket IS NULL OR step_id IS NOT NULL)
