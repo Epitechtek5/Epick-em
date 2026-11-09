@@ -69,13 +69,12 @@ pub fn send(state: &AppState, email: String, token: String, welcome: Option<Stri
     }
     let mailer = state.mailer.clone();
     let store = state.store.clone();
-    let link = format!("{}/verify-email?token={token}", state.public_url.trim_end_matches('/'));
+    let link = format!(
+        "{}/verify-email?token={token}",
+        state.public_url.trim_end_matches('/')
+    );
     actix_web::rt::spawn(async move {
-        if mailer
-            .send_verification(&email, &link)
-            .await
-            .is_err()
-        {
+        if mailer.send_verification(&email, &link).await.is_err() {
             eprintln!("api-public: verification email delivery failed");
         } else if welcome.is_none()
             && store

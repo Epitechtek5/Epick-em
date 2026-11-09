@@ -100,7 +100,7 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
 
-### Réponse de `/login` et `/refresh`
+### Réponse de `/register`, `/login` et `/refresh`
 
 ```json
 {

@@ -11,6 +11,7 @@ module.exports = defineConfig([
       'coverage/**',
       'android/**',
       'ios/**',
+      'vendor/**',
       'src/api/generated/**',
     ],
   },

@@ -77,7 +77,8 @@ impl MailConfig {
             public_url: get("PUBLIC_URL").unwrap_or_else(|| "http://localhost:3000".into()),
             verification_template: get("RESEND_EMAIL_VERIFICATION_TEMPLATE")
                 .unwrap_or_else(|| "email-address-confirmation".into()),
-            welcome_template: get("RESEND_WELCOME_TEMPLATE").unwrap_or_else(|| "welcome-account".into()),
+            welcome_template: get("RESEND_WELCOME_TEMPLATE")
+                .unwrap_or_else(|| "welcome-account".into()),
             password_reset_template: get("RESEND_PASSWORD_RESET_TEMPLATE")
                 .unwrap_or_else(|| DEFAULT_PASSWORD_RESET_TEMPLATE.into()),
         })

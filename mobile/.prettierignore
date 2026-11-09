@@ -6,6 +6,7 @@ ios/
 dist/
 build/
 coverage/
+vendor/
 package-lock.json
 assets/
 docs/evidence/
