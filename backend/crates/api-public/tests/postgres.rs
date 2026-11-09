@@ -3,7 +3,8 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, GameInput, GameUpdate, MatchType, MemberImport, ParticipantImport, ParticipantInput,
+    AuthStore, Bracket, GameInput, GameUpdate, MatchFinish, MatchInput, MatchResult, MatchScore,
+    MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
     ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
     ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
     StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
@@ -1959,12 +1960,58 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .await
         .unwrap();
 
+    // Deux matchs dans la finale : un terminé, un qui attend ses participants.
+    let group = store.list_step_groups(last.id).await.unwrap()[0].id;
+    let created = |round: i32, participants: Vec<Uuid>| {
+        store.create_match(MatchInput {
+            game_id,
+            step_id: last.id,
+            group_id: group,
+            round: Some(round),
+            bracket: None,
+            next_match_id: None,
+            scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+            participants,
+        })
+    };
+    let played = created(1, vec![players[0], players[1]]).await.unwrap();
+    created(2, vec![players[1]]).await.unwrap();
+    store
+        .finish_match(MatchFinish {
+            match_id: played.id,
+            scores: vec![
+                MatchScore {
+                    participant_id: players[0],
+                    stats: serde_json::json!({}),
+                    points: 2.5,
+                    rank: Some(1),
+                    result: Some(MatchResult::Win),
+                },
+                MatchScore {
+                    participant_id: players[1],
+                    stats: serde_json::json!({}),
+                    points: 1.0,
+                    rank: Some(2),
+                    result: Some(MatchResult::Loss),
+                },
+            ],
+            advance: None,
+            step_points: vec![(players[0], 2.5), (players[1], 1.0)],
+        })
+        .await
+        .unwrap();
+
     let steps = StoreSteps::new(store.clone());
     let exported = steps.export_in(source.id, &[]).await.unwrap();
     assert_eq!(exported.len(), 2);
     let items: Vec<serde_json::Value> = exported.iter().map(|(_, item)| item.clone()).collect();
     assert_eq!(items[0]["status"], "finished");
     assert_eq!(items[1]["status"], "ongoing");
+    let matches = items[1]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0]["status"], "finished");
+    assert_eq!(matches[0]["participants"][0]["points"], 2.5);
+    assert_eq!(matches[1]["status"], "scheduled");
 
     let mut scope = FileScope::default();
     for user_id in &users {
@@ -1985,6 +2032,27 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .collect();
     assert_eq!(again, items);
 
+    // Réimporter remplace aussi les matchs de l'étape.
+    let copied_last = store.list_steps(copy.id).await.unwrap()[1].id;
+    assert_eq!(
+        store
+            .list_matches(copied_last, None, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    steps.import_in(copy.id, items.clone(), &[]).await.unwrap();
+    let copied_last = store.list_steps(copy.id).await.unwrap()[1].id;
+    assert_eq!(
+        store
+            .list_matches(copied_last, None, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
     // Réimporter remplace : les étapes de la copie repartent du fichier.
     steps
         .import_in(copy.id, vec![items[0].clone()], &[])
@@ -1993,4 +2061,465 @@ async fn steps_export_and_reimport_into_another_tournament() {
     assert_eq!(store.list_steps(copy.id).await.unwrap().len(), 1);
     let totals = store.participant_points(copy.id).await.unwrap();
     assert_eq!(totals.values().copied().fold(0.0, f64::max), 9.0);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn match_tables_enforce_their_constraints() {
+    let store = store().await;
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    let game_id = game(&store).await;
+    let alice = user(&store, "alice").await;
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let other = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let participant = store
+        .add_participant(ParticipantInput {
+            tournament_id: tournament.id,
+            user_id: Some(alice),
+            tournament_team_id: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let step = |tournament: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO step (tournament_id, position, format, match_type, group_count, \
+                 group_size, matches_per_group, advance_per_group) \
+                 VALUES ($1, 1, 'pool', 'ffa', 1, 4, 3, 2) RETURNING id",
+            )
+            .bind(tournament)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let step_id = step(tournament.id).await;
+    let other_step = step(other.id).await;
+    let group = |step: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO step_group (step_id, index) VALUES ($1, 1) RETURNING id",
+            )
+            .bind(step)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let group_id = group(step_id).await;
+
+    let insert = |step: Option<Uuid>, group: Option<Uuid>, bracket: Option<&str>, status: &str| {
+        let pool = pool.clone();
+        let bracket = bracket.map(str::to_string);
+        let status = status.to_string();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match (game_id, step_id, group_id, round, bracket, status) \
+                 VALUES ($1, $2, $3, 1, $4, $5) RETURNING id",
+            )
+            .bind(game_id)
+            .bind(step)
+            .bind(group)
+            .bind(bracket)
+            .bind(status)
+            .fetch_one(&pool)
+            .await
+        }
+    };
+    let match_id = insert(Some(step_id), Some(group_id), Some("winners"), "scheduled")
+        .await
+        .unwrap();
+    // Un match appartient toujours à une étape (donc à un tournoi) ; le groupe est celui de
+    // l'étape ; tableau et statut connus.
+    assert!(insert(None, None, None, "scheduled").await.is_err());
+    assert!(
+        insert(None, Some(group_id), None, "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(None, None, Some("winners"), "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(Some(other_step), Some(group_id), None, "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(Some(step_id), Some(group_id), Some("upper"), "scheduled")
+            .await
+            .is_err()
+    );
+    assert!(
+        insert(Some(step_id), Some(group_id), None, "postponed")
+            .await
+            .is_err()
+    );
+
+    // Le vainqueur va dans un autre match, jamais dans le même ; supprimer le suivant détache.
+    let next = insert(Some(step_id), Some(group_id), Some("winners"), "scheduled")
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE match SET next_match_id = id WHERE id = $1")
+            .bind(match_id)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE match SET next_match_id = $2 WHERE id = $1")
+        .bind(match_id)
+        .bind(next)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query(
+            "UPDATE match SET started_at = now(), ended_at = now() - interval '1 hour' WHERE id = $1"
+        )
+        .bind(match_id)
+        .execute(&pool)
+            .await
+            .is_err()
+    );
+
+    let enroll = |match_id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("INSERT INTO match_participant (match_id, participant_id) VALUES ($1, $2)")
+                .bind(match_id)
+                .bind(participant.id)
+                .execute(&pool)
+                .await
+        }
+    };
+    enroll(match_id).await.unwrap();
+    assert!(enroll(match_id).await.is_err());
+    let (stats, points): (serde_json::Value, f64) =
+        sqlx::query_as("SELECT stats, points::float8 FROM match_participant WHERE match_id = $1")
+            .bind(match_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((stats, points), (serde_json::json!({}), 0.0));
+    for bad in [
+        "UPDATE match_participant SET stats = '[1]'::jsonb WHERE match_id = $1",
+        "UPDATE match_participant SET rank = 0 WHERE match_id = $1",
+        "UPDATE match_participant SET result = 'forfeit' WHERE match_id = $1",
+    ] {
+        let attempt = sqlx::query(bad).bind(match_id).execute(&pool).await;
+        assert!(attempt.is_err(), "{bad}");
+    }
+    sqlx::query(
+        "UPDATE match_participant SET stats = '{\"placement\": 2, \"kills\": 7}', \
+         rank = 2, result = 'loss' WHERE match_id = $1",
+    )
+    .bind(match_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("DELETE FROM match WHERE id = $1")
+        .bind(next)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let detached: Option<Uuid> =
+        sqlx::query_scalar("SELECT next_match_id FROM match WHERE id = $1")
+            .bind(match_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(detached, None);
+
+    // Supprimer le tournoi emporte ses étapes, leurs matchs et leurs participants.
+    sqlx::query("DELETE FROM tournaments WHERE id = $1")
+        .bind(tournament.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM match WHERE id = $1) \
+         + (SELECT count(*) FROM match_participant WHERE match_id = $1)",
+    )
+    .bind(match_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(left, 0);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn matches_are_stored_scored_and_finished_atomically() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: StepDefinition {
+                format: StepFormat::SingleElim,
+                match_type: MatchType::Duel,
+                ..step_definition(1, 1, 4, 1)
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![players.clone()],
+        })
+        .await
+        .unwrap();
+    let group = store.list_step_groups(step.id).await.unwrap()[0].id;
+    let input = |round: i32, next: Option<Uuid>, participants: Vec<Uuid>| MatchInput {
+        game_id,
+        step_id: step.id,
+        group_id: group,
+        round: Some(round),
+        bracket: None,
+        next_match_id: next,
+        scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+        participants,
+    };
+
+    let last = store.create_match(input(2, None, vec![])).await.unwrap();
+    let semi = store
+        .create_match(input(1, Some(last.id), vec![players[0], players[1]]))
+        .await
+        .unwrap();
+    assert_eq!(semi.status, MatchStatus::Scheduled);
+    assert_eq!(semi.step_id, step.id);
+    assert_eq!(
+        semi.scheduled_at.as_deref(),
+        Some("2026-11-14T18:00:00.000000Z")
+    );
+    let listed = store.list_matches(step.id, None, None).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|m| m.round).collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
+    assert_eq!(
+        store
+            .list_matches(step.id, Some(group), Some(MatchStatus::Finished))
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(store.find_match(semi.id).await.unwrap(), Some(semi.clone()));
+
+    // Modification partielle : `Some(None)` efface, les participants gardent leurs résultats.
+    let updated = store
+        .update_match(
+            semi.id,
+            MatchUpdate {
+                round: Some(None),
+                bracket: Some(Some(Bracket::Winners)),
+                scheduled_at: Some(None),
+                participants: Some(vec![players[0], players[2]]),
+                ..MatchUpdate::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (updated.round, updated.bracket, updated.scheduled_at),
+        (None, Some(Bracket::Winners), None)
+    );
+    assert_eq!(updated.next_match_id, Some(last.id));
+    store
+        .update_match(
+            semi.id,
+            MatchUpdate {
+                round: Some(Some(1)),
+                participants: Some(vec![players[0], players[1]]),
+                ..MatchUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    let in_semi: Vec<Uuid> = members
+        .iter()
+        .filter(|p| p.match_id == semi.id)
+        .map(|p| p.participant_id)
+        .collect();
+    assert_eq!(in_semi.len(), 2);
+    assert!(in_semi.contains(&players[0]) && in_semi.contains(&players[1]));
+    assert!(
+        store
+            .update_match(Uuid::new_v4(), MatchUpdate::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Résultats : statistiques jsonb, points décimaux, rang et résultat.
+    let score = |participant_id: Uuid, kills: u32, points: f64, rank: i32, result| MatchScore {
+        participant_id,
+        stats: serde_json::json!({ "kills": kills }),
+        points,
+        rank: Some(rank),
+        result: Some(result),
+    };
+    let scores = vec![
+        score(players[0], 3, 4.5, 1, MatchResult::Win),
+        score(players[1], 1, 1.5, 2, MatchResult::Loss),
+    ];
+    assert!(
+        store
+            .save_match_scores(semi.id, scores.clone())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .save_match_scores(Uuid::new_v4(), scores.clone())
+            .await
+            .unwrap()
+    );
+    let saved = store.list_step_match_participants(step.id).await.unwrap();
+    let winner = saved
+        .iter()
+        .find(|p| p.participant_id == players[0] && p.match_id == semi.id)
+        .unwrap();
+    assert_eq!(winner.stats, serde_json::json!({ "kills": 3 }));
+    assert_eq!((winner.points, winner.rank), (4.5, Some(1)));
+    assert_eq!(winner.result, Some(MatchResult::Win));
+
+    let ongoing = store
+        .set_match_status(semi.id, MatchStatus::Ongoing)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ongoing.status, MatchStatus::Ongoing);
+    assert!(ongoing.started_at.is_some());
+    assert!(
+        store
+            .set_match_status(Uuid::new_v4(), MatchStatus::Ongoing)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Clôture : résultats, vainqueur dans le match suivant et points de l'étape, ensemble.
+    let finished = store
+        .finish_match(MatchFinish {
+            match_id: semi.id,
+            scores,
+            advance: Some((last.id, players[0])),
+            step_points: vec![(players[0], 4.5), (players[1], 1.5)],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.status, MatchStatus::Finished);
+    assert!(finished.ended_at.is_some());
+    let in_last: Vec<Uuid> = store
+        .list_step_match_participants(step.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.match_id == last.id)
+        .map(|p| p.participant_id)
+        .collect();
+    assert_eq!(in_last, [players[0]]);
+    let totals: Vec<f64> = store
+        .list_step_participants(step.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.participant_id == players[0] || m.participant_id == players[1])
+        .map(|m| m.points)
+        .collect();
+    assert_eq!(totals.iter().sum::<f64>(), 6.0);
+    for attempt in [
+        store
+            .finish_match(MatchFinish {
+                match_id: semi.id,
+                scores: vec![],
+                advance: None,
+                step_points: vec![],
+            })
+            .await
+            .map(|_| ()),
+        store
+            .set_match_status(semi.id, MatchStatus::Cancelled)
+            .await
+            .map(|_| ()),
+        store.save_match_scores(semi.id, vec![]).await.map(|_| ()),
+    ] {
+        assert!(matches!(attempt, Err(StoreError::MatchState)));
+    }
+
+    // Un match annulé garde sa date de fin ; supprimer le suivant détache le précédent.
+    let cancelled = store
+        .set_match_status(last.id, MatchStatus::Cancelled)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cancelled.ended_at.is_some());
+    assert!(store.delete_match(last.id).await.unwrap());
+    assert!(!store.delete_match(last.id).await.unwrap());
+    assert_eq!(
+        store
+            .find_match(semi.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .next_match_id,
+        None
+    );
+
+    // Retirer un inscrit retire sa participation aux matchs, pas les matchs.
+    assert!(store.delete_participant(players[0]).await.unwrap());
+    assert!(store.find_match(semi.id).await.unwrap().is_some());
+    let remaining = store.list_step_match_participants(step.id).await.unwrap();
+    assert!(remaining.iter().all(|p| p.participant_id != players[0]));
+
+    // Supprimer le tournoi emporte ses étapes, leurs matchs et leurs participants.
+    assert!(store.delete_tournament(tournament.id).await.unwrap());
+    assert_eq!(store.find_match(semi.id).await.unwrap(), None);
+    assert!(
+        store
+            .list_step_match_participants(step.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

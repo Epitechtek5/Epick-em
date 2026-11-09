@@ -2,12 +2,14 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
-    Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step,
-    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepStart, StoreError,
-    Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
-    TournamentInput, TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
+    MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
+    ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
+    StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
+    StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate,
+    Tournament, TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus,
+    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
+    UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
@@ -418,6 +420,145 @@ async fn start_step_in(
         }
     }
     Ok(Some(step))
+}
+
+/// Colonnes de `match`, dans l'ordre de [`MatchRow`].
+fn match_columns() -> String {
+    format!(
+        "id, game_id, step_id, group_id, round, bracket, next_match_id, {} AS scheduled_at, \
+         {} AS started_at, {} AS ended_at, status, {} AS created_at, {} AS updated_at",
+        ts("scheduled_at"),
+        ts("started_at"),
+        ts("ended_at"),
+        ts("created_at"),
+        ts("updated_at")
+    )
+}
+
+type MatchRow = (
+    Uuid,
+    Uuid,
+    Uuid,
+    Option<Uuid>,
+    Option<i32>,
+    Option<String>,
+    Option<Uuid>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    String,
+);
+
+fn match_from(row: MatchRow) -> Result<Match, StoreError> {
+    Ok(Match {
+        id: row.0,
+        game_id: row.1,
+        step_id: row.2,
+        group_id: row.3,
+        round: row.4,
+        bracket: row.5.map(|b| b.parse()).transpose()?,
+        next_match_id: row.6,
+        scheduled_at: row.7,
+        started_at: row.8,
+        ended_at: row.9,
+        status: row.10.parse()?,
+        created_at: row.11,
+        updated_at: row.12,
+    })
+}
+
+type MatchParticipantRow = (Uuid, Uuid, String, f64, Option<i32>, Option<String>);
+
+const MATCH_PARTICIPANT_COLUMNS: &str =
+    "match_id, participant_id, stats::text, points::float8, rank, result";
+
+fn match_participant(row: MatchParticipantRow) -> Result<MatchParticipant, StoreError> {
+    Ok(MatchParticipant {
+        match_id: row.0,
+        participant_id: row.1,
+        stats: serde_json::from_str(&row.2).map_err(|err| StoreError::Other(err.to_string()))?,
+        points: row.3,
+        rank: row.4,
+        result: row.5.map(|r| r.parse()).transpose()?,
+    })
+}
+
+/// Remplace les participants du match : ceux qui restent gardent leurs résultats.
+async fn set_match_participants_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    match_id: Uuid,
+    participants: &[Uuid],
+) -> Result<(), StoreError> {
+    sqlx::query("DELETE FROM match_participant WHERE match_id = $1 AND participant_id <> ALL($2)")
+        .bind(match_id)
+        .bind(participants)
+        .execute(&mut **tx)
+        .await?;
+    for participant_id in participants {
+        insert_match_participant(tx, match_id, *participant_id).await?;
+    }
+    Ok(())
+}
+
+async fn insert_match_participant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    match_id: Uuid,
+    participant_id: Uuid,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "INSERT INTO match_participant (match_id, participant_id) VALUES ($1, $2) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(match_id)
+    .bind(participant_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn save_match_scores_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    match_id: Uuid,
+    scores: Vec<MatchScore>,
+) -> Result<(), StoreError> {
+    for score in scores {
+        sqlx::query(
+            "UPDATE match_participant SET stats = $3::jsonb, points = $4::float8::numeric, \
+                 rank = $5, result = $6 \
+             WHERE match_id = $1 AND participant_id = $2",
+        )
+        .bind(match_id)
+        .bind(score.participant_id)
+        .bind(score.stats.to_string())
+        .bind(score.points)
+        .bind(score.rank)
+        .bind(score.result.map(|r| r.as_str()))
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Verrouille le match et vérifie qu'il accepte encore des résultats.
+async fn lock_open_match(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    match_id: Uuid,
+) -> Result<Option<Uuid>, StoreError> {
+    let row = sqlx::query_as::<_, (String, Uuid)>(
+        "SELECT status, step_id FROM match WHERE id = $1 FOR UPDATE",
+    )
+    .bind(match_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match row {
+        None => Ok(None),
+        Some((status, _)) if status == "finished" || status == "cancelled" => {
+            Err(StoreError::MatchState)
+        }
+        Some((_, step_id)) => Ok(Some(step_id)),
+    }
 }
 
 /// Colonnes de `tournament_participant`, dans l'ordre de [`ParticipantRow`].
@@ -1912,6 +2053,260 @@ impl AuthStore for PgStore {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_matches(
+        &self,
+        step_id: Uuid,
+        group_id: Option<Uuid>,
+        status: Option<MatchStatus>,
+    ) -> Result<Vec<Match>, StoreError> {
+        sqlx::query_as::<_, MatchRow>(&format!(
+            "SELECT {} FROM match \
+             WHERE step_id = $1 AND ($2::uuid IS NULL OR group_id = $2) \
+                 AND ($3::text IS NULL OR status = $3) \
+             ORDER BY (SELECT index FROM step_group WHERE id = match.group_id), round, \
+                 created_at, id",
+            match_columns()
+        ))
+        .bind(step_id)
+        .bind(group_id)
+        .bind(status.map(|s| s.as_str()))
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(match_from)
+        .collect()
+    }
+
+    async fn find_match(&self, id: Uuid) -> Result<Option<Match>, StoreError> {
+        sqlx::query_as::<_, MatchRow>(&format!(
+            "SELECT {} FROM match WHERE id = $1",
+            match_columns()
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(match_from)
+        .transpose()
+    }
+
+    async fn list_step_match_participants(
+        &self,
+        step_id: Uuid,
+    ) -> Result<Vec<MatchParticipant>, StoreError> {
+        sqlx::query_as::<_, MatchParticipantRow>(&format!(
+            "SELECT {MATCH_PARTICIPANT_COLUMNS} FROM match_participant \
+             WHERE match_id IN (SELECT id FROM match WHERE step_id = $1) \
+             ORDER BY match_id, participant_id"
+        ))
+        .bind(step_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(match_participant)
+        .collect()
+    }
+
+    async fn create_match(&self, input: MatchInput) -> Result<Match, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, MatchRow>(&format!(
+            "INSERT INTO match (game_id, step_id, group_id, round, bracket, next_match_id, \
+                 scheduled_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz) RETURNING {}",
+            match_columns()
+        ))
+        .bind(input.game_id)
+        .bind(input.step_id)
+        .bind(input.group_id)
+        .bind(input.round)
+        .bind(input.bracket.map(|b| b.as_str()))
+        .bind(input.next_match_id)
+        .bind(input.scheduled_at)
+        .fetch_one(&mut *tx)
+        .await?;
+        let created = match_from(row)?;
+        for participant_id in &input.participants {
+            insert_match_participant(&mut tx, created.id, *participant_id).await?;
+        }
+        tx.commit().await?;
+        Ok(created)
+    }
+
+    async fn update_match(
+        &self,
+        id: Uuid,
+        update: MatchUpdate,
+    ) -> Result<Option<Match>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, MatchRow>(&format!(
+            "UPDATE match SET \
+                 round = CASE WHEN $2 THEN $3 ELSE round END, \
+                 bracket = CASE WHEN $4 THEN $5 ELSE bracket END, \
+                 next_match_id = CASE WHEN $6 THEN $7 ELSE next_match_id END, \
+                 scheduled_at = CASE WHEN $8 THEN $9::timestamptz ELSE scheduled_at END, \
+                 updated_at = now() \
+             WHERE id = $1 RETURNING {}",
+            match_columns()
+        ))
+        .bind(id)
+        .bind(update.round.is_some())
+        .bind(update.round.flatten())
+        .bind(update.bracket.is_some())
+        .bind(update.bracket.flatten().map(|b| b.as_str()))
+        .bind(update.next_match_id.is_some())
+        .bind(update.next_match_id.flatten())
+        .bind(update.scheduled_at.is_some())
+        .bind(update.scheduled_at.flatten())
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        if let Some(participants) = &update.participants {
+            set_match_participants_in(&mut tx, id, participants).await?;
+        }
+        tx.commit().await?;
+        Ok(Some(match_from(row)?))
+    }
+
+    async fn set_match_status(
+        &self,
+        id: Uuid,
+        status: MatchStatus,
+    ) -> Result<Option<Match>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        if lock_open_match(&mut tx, id).await?.is_none() {
+            return Ok(None);
+        }
+        let sql = match status {
+            MatchStatus::Ongoing => {
+                "UPDATE match SET status = 'ongoing', started_at = COALESCE(started_at, now()), \
+                     updated_at = now() WHERE id = $1 RETURNING "
+            }
+            MatchStatus::Cancelled => {
+                "UPDATE match SET status = 'cancelled', ended_at = now(), updated_at = now() \
+                 WHERE id = $1 RETURNING "
+            }
+            _ => return Err(StoreError::MatchState),
+        };
+        let row = sqlx::query_as::<_, MatchRow>(&format!("{sql}{}", match_columns()))
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(Some(match_from(row)?))
+    }
+
+    async fn delete_match(&self, id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query("DELETE FROM match WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn save_match_scores(
+        &self,
+        match_id: Uuid,
+        scores: Vec<MatchScore>,
+    ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        if lock_open_match(&mut tx, match_id).await?.is_none() {
+            return Ok(false);
+        }
+        save_match_scores_in(&mut tx, match_id, scores).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let Some(step_id) = lock_open_match(&mut tx, finish.match_id).await? else {
+            return Ok(None);
+        };
+        save_match_scores_in(&mut tx, finish.match_id, finish.scores).await?;
+        if let Some((next_id, participant_id)) = finish.advance {
+            insert_match_participant(&mut tx, next_id, participant_id).await?;
+        }
+        for (participant_id, points) in finish.step_points {
+            sqlx::query(
+                "UPDATE step_participant SET points = $3::float8::numeric \
+                 WHERE step_id = $1 AND participant_id = $2",
+            )
+            .bind(step_id)
+            .bind(participant_id)
+            .bind(points)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let row = sqlx::query_as::<_, MatchRow>(&format!(
+            "UPDATE match SET status = 'finished', started_at = COALESCE(started_at, now()), \
+                 ended_at = now(), updated_at = now() WHERE id = $1 RETURNING {}",
+            match_columns()
+        ))
+        .bind(finish.match_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(match_from(row)?))
+    }
+
+    async fn replace_step_matches(
+        &self,
+        step_id: Uuid,
+        game_id: Uuid,
+        matches: Vec<MatchImport>,
+    ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM step WHERE id = $1)")
+                .bind(step_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if !exists {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM match WHERE step_id = $1")
+            .bind(step_id)
+            .execute(&mut *tx)
+            .await?;
+        let mut ids = Vec::with_capacity(matches.len());
+        for import in &matches {
+            let id = sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match (game_id, step_id, group_id, round, bracket, scheduled_at, \
+                     started_at, ended_at, status) \
+                 VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, \
+                     $8::timestamptz, $9) RETURNING id",
+            )
+            .bind(game_id)
+            .bind(step_id)
+            .bind(import.group_id)
+            .bind(import.round)
+            .bind(import.bracket.map(|b| b.as_str()))
+            .bind(&import.scheduled_at)
+            .bind(&import.started_at)
+            .bind(&import.ended_at)
+            .bind(import.status.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            ids.push(id);
+        }
+        for (import, id) in matches.into_iter().zip(&ids) {
+            if let Some(next) = import.next.and_then(|next| ids.get(next)) {
+                sqlx::query("UPDATE match SET next_match_id = $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(next)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            for score in import.participants {
+                insert_match_participant(&mut tx, *id, score.participant_id).await?;
+                save_match_scores_in(&mut tx, *id, vec![score]).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 
     async fn import_tournaments(

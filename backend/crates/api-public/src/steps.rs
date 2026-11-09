@@ -5,10 +5,10 @@
 //! création, la modification, la suppression, le lancement et la clôture sont réservés aux
 //! administrateurs. Les réglages des étapes sont verrouillés dès que le tournoi est `ongoing`.
 //!
-//! Les points d'un participant dans l'étape viennent de la saisie des résultats des matchs
-//! (#46), qui n'existe pas encore : le lancement ne génère donc pas encore les matchs et les
-//! critères de départage (`tiebreak`) ne sont pas encore évalués. À égalité de points, la
-//! clôture départage par ordre d'inscription.
+//! Les points d'un participant dans l'étape viennent de la fin de ses matchs (module `matches`),
+//! qui clôture aussi l'étape quand le dernier match se termine. Le lancement ne génère pas
+//! encore les matchs et les critères de départage (`tiebreak`) ne sont pas encore évalués : à
+//! égalité de points, la clôture départage par ordre d'inscription.
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
@@ -106,11 +106,11 @@ struct GroupRanking {
 
 /// Résultat d'une clôture.
 #[derive(Serialize, ToSchema)]
-struct CloseResponse {
+pub(crate) struct CloseResponse {
     /// L'étape clôturée.
-    step: Step,
+    pub(crate) step: Step,
     /// L'étape suivante si elle vient de s'ouvrir avec les qualifiés.
-    next_step: Option<Step>,
+    pub(crate) next_step: Option<Step>,
 }
 
 /// Étapes du tournoi, par position.
@@ -373,7 +373,7 @@ async fn step_ranking(
 /// suivantes les qualifiés de l'étape précédente. Le tournoi doit être `ongoing`, les étapes
 /// précédentes `finished`, et leur chaînage valide. Il faut au moins deux participants par
 /// groupe et au plus `group_count × group_size`. Le tirage répartit les participants au hasard,
-/// sans règle sur les équipes. La génération des matchs viendra avec les matchs (#46).
+/// sans règle sur les équipes. Les matchs se créent ensuite à la main (`POST .../matches`).
 #[utoipa::path(
     post,
     path = "/tournaments/{id}/steps/{step_id}/start",
@@ -436,7 +436,7 @@ async fn start_step(
 /// `advance_per_group` premiers (`qualified`) et élimine les autres (`eliminated`), puis ouvre
 /// l'étape suivante avec les qualifiés, tirés au sort dans ses groupes, si elle existe et si
 /// leur nombre convient. À égalité de points, l'ordre d'inscription départage ; les critères
-/// `tiebreak` seront évalués avec les résultats des matchs (#46). Le statut du tournoi ne
+/// `tiebreak` ne sont pas encore évalués. Le statut du tournoi ne
 /// change pas : il se termine par `POST /tournaments/{id}/status`.
 #[utoipa::path(
     post,
@@ -465,6 +465,17 @@ async fn close_step(
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
+    Ok(HttpResponse::Ok().json(close_step_of(&state, &tournament, &step).await?))
+}
+
+/// Clôture l'étape `ongoing` : classe chaque groupe, qualifie et élimine, puis ouvre l'étape
+/// suivante si elle est prête. Sert la route de clôture et la clôture automatique quand le
+/// dernier match de l'étape se termine.
+pub(crate) async fn close_step_of(
+    state: &AppState,
+    tournament: &Tournament,
+    step: &Step,
+) -> Result<CloseResponse, ApiError> {
     if step.status != StepStatus::Ongoing {
         return Err(ApiError::InvalidTransition);
     }
@@ -478,7 +489,7 @@ async fn close_step(
         .list_step_participants(step.id)
         .await
         .map_err(ApiError::internal)?;
-    let registered: HashMap<Uuid, String> = active_participants(&state, tournament.id)
+    let registered: HashMap<Uuid, String> = active_participants(state, tournament.id)
         .await?
         .into_iter()
         .map(|p: TournamentParticipant| (p.id, p.registered_at))
@@ -498,7 +509,7 @@ async fn close_step(
 
     // L'étape suivante s'ouvre seule quand elle est prête ; sinon elle reste `pending` et se
     // lance à la main (`start`), qui explique ce qui manque.
-    let steps = steps_of(&state, tournament.id).await?;
+    let steps = steps_of(state, tournament.id).await?;
     let following = steps
         .iter()
         .filter(|s| s.position > step.position)
@@ -529,13 +540,17 @@ async fn close_step(
             .map_err(ApiError::internal)?,
         None => None,
     };
-    Ok(HttpResponse::Ok().json(CloseResponse {
+    Ok(CloseResponse {
         step: finished,
         next_step,
-    }))
+    })
 }
 
-async fn find_step(state: &AppState, tournament_id: Uuid, step_id: Uuid) -> Result<Step, ApiError> {
+pub(crate) async fn find_step(
+    state: &AppState,
+    tournament_id: Uuid,
+    step_id: Uuid,
+) -> Result<Step, ApiError> {
     state
         .store
         .find_step(step_id)
@@ -601,7 +616,7 @@ fn entrants_problem(step: &Step, count: usize) -> Option<String> {
     }
 }
 
-fn step_error(err: StoreError) -> ApiError {
+pub(crate) fn step_error(err: StoreError) -> ApiError {
     match err {
         StoreError::StepPositionTaken => ApiError::StepPositionTaken,
         StoreError::StepState => ApiError::InvalidTransition,

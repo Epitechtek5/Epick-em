@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Modal, View } from 'react-native';
+import { Modal, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ArrowDown01Icon from '@hugeicons/core-free-icons/ArrowDown01Icon';
 import { Button } from '@/components/ui/button';
@@ -51,28 +51,33 @@ export function StepOptionSelect<T extends string>({
       >
         <View className="flex-1 justify-end bg-black/50">
           <View
-            className="gap-2 rounded-t-xl border border-border bg-card px-5 pt-5"
+            className="max-h-[85%] gap-2 rounded-t-xl border border-border bg-card px-5 pt-5"
             style={{ paddingBottom: insets.bottom + 20 }}
             accessibilityViewIsModal
           >
             <Text className="mb-2 text-lg font-semibold">{label}</Text>
-            {options.map((option) => (
-              <Button
-                key={option}
-                className="w-full justify-start"
-                variant={option === value ? 'secondary' : 'ghost'}
-                role="radio"
-                accessibilityState={{ checked: option === value }}
-                onPress={() => {
-                  onSelect(option);
-                  setOpen(false);
-                }}
-              >
-                <Text className={option === value ? 'font-semibold' : ''}>
-                  {labelFor(option)}
-                </Text>
-              </Button>
-            ))}
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerClassName="gap-2"
+            >
+              {options.map((option) => (
+                <Button
+                  key={option}
+                  className="w-full justify-start"
+                  variant={option === value ? 'secondary' : 'ghost'}
+                  role="radio"
+                  accessibilityState={{ checked: option === value }}
+                  onPress={() => {
+                    onSelect(option);
+                    setOpen(false);
+                  }}
+                >
+                  <Text className={option === value ? 'font-semibold' : ''}>
+                    {labelFor(option)}
+                  </Text>
+                </Button>
+              ))}
+            </ScrollView>
             <Button variant="outline" onPress={() => setOpen(false)}>
               <Text>{t('common.cancel')}</Text>
             </Button>

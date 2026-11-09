@@ -10,11 +10,14 @@ import GameTransferPage from '@/pages/GameTransferPage'
 import GamesPage from '@/pages/GamesPage'
 import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
+import MatchDetailsPage from '@/pages/MatchDetailsPage'
+import MatchEditorPage from '@/pages/MatchEditorPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import RegisterPage from '@/pages/RegisterPage'
 import StatEditorPage from '@/pages/StatEditorPage'
 import StatTransferPage from '@/pages/StatTransferPage'
 import StatsPage from '@/pages/StatsPage'
+import StepBracketPage from '@/pages/StepBracketPage'
 import StepDetailsPage from '@/pages/StepDetailsPage'
 import StepEditorPage from '@/pages/StepEditorPage'
 import TeamDetailsPage from '@/pages/TeamDetailsPage'
@@ -55,6 +58,8 @@ export default function App() {
             <Route path="/tournaments/:id/edit" element={<TournamentEditorPage />} />
             <Route path="/tournaments/:tournamentId/steps/new" element={<StepEditorPage />} />
             <Route path="/tournaments/:tournamentId/steps/:stepId/edit" element={<StepEditorPage />} />
+            <Route path="/tournaments/:tournamentId/steps/:stepId/matches/new" element={<MatchEditorPage />} />
+            <Route path="/tournaments/:tournamentId/steps/:stepId/matches/:matchId/edit" element={<MatchEditorPage />} />
           </Route>
           <Route path="/games/:id" element={<GameDetailsPage />} />
           <Route path="/stats" element={<StatsPage />} />
@@ -68,6 +73,8 @@ export default function App() {
           <Route path="/tournaments/:id" element={<TournamentDetailsPage />} />
           {/* Équipes de tournoi : l'UUID du tournoi vient de l'URL. */}
           <Route path="/tournaments/:tournamentId/steps/:stepId" element={<StepDetailsPage />} />
+          <Route path="/tournaments/:tournamentId/steps/:stepId/bracket" element={<StepBracketPage />} />
+          <Route path="/tournaments/:tournamentId/steps/:stepId/matches/:matchId" element={<MatchDetailsPage />} />
           <Route path="/tournaments/:tournamentId/teams" element={<TournamentTeamsPage />} />
           <Route path="/tournaments/:tournamentId/teams/new" element={<TournamentTeamEditorPage />} />
           <Route path="/tournaments/:tournamentId/teams/copy" element={<TournamentTeamCopyPage />} />

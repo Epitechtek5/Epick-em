@@ -6,7 +6,7 @@ const base = (tournamentId: string) => `/tournaments/${uuid(tournamentId)}/steps
 const one = (tournamentId: string, stepId: string) => `${base(tournamentId)}/${uuid(stepId)}`
 
 // `tiebreak` est un JSON libre côté serveur : seules les chaînes sont gardées.
-function normalize(step: Step): Step {
+export function normalizeStep(step: Step): Step {
   const tiebreak: unknown = step.tiebreak
   return {
     ...step,
@@ -17,22 +17,22 @@ function normalize(step: Step): Step {
 // Étapes du tournoi, triées par position (le serveur les trie déjà ; tri gardé par sûreté).
 export async function listSteps(tournamentId: string, signal?: AbortSignal) {
   const steps = await apiRequest<Step[]>(base(tournamentId), { signal })
-  return steps.map(normalize).sort((a, b) => a.position - b.position)
+  return steps.map(normalizeStep).sort((a, b) => a.position - b.position)
 }
 
 export async function getStep(tournamentId: string, stepId: string, signal?: AbortSignal) {
-  return normalize(await apiRequest<Step>(one(tournamentId, stepId), { signal }))
+  return normalizeStep(await apiRequest<Step>(one(tournamentId, stepId), { signal }))
 }
 
 // Créée au statut `pending` ; 409 step_position_taken ou tournament_locked.
 export async function createStep(tournamentId: string, input: StepInput) {
-  return normalize(
+  return normalizeStep(
     await apiRequest<Step>(base(tournamentId), { method: 'POST', body: input, expectedStatus: 201 }),
   )
 }
 
 export async function updateStep(tournamentId: string, stepId: string, changes: StepChanges) {
-  return normalize(await apiRequest<Step>(one(tournamentId, stepId), { method: 'PATCH', body: changes }))
+  return normalizeStep(await apiRequest<Step>(one(tournamentId, stepId), { method: 'PATCH', body: changes }))
 }
 
 // 204 ; supprime aussi les groupes et participants de l'étape.
@@ -48,11 +48,11 @@ export async function getStepRanking(tournamentId: string, stepId: string, signa
 
 // Tirage au sort des groupes par le serveur ; 400 (errors.steps / errors.participants), 409.
 export async function startStep(tournamentId: string, stepId: string) {
-  return normalize(await apiRequest<Step>(`${one(tournamentId, stepId)}/start`, { method: 'POST' }))
+  return normalizeStep(await apiRequest<Step>(`${one(tournamentId, stepId)}/start`, { method: 'POST' }))
 }
 
 // Qualifie les premiers de chaque groupe ; l'étape suivante peut s'ouvrir seule.
 export async function closeStep(tournamentId: string, stepId: string): Promise<CloseStepResult> {
   const result = await apiRequest<CloseStepResult>(`${one(tournamentId, stepId)}/close`, { method: 'POST' })
-  return { step: normalize(result.step), next_step: result.next_step ? normalize(result.next_step) : null }
+  return { step: normalizeStep(result.step), next_step: result.next_step ? normalizeStep(result.next_step) : null }
 }

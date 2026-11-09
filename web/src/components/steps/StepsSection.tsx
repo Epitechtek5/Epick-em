@@ -1,4 +1,5 @@
 import {
+  HierarchyIcon,
   Add01Icon,
   ArrowDown01Icon,
   ArrowRight01Icon,
@@ -19,6 +20,7 @@ import { listSteps } from '@/features/steps/api'
 import { stepErrorKey } from '@/features/steps/errors'
 import { formatLabelKey, matchTypeLabelKey } from '@/features/steps/labels'
 import type { Step } from '@/features/steps/types'
+import { isElimination } from '@/features/matches/validation'
 import { capacityOf, qualifiedOf, stepsEditable } from '@/features/steps/validation'
 import type { Tournament } from '@/features/tournaments/types'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -135,6 +137,16 @@ export function StepsSection({ tournament, canManage }: { tournament: Tournament
                       {t('steps.edit')}
                     </Link>
                   ) : null}
+                  {isElimination(step) ? (
+                    <Link
+                      to={`${base}/${step.id}/bracket`}
+                      aria-label={t('matches.bracketFor', { position: step.position })}
+                      className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                    >
+                      <Icon icon={HierarchyIcon} />
+                      {t('matches.bracketShort')}
+                    </Link>
+                  ) : null}
                   <Link
                     to={`${base}/${step.id}`}
                     aria-label={t('steps.viewFor', { position: step.position })}
@@ -161,7 +173,7 @@ export function StepsSection({ tournament, canManage }: { tournament: Tournament
       <p className="flex items-start gap-2 rounded-xl bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
         <Icon icon={InformationCircleIcon} size={18} className="mt-0.5 shrink-0" />
         <span>
-          {t('steps.chain.hint')} {t('steps.matches.unavailable')}
+          {t('steps.chain.hint')} {t('steps.matches.limits')}
         </span>
       </p>
     </SectionCard>

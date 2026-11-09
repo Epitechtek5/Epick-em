@@ -184,6 +184,12 @@ it('shows server rankings and qualification status using resolved identities', a
     }),
   );
   await render(<StepDetailsScreen />);
+  await fireEvent.press(screen.getByText('View matches'));
+  expect(router.push).toHaveBeenLastCalledWith({
+    pathname:
+      '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches',
+    params: { tournamentId, stepId },
+  });
   expect(screen.getByText('#1 alice')).toBeTruthy();
   expect(screen.getByText('7.5 pts')).toBeTruthy();
   expect(screen.getByText('Qualified')).toBeTruthy();
