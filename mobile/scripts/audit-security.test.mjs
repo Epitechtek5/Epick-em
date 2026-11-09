@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { inspectAudit, runAudits } from './audit-security.mjs';
+
+const require = createRequire(import.meta.url);
+const merge = require('deepmerge');
 
 function fixture(file = 'audit-full.json') {
   return JSON.parse(
@@ -9,6 +13,15 @@ function fixture(file = 'audit-full.json') {
   );
 }
 const result = (report) => ({ status: 1, stdout: JSON.stringify(report) });
+
+test('patched deepmerge rejects prototype-poisoning keys', () => {
+  const malicious = JSON.parse('{"session":{"__proto__":{"isAdmin":true}}}');
+  const merged = merge({ session: null }, malicious);
+
+  assert.equal(Object.getPrototypeOf(merged.session), Object.prototype);
+  assert.equal(merged.session.isAdmin, undefined);
+  assert.equal(Object.hasOwn(merged.session, '__proto__'), false);
+});
 
 test('accepts only the known advisories, including propagated dependencies in both trees', () => {
   for (const file of ['audit-full.json', 'audit-production.json']) {
