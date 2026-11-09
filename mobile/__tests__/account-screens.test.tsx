@@ -45,6 +45,7 @@ const user = {
   id: '22222222-2222-4222-8222-222222222222',
   username: 'alice',
   role: 'user' as const,
+  email: 'alice@example.com',
 };
 const auth = {
   token: 'test-token',
@@ -83,6 +84,48 @@ it('updates own profile without a role field and refreshes displayed identity', 
     username: 'renamed',
   });
   expect(auth.refreshUser).toHaveBeenCalled();
+});
+it('normalizes and updates only the current account recovery email', async () => {
+  jest
+    .mocked(accounts.updateMe)
+    .mockResolvedValue({ ...user, pending_email: 'new@example.com' });
+  await render(
+    <PreferencesProvider>
+      <ProfileScreen />
+    </PreferencesProvider>,
+  );
+  await screen.findByText('Account');
+  await fireEvent.press(screen.getByLabelText('Edit account'));
+  await fireEvent.changeText(
+    screen.getByLabelText('Email address'),
+    ' New@Example.COM ',
+  );
+  await fireEvent.press(screen.getByLabelText('Save changes'));
+  expect(accounts.updateMe).toHaveBeenCalledWith('test-token', {
+    email: 'new@example.com',
+  });
+  expect(accounts.updateUser).not.toHaveBeenCalled();
+});
+it('clears the revoked local session after changing the current password', async () => {
+  jest.mocked(accounts.updateMe).mockResolvedValue(user);
+  await render(
+    <PreferencesProvider>
+      <ProfileScreen />
+    </PreferencesProvider>,
+  );
+  await screen.findByText('Account');
+  await fireEvent.press(screen.getByLabelText('Edit account'));
+  await fireEvent.changeText(
+    screen.getByLabelText('New password'),
+    'Password1!',
+  );
+  await fireEvent.changeText(
+    screen.getByLabelText('Confirm new password'),
+    'Password1!',
+  );
+  await fireEvent.press(screen.getByLabelText('Save changes'));
+  await waitFor(() => expect(auth.clearSession).toHaveBeenCalled());
+  expect(router.replace).toHaveBeenCalledWith('/login');
 });
 it('requires explicit confirmation before deleting the current account', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
@@ -206,4 +249,30 @@ it('keeps the populated user list visible during pull-to-refresh', async () => {
     completeRefresh([user]);
   });
   expect(screen.getByLabelText('Refresh users').props.refreshing).toBe(false);
+});
+
+it('retains the verified address while showing a resend action for its replacement', async () => {
+  jest.mocked(useAuth).mockReturnValue({
+    ...auth,
+    user: {
+      ...user,
+      email_verified_at: '2026-11-03T12:00:00Z',
+      pending_email: 'pending@example.com',
+    },
+  });
+  await render(
+    <PreferencesProvider>
+      <ProfileScreen />
+    </PreferencesProvider>,
+  );
+  expect(await screen.findByText('Verified email')).toBeOnTheScreen();
+  expect(screen.getByText('alice@example.com')).toBeOnTheScreen();
+  expect(
+    screen.getByText(/Unverified email.*pending@example.com/),
+  ).toBeOnTheScreen();
+  await fireEvent.press(screen.getByText('Resend verification email'));
+  expect(router.push).toHaveBeenCalledWith({
+    pathname: '/verification-pending',
+    params: { email: 'pending@example.com' },
+  });
 });

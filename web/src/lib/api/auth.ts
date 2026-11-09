@@ -77,3 +77,12 @@ export async function revokeSession(tokens: {
     }
   }
 }
+
+// POST /reset-password -> 204. Le jeton reste uniquement dans la mémoire de la page.
+export async function resetPassword(token: string, password: string): Promise<void> {
+  await httpRequest('/reset-password', {
+    method: 'POST',
+    body: { token, password },
+    expectedStatus: 204,
+  })
+}

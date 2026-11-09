@@ -2,7 +2,7 @@ import { AuthScreen } from '@/components/auth-screen';
 import { PasswordInput } from '@/components/ui/password-input';
 import { FormMessage } from '@/components/ui/feedback';
 import { useTranslation } from '@/i18n';
-import { Link, Redirect } from 'expo-router';
+import { Link, Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
@@ -13,11 +13,11 @@ import { Text } from '@/components/ui/text';
 import { useAuth } from '@/features/auth/session';
 import { ApiError } from '@/lib/api';
 import { AuthHeader } from '@/components/auth-header';
-import { normalizeUsername } from '@/features/auth/validation';
+import { normalizeEmail, validateEmail } from '@/features/auth/validation';
 
 export default function LoginScreen() {
   const { t } = useTranslation();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
   const { signIn, user, initializing } = useAuth();
@@ -25,16 +25,27 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   async function submit() {
     if (submitting) return;
-    const normalizedUsername = normalizeUsername(username);
-    if (!normalizedUsername || !password) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail || !password) {
       setError('login.missing');
+      return;
+    }
+    if (validateEmail(normalizedEmail)) {
+      setError('validation.email');
       return;
     }
     setSubmitting(true);
     setError('');
     try {
-      await signIn({ username: normalizedUsername, password });
+      await signIn({ email: normalizedEmail, password });
     } catch (caught) {
+      if (caught instanceof ApiError && caught.code === 'email_unverified') {
+        router.replace({
+          pathname: '/verification-pending',
+          params: { email: normalizedEmail },
+        });
+        return;
+      }
       setError(
         caught instanceof ApiError && caught.status === 401
           ? 'login.invalid'
@@ -54,24 +65,24 @@ export default function LoginScreen() {
 
       <View className="gap-5">
         <View className="gap-2">
-          <Text className="text-sm font-medium" nativeID="login-username-label">
-            {t('common.username')}
+          <Text className="text-sm font-medium" nativeID="login-email-label">
+            {t('common.email')}
           </Text>
           <Input
-            accessibilityLabel={t('common.username')}
-            accessibilityLabelledBy="login-username-label"
+            accessibilityLabel={t('common.email')}
+            accessibilityLabelledBy="login-email-label"
             autoCapitalize="none"
             autoCorrect={false}
-            autoComplete="username"
-            value={username}
+            autoComplete="email"
+            keyboardType="email-address"
+            value={email}
             onChangeText={(value) => {
-              setUsername(value);
+              setEmail(value);
               setError('');
             }}
             editable={!submitting}
             invalid={
-              error === 'login.invalid' ||
-              (error === 'login.missing' && !username)
+              error === 'login.invalid' || (error === 'login.missing' && !email)
             }
           />
         </View>
@@ -99,6 +110,14 @@ export default function LoginScreen() {
               if (!initializing) void submit();
             }}
           />
+          <Link href="/enroll-email">
+            <Text>{t('verification.enroll')}</Text>
+          </Link>
+          <Link href="/forgot-password" className="self-end">
+            <Text className="text-sm font-semibold text-primary">
+              {t('login.forgotPassword')}
+            </Text>
+          </Link>
         </View>
 
         <Button

@@ -2,6 +2,7 @@
   "common": {
     "username": "Nom d’utilisateur",
     "password": "Mot de passe",
+    "email": "Adresse e-mail",
     "confirmPassword": "Confirmer le mot de passe",
     "newPassword": "Nouveau mot de passe",
     "confirmNewPassword": "Confirmer le nouveau mot de passe",
@@ -26,9 +27,10 @@
     "submitting": "Connexion…",
     "noAccount": "Vous n’avez pas de compte ?",
     "create": "Créer un compte",
-    "missing": "Saisissez votre nom d’utilisateur et votre mot de passe.",
-    "invalid": "Nom d’utilisateur ou mot de passe incorrect.",
-    "failed": "Connexion impossible. Veuillez réessayer."
+    "missing": "Saisissez votre adresse e-mail et votre mot de passe.",
+    "invalid": "Adresse e-mail ou mot de passe incorrect.",
+    "failed": "Connexion impossible. Veuillez réessayer.",
+    "forgotPassword": "Mot de passe oublié ?"
   },
   "register": {
     "title": "Créer un compte",
@@ -40,7 +42,8 @@
     "hasAccount": "Vous avez déjà un compte ?",
     "failed": "Création du compte impossible. Veuillez réessayer.",
     "completeTitle": "Compte créé",
-    "completeDescription": "Votre prochain pronostic commence ici."
+    "completeDescription": "Votre prochain pronostic commence ici.",
+    "emailHint": "Cette adresse sert à vous connecter et à récupérer votre compte."
   },
   "settings": {
     "title": "Paramètres",
@@ -59,7 +62,7 @@
     "localLogout": "Déconnexion locale effectuée",
     "logoutFailed": "La déconnexion du serveur n’a pas pu être confirmée. Vérifiez votre connexion.",
     "storageFailed": "Enregistrement des préférences impossible. Veuillez réessayer.",
-    "editDescription": "Nom d’utilisateur et mot de passe"
+    "editDescription": "Nom d’utilisateur, adresse e-mail de récupération et mot de passe"
   },
   "account": {
     "id": "Identifiant du compte : {{id}}",
@@ -71,7 +74,10 @@
     "deleteMine": "Supprimer mon compte",
     "deleteWarning": "Cette action est définitive. Votre compte sera supprimé.",
     "irreversible": "La suppression de votre compte est irréversible.",
-    "identifier": "UUID du compte"
+    "identifier": "UUID du compte",
+    "recoveryEmail": "Adresse e-mail de récupération",
+    "recoveryEmailMissing": "Aucune adresse de récupération configurée",
+    "recoveryEmailHint": "Cette adresse sert à vous connecter et à récupérer votre compte."
   },
   "users": {
     "title": "Utilisateurs",
@@ -108,7 +114,9 @@
     "passwordDigit": "Le mot de passe doit contenir au moins un chiffre.",
     "passwordUppercase": "Le mot de passe doit contenir au moins une majuscule.",
     "passwordSpecial": "Le mot de passe doit contenir au moins un caractère spécial.",
-    "match": "Les mots de passe ne correspondent pas."
+    "match": "Les mots de passe ne correspondent pas.",
+    "email": "Saisissez une adresse e-mail valide.",
+    "emailRemovalUnsupported": "L’adresse e-mail de récupération ne peut pas encore être supprimée."
   },
   "form": {
     "noChanges": "Aucune modification à enregistrer.",
@@ -122,8 +130,26 @@
     "forbidden": "Vous n’avez pas l’autorisation d’effectuer cette action.",
     "notFound": "L’utilisateur demandé est introuvable.",
     "conflict": "Ce nom d’utilisateur est déjà utilisé.",
+    "emailConflict": "Cette adresse e-mail est déjà utilisée par un autre compte.",
     "network": "Impossible de contacter le serveur. Veuillez réessayer.",
     "server": "Le serveur n’a pas pu traiter cette demande. Veuillez réessayer."
+  },
+  "recovery": {
+    "forgotTitle": "Mot de passe oublié ?",
+    "forgotDescription": "Saisissez votre adresse e-mail de récupération.",
+    "sendLink": "Envoyer le lien de réinitialisation",
+    "neutralConfirmation": "Si un compte utilise cette adresse e-mail, un lien de réinitialisation sera envoyé.",
+    "requestFailed": "Impossible de demander un lien. Vérifiez votre connexion et réessayez.",
+    "backToLogin": "Retour à la connexion",
+    "resetTitle": "Choisir un nouveau mot de passe",
+    "resetDescription": "Ce lien à usage unique est valable pendant 15 minutes.",
+    "resetSubmit": "Réinitialiser le mot de passe",
+    "resetFailed": "Impossible de réinitialiser le mot de passe. Veuillez réessayer.",
+    "invalidTitle": "Lien de réinitialisation indisponible",
+    "invalidToken": "Ce lien est invalide, expiré ou a déjà été utilisé.",
+    "requestAnother": "Demander un nouveau lien",
+    "successTitle": "Mot de passe modifié",
+    "successDescription": "Votre mot de passe a été modifié. Connectez-vous avec votre nouveau mot de passe."
   },
   "welcome": {
     "ready": "L’application mobile est prête pour le développement."
@@ -746,5 +772,21 @@
       "conflict": "Cette action est incompatible avec le cycle de vie du tournoi ou de l’étape.",
       "locked": "La configuration des étapes est verrouillée dès le démarrage du tournoi."
     }
+  },
+  "verification": {
+    "title": "Vérification de votre adresse e-mail",
+    "pending": "Consultez votre boîte de réception",
+    "instructions": "Ouvrez le lien de vérification dans les 15 minutes.",
+    "resend": "Renvoyer le lien",
+    "sent": "Si cette adresse est éligible, un lien vous sera envoyé.",
+    "loading": "Vérification en cours…",
+    "invalid": "Ce lien est manquant, expiré ou déjà utilisé.",
+    "failed": "La demande a échoué. Réessayez.",
+    "success": "Adresse confirmée. Vous pouvez vous connecter.",
+    "enroll": "Ajouter une adresse à un ancien compte",
+    "legacy": "Utilisez le nom public et le mot de passe du compte sans adresse e-mail.",
+    "denied": "Impossible de confirmer ces identifiants pour un compte sans e-mail.",
+    "verified": "Adresse vérifiée",
+    "unverified": "Adresse non vérifiée"
   }
 }

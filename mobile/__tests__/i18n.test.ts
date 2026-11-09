@@ -40,11 +40,13 @@ it.each([400, 401, 403, 404, 409, 500])(
 it('keeps validation errors as translatable keys', async () => {
   const errors = validateRegisterForm({
     username: 'a',
+    email: '',
     password: 'short',
     confirmPassword: 'different',
   });
   expect(errors).toEqual({
     username: 'validation.username',
+    email: 'validation.email',
     password: 'validation.passwordLength',
     confirmPassword: 'validation.match',
   });

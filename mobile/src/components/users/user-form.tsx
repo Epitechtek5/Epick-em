@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
 
 import type { User } from '@/features/auth/types';
-import { normalizeUsername } from '@/features/auth/validation';
+import { normalizeEmail, normalizeUsername } from '@/features/auth/validation';
 import type { UpdateUserRequest } from '@/features/users/api';
 import {
   validateUserForm,
@@ -21,19 +21,22 @@ import {
 } from '@/features/users/validation';
 
 interface UserFormProps {
-  user: User;
+  user: User & { email?: string | null };
   allowRoleEdit?: boolean;
+  allowEmailEdit?: boolean;
   onSave: (changes: UpdateUserRequest) => Promise<void>;
 }
 
 export function UserForm({
   user,
   allowRoleEdit = false,
+  allowEmailEdit = false,
   onSave,
 }: UserFormProps) {
   const { t } = useTranslation();
   const [form, setForm] = useState<UserFormValues>({
     username: user.username,
+    email: user.email ?? '',
     password: '',
     confirmPassword: '',
     role: user.role,
@@ -48,12 +51,14 @@ export function UserForm({
   if (
     originalUser.id !== user.id ||
     originalUser.username !== user.username ||
-    originalUser.role !== user.role
+    originalUser.role !== user.role ||
+    originalUser.email !== user.email
   ) {
     setOriginalUser(user);
     setForm((previous) => ({
       ...previous,
       username: user.username,
+      email: user.email ?? '',
       role: user.role,
     }));
   }
@@ -71,7 +76,7 @@ export function UserForm({
   async function submit() {
     if (saving) return;
 
-    const validation = validateUserForm(form, user.username);
+    const validation = validateUserForm(form, user.username, user.email);
     setErrors(validation);
 
     if (Object.keys(validation).length > 0) return;
@@ -81,6 +86,11 @@ export function UserForm({
 
     if (normalizedUsername !== user.username) {
       changes.username = normalizedUsername;
+    }
+
+    const normalizedEmail = normalizeEmail(form.email);
+    if (allowEmailEdit && normalizedEmail !== (user.email ?? '')) {
+      changes.email = normalizedEmail;
     }
 
     if (form.password) {
@@ -136,6 +146,28 @@ export function UserForm({
           <FormMessage>{t(errors.username)}</FormMessage>
         ) : null}
       </View>
+
+      {allowEmailEdit ? (
+        <View className="gap-2 border-t border-border pt-4">
+          <Text className="text-sm font-medium" nativeID="user-form-email">
+            {t('common.email')}
+          </Text>
+          <Text variant="muted">{t('account.recoveryEmailHint')}</Text>
+          <Input
+            accessibilityLabel={t('common.email')}
+            accessibilityLabelledBy="user-form-email"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="email"
+            keyboardType="email-address"
+            invalid={Boolean(errors.email)}
+            value={form.email}
+            editable={!saving}
+            onChangeText={(value) => updateField('email', value)}
+          />
+          {errors.email ? <FormMessage>{t(errors.email)}</FormMessage> : null}
+        </View>
+      ) : null}
 
       <View className="gap-2 border-t border-border pt-4">
         <Text className="text-sm font-medium" nativeID="user-form-password">

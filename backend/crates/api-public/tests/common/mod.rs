@@ -13,6 +13,12 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
+thread_local! { static MAILBOX: std::cell::RefCell<Arc<MemoryMailer>> = std::cell::RefCell::new(Arc::new(MemoryMailer::new())); }
+
+pub fn with_test_mailer(state: AppState) -> AppState {
+    state.with_mailer(MAILBOX.with_borrow(Arc::clone), PUBLIC_URL)
+}
+
 pub const PUBLIC_URL: &str = "https://epickem.test";
 pub const SECRET: &str = "0123456789abcdef0123456789abcdef";
 
@@ -30,7 +36,11 @@ pub async fn app_with(
         access_token_ttl: Duration::from_secs(900),
         refresh_token_ttl: refresh_ttl,
     };
-    let state = AppState::new(store, config).unwrap();
+    let mailer = Arc::new(MemoryMailer::new());
+    MAILBOX.set(mailer.clone());
+    let state = AppState::new(store, config)
+        .unwrap()
+        .with_mailer(mailer, PUBLIC_URL);
     test::init_service(app(state)).await
 }
 
@@ -48,6 +58,7 @@ pub async fn app_with_mailer(
         access_token_ttl: Duration::from_secs(900),
         refresh_token_ttl: Duration::from_secs(3600),
     };
+    MAILBOX.set(mailer.clone());
     let state = AppState::new(store, config)
         .unwrap()
         .with_mailer(mailer, PUBLIC_URL);
@@ -121,6 +132,33 @@ pub async fn post_as(
     .await
 }
 
+pub async fn confirm(
+    app: &impl Service<
+        actix_http::Request,
+        Response = ServiceResponse<impl MessageBody>,
+        Error = actix_web::Error,
+    >,
+    email: &str,
+) {
+    tokio::task::yield_now().await;
+    let mailer = MAILBOX.with_borrow(Arc::clone);
+    let link = mailer
+        .verification
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(to, _)| to.eq_ignore_ascii_case(email))
+        .unwrap()
+        .1
+        .clone();
+    let token = link.split_once("?token=").unwrap().1;
+    assert_eq!(
+        post(app, "/verify-email", json!({"token":token})).await.0,
+        StatusCode::NO_CONTENT
+    );
+}
+
 pub async fn register(
     app: &impl Service<
         actix_http::Request,
@@ -130,13 +168,18 @@ pub async fn register(
     username: &str,
     password: &str,
 ) -> StatusCode {
-    post(
+    let email = format!("{username}@example.com");
+    let status = post(
         app,
         "/register",
-        json!({ "username": username, "password": password }),
+        json!({"username":username,"password":password,"email":email}),
     )
     .await
-    .0
+    .0;
+    if status == StatusCode::CREATED {
+        confirm(app, &email).await;
+    }
+    status
 }
 
 pub async fn login(
@@ -151,7 +194,7 @@ pub async fn login(
     post(
         app,
         "/login",
-        json!({ "username": username, "password": password }),
+        json!({ "email": format!("{username}@example.com"), "password": password }),
     )
     .await
 }

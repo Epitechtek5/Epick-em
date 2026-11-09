@@ -66,6 +66,8 @@ pub enum ApiError {
     EmailTaken,
     /// Lien de réinitialisation du mot de passe inconnu, expiré ou déjà utilisé.
     InvalidResetToken,
+    EmailUnverified,
+    VerificationLimited,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -81,6 +83,16 @@ impl ApiError {
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Requête invalide",
+            ),
+            ApiError::VerificationLimited => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "verification_limited",
+                "Too many requests. Try again later.",
+            ),
+            ApiError::EmailUnverified => (
+                StatusCode::FORBIDDEN,
+                "email_unverified",
+                "Email verification required",
             ),
             ApiError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
@@ -220,6 +232,9 @@ impl ResponseError for ApiError {
                 .map(|(field, msg)| ((*field).to_string(), Value::String(msg.clone())))
                 .collect();
             body["errors"] = Value::Object(errors);
+        }
+        if matches!(self, ApiError::EmailTaken) {
+            body["errors"] = json!({"email":message});
         }
         HttpResponse::build(status).json(body)
     }

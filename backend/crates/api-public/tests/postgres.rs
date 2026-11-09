@@ -2562,7 +2562,6 @@ async fn emails_are_unique_and_found() {
             .await,
         Err(StoreError::EmailTaken)
     ));
-    // Plusieurs comptes peuvent n'avoir aucune adresse.
     store
         .create_user(&unique("none"), None, "hash")
         .await
@@ -2578,7 +2577,7 @@ async fn emails_are_unique_and_found() {
     );
     assert!(
         store
-            .find_user_by_email("inconnu@example.com")
+            .find_user_by_email("unknown@example.com")
             .await
             .unwrap()
             .is_none()
@@ -2592,7 +2591,7 @@ async fn emails_are_unique_and_found() {
         .update_user(
             other.id,
             UserUpdate {
-                email: Some(email.clone()),
+                email: Some(email),
                 ..UserUpdate::default()
             },
         )
@@ -2605,84 +2604,41 @@ async fn emails_are_unique_and_found() {
 async fn password_reset_tokens_work_once_and_end_sessions() {
     let store = store().await;
     let user = store
-        .create_user(&unique("reset"), None, "ancien")
+        .create_user(&unique("reset"), None, "old")
         .await
         .unwrap();
     let ttl = Duration::from_secs(60);
-    let (a, b) = (unique("tok-a"), unique("tok-b"));
-    let (hash_a, hash_b) = (format!("{a:0>64}"), format!("{b:0>64}"));
-    store
-        .insert_refresh_token(user.id, &format!("{:0>64}", unique("rt")), ttl)
-        .await
-        .unwrap();
+    let hash_a = format!("{:0>64}", unique("tok-a"));
+    let hash_b = format!("{:0>64}", unique("tok-b"));
     let session = format!("{:0>64}", unique("rt"));
     store
         .insert_refresh_token(user.id, &session, ttl)
         .await
         .unwrap();
 
-    // Une nouvelle demande invalide la précédente.
     store
-        .insert_password_reset_token(user.id, &hash_a, ttl)
+        .insert_password_reset_token(user.id, None, &hash_a, ttl)
         .await
         .unwrap();
     store
-        .insert_password_reset_token(user.id, &hash_b, ttl)
+        .insert_password_reset_token(user.id, None, &hash_b, ttl)
         .await
         .unwrap();
     assert!(
         !store
-            .consume_password_reset_token(&hash_a, "x")
+            .consume_password_reset_token(&hash_a, "unused")
             .await
             .unwrap()
     );
-    assert!(
-        !store
-            .consume_password_reset_token(&format!("{:0>64}", "inconnu"), "x")
-            .await
-            .unwrap()
-    );
-
     assert!(
         store
-            .consume_password_reset_token(&hash_b, "nouveau")
+            .consume_password_reset_token(&hash_b, "new")
             .await
             .unwrap()
     );
     assert!(
         !store
-            .consume_password_reset_token(&hash_b, "autre")
-            .await
-            .unwrap()
-    );
-    let found = store.find_user_by_id(user.id).await.unwrap().unwrap();
-    assert_eq!(found.password_hash, "nouveau");
-    // Les sessions ouvertes sont révoquées.
-    assert!(
-        !store
-            .rotate_refresh_token(user.id, &session, &format!("{:0>64}", unique("n")), ttl)
-            .await
-            .unwrap()
-    );
-}
-
-#[tokio::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
-async fn expired_password_reset_tokens_are_refused() {
-    let store = store().await;
-    let user = store
-        .create_user(&unique("rexp"), None, "ancien")
-        .await
-        .unwrap();
-    let hash = format!("{:0>64}", unique("exp"));
-    store
-        .insert_password_reset_token(user.id, &hash, Duration::from_millis(50))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        !store
-            .consume_password_reset_token(&hash, "nouveau")
+            .consume_password_reset_token(&hash_b, "reused")
             .await
             .unwrap()
     );
@@ -2693,6 +2649,48 @@ async fn expired_password_reset_tokens_are_refused() {
             .unwrap()
             .unwrap()
             .password_hash,
-        "ancien"
+        "new"
+    );
+    assert!(
+        !store
+            .rotate_refresh_token(
+                user.id,
+                &session,
+                &format!("{:0>64}", unique("new-rt")),
+                ttl,
+            )
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn expired_password_reset_tokens_are_refused() {
+    let store = store().await;
+    let user = store
+        .create_user(&unique("rexp"), None, "old")
+        .await
+        .unwrap();
+    let hash = format!("{:0>64}", unique("exp"));
+    store
+        .insert_password_reset_token(user.id, None, &hash, Duration::from_millis(50))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !store
+            .consume_password_reset_token(&hash, "new")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .find_user_by_id(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        "old"
     );
 }

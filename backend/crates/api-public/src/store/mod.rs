@@ -85,6 +85,8 @@ pub struct UserRecord {
     pub role: Role,
     /// Adresse e-mail en minuscules, si le compte en a une.
     pub email: Option<String>,
+    pub pending_email: Option<String>,
+    pub email_verified_at: Option<String>,
 }
 
 /// Vue publique d'un compte : jamais l'empreinte du mot de passe. C'est aussi la valeur mise en
@@ -120,8 +122,6 @@ pub struct UserUpdate {
 pub enum StoreError {
     /// Le nom d'utilisateur existe déjà (sans tenir compte de la casse).
     UsernameTaken,
-    /// L'adresse e-mail est déjà utilisée par un autre compte.
-    EmailTaken,
     /// Le nom de jeu existe déjà (sans tenir compte de la casse).
     GameNameTaken,
     /// La clé de statistique existe déjà.
@@ -150,6 +150,8 @@ pub enum StoreError {
     StepState,
     /// Le match n'est pas dans l'état attendu pour cette opération.
     MatchState,
+    /// L'adresse e-mail est déjà utilisée par un autre compte.
+    EmailTaken,
     Other(String),
 }
 
@@ -157,7 +159,6 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::UsernameTaken => f.write_str("nom d'utilisateur déjà pris"),
-            StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
             StoreError::GameNameTaken => f.write_str("nom de jeu déjà pris"),
             StoreError::StatKeyTaken => f.write_str("clé de statistique déjà prise"),
             StoreError::StatInUse => f.write_str("statistique utilisée par un tournoi en cours"),
@@ -176,6 +177,7 @@ impl fmt::Display for StoreError {
             StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
+            StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -198,7 +200,29 @@ pub trait AuthStore: Send + Sync {
         username: &str,
         email: Option<&str>,
         password_hash: &str,
+    ) -> Result<UserRecord, StoreError> {
+        self.create_user_with_token(username, email, password_hash, None)
+            .await
+    }
+
+    async fn create_user_with_token(
+        &self,
+        username: &str,
+        email: Option<&str>,
+        password_hash: &str,
+        verification_hash: Option<&str>,
     ) -> Result<UserRecord, StoreError>;
+
+    async fn allow_verification_request(&self, peer_hash: &str) -> Result<bool, StoreError>;
+    async fn issue_verification(&self, email: &str, hash: &str) -> Result<bool, StoreError>;
+    async fn activate_verification(&self, hash: &str) -> Result<(), StoreError>;
+    async fn consume_verification(&self, hash: &str) -> Result<bool, StoreError>;
+    async fn enroll_legacy(
+        &self,
+        id: Uuid,
+        password_hash: &str,
+        email: &str,
+    ) -> Result<bool, StoreError>;
 
     /// Cherche un compte par nom d'utilisateur, sans tenir compte de la casse.
     async fn find_user_by_username(&self, username: &str)
@@ -657,9 +681,10 @@ pub trait AuthStore: Send + Sync {
     async fn insert_password_reset_token(
         &self,
         user_id: Uuid,
+        expected_email: Option<&str>,
         token_hash: &str,
         ttl: Duration,
-    ) -> Result<(), StoreError>;
+    ) -> Result<bool, StoreError>;
 
     /// Consomme le jeton s'il est valide (existant, non utilisé, non expiré) : remplace le mot de
     /// passe du compte par `password_hash` et révoque tous ses jetons de rafraîchissement, en une

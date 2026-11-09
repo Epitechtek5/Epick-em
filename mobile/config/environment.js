@@ -3,19 +3,60 @@ const { readFileSync } = require('node:fs');
 const path = require('node:path');
 const { parse } = require('dotenv');
 
-// Only the public API URL crosses from Docker's environment into mobile tooling.
+// Only values required by the public mobile build configuration are imported.
 function loadRootEnvironment({
   env = process.env,
   filename = path.resolve(__dirname, '../../.env'),
 } = {}) {
   if (env.CI || env.NODE_ENV === 'test' || env.EXPO_NO_DOTENV === '1') return;
-  if (env.EXPO_PUBLIC_API_URL !== undefined) return;
   try {
-    const value = parse(readFileSync(filename)).EXPO_PUBLIC_API_URL;
-    if (value !== undefined) env.EXPO_PUBLIC_API_URL = value;
+    const values = parse(readFileSync(filename));
+    if (
+      env.EXPO_PUBLIC_API_URL === undefined &&
+      values.EXPO_PUBLIC_API_URL !== undefined
+    ) {
+      env.EXPO_PUBLIC_API_URL = values.EXPO_PUBLIC_API_URL;
+    }
+    if (env.PUBLIC_URL === undefined && values.PUBLIC_URL !== undefined) {
+      env.PUBLIC_URL = values.PUBLIC_URL;
+    }
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+}
+
+function validatePublicUrl(env = process.env, { required = false } = {}) {
+  const value = env.PUBLIC_URL;
+  if (!value) {
+    if (required)
+      throw new Error('PUBLIC_URL is required for production links.');
+    return null;
+  }
+
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('PUBLIC_URL must be an absolute HTTP(S) origin.');
+  }
+  if (
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash ||
+    value.endsWith('/')
+  ) {
+    throw new Error(
+      'PUBLIC_URL must be an origin without credentials, path, query, fragment or trailing slash.',
+    );
+  }
+  if (url.protocol !== 'https:') {
+    if (required) throw new Error('Production PUBLIC_URL must use HTTPS.');
+    return null;
+  }
+  if (url.port) throw new Error('HTTPS PUBLIC_URL must use the default port.');
+  return url.hostname;
 }
 
 function validateApiEnvironment(env = process.env, { required = false } = {}) {
@@ -70,4 +111,8 @@ function validateApiEnvironment(env = process.env, { required = false } = {}) {
   return profile;
 }
 
-module.exports = { loadRootEnvironment, validateApiEnvironment };
+module.exports = {
+  loadRootEnvironment,
+  validateApiEnvironment,
+  validatePublicUrl,
+};

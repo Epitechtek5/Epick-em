@@ -2,13 +2,10 @@ import { AuthScreen } from '@/components/auth-screen';
 import { PasswordInput } from '@/components/ui/password-input';
 import { FormMessage } from '@/components/ui/feedback';
 import { useTranslation } from '@/i18n';
-import { Link, Redirect } from 'expo-router';
+import { Link, Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
-import { Card, CardContent } from '@/components/ui/card';
-import { Icon } from '@/components/ui/icon';
-import CheckmarkCircle02Icon from '@hugeicons/core-free-icons/CheckmarkCircle02Icon';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
@@ -17,6 +14,7 @@ import { ApiError } from '@/lib/api';
 import { register } from '@/features/auth/register';
 import {
   validateRegisterForm,
+  normalizeEmail,
   normalizeUsername,
   type RegisterErrors,
   type RegisterForm,
@@ -26,6 +24,7 @@ import { AuthHeader } from '@/components/auth-header';
 
 const INITIAL_FORM: RegisterForm = {
   username: '',
+  email: '',
   password: '',
   confirmPassword: '',
 };
@@ -37,7 +36,6 @@ export default function RegisterScreen() {
   const [errors, setErrors] = useState<RegisterErrors>({});
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [created, setCreated] = useState(false);
 
   function updateField(field: keyof RegisterForm, value: string) {
     setForm((previous) => ({ ...previous, [field]: value }));
@@ -57,15 +55,22 @@ export default function RegisterScreen() {
     setIsSubmitting(true);
 
     try {
+      const email = normalizeEmail(form.email);
       await register({
         username: normalizeUsername(form.username),
         password: form.password,
+        email,
       });
 
-      setCreated(true);
+      router.replace({
+        pathname: '/verification-pending',
+        params: { email, cooldown: '1' },
+      });
       setForm(INITIAL_FORM);
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
+      if (error instanceof ApiError && error.code === 'email_taken') {
+        setErrors({ email: 'errors.emailConflict' });
+      } else if (error instanceof ApiError && error.status === 409) {
         setErrors({ username: 'errors.conflict' });
       } else if (error instanceof ApiError) {
         setServerError(
@@ -84,117 +89,109 @@ export default function RegisterScreen() {
   return (
     <AuthScreen>
       <AuthHeader
-        title={t(created ? 'register.completeTitle' : 'register.title')}
-        description={t(
-          created ? 'register.completeDescription' : 'register.description',
-        )}
+        title={t('register.title')}
+        description={t('register.description')}
       />
-
-      {created ? (
-        <Card>
-          <CardContent className="gap-5">
-            <View className="items-center">
-              <View className="h-14 w-14 items-center justify-center rounded-lg bg-muted">
-                <Icon icon={CheckmarkCircle02Icon} tone="primary" size={30} />
-              </View>
-            </View>
-            <Text
-              accessibilityRole="alert"
-              className="text-center text-foreground"
-            >
-              {t('register.success')}
-            </Text>
-            <Text className="text-center text-muted-foreground">
-              {t('register.explanation')}
-            </Text>
-            <Link href="/login" asChild>
-              <Button>
-                <Text>{t('register.login')}</Text>
-              </Button>
-            </Link>
-          </CardContent>
-        </Card>
-      ) : (
-        <View className="gap-5">
-          <View className="gap-2">
-            <Text
-              className="text-sm font-medium"
-              nativeID="register-username-label"
-            >
-              {t('common.username')}
-            </Text>
-            <Input
-              accessibilityLabel={t('common.username')}
-              accessibilityLabelledBy="register-username-label"
-              invalid={Boolean(errors.username)}
-              accessibilityHint={t('common.usernameHint')}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoComplete="username-new"
-              value={form.username}
-              onChangeText={(value) => updateField('username', value)}
-              editable={!isSubmitting}
-            />
-            {errors.username && <FormMessage>{t(errors.username)}</FormMessage>}
-          </View>
-
-          <View className="gap-2">
-            <Text
-              className="text-sm font-medium"
-              nativeID="register-password-label"
-            >
-              {t('common.password')}
-            </Text>
-            <PasswordInput
-              accessibilityLabel={t('common.password')}
-              accessibilityLabelledBy="register-password-label"
-              invalid={Boolean(errors.password)}
-              autoCapitalize="none"
-              autoComplete="new-password"
-              value={form.password}
-              onChangeText={(value) => updateField('password', value)}
-              editable={!isSubmitting}
-            />
-            {errors.password && <FormMessage>{t(errors.password)}</FormMessage>}
-          </View>
-
-          <View className="gap-2">
-            <Text
-              className="text-sm font-medium"
-              nativeID="register-confirm-label"
-            >
-              {t('common.confirmPassword')}
-            </Text>
-            <PasswordInput
-              accessibilityLabel={t('common.confirmPassword')}
-              accessibilityLabelledBy="register-confirm-label"
-              invalid={Boolean(errors.confirmPassword)}
-              autoCapitalize="none"
-              autoComplete="new-password"
-              value={form.confirmPassword}
-              onChangeText={(value) => updateField('confirmPassword', value)}
-              editable={!isSubmitting}
-            />
-            {errors.confirmPassword && (
-              <FormMessage>{t(errors.confirmPassword)}</FormMessage>
-            )}
-          </View>
-
-          {serverError ? <FormMessage>{t(serverError)}</FormMessage> : null}
-
-          <Button
-            onPress={handleSubmit}
-            disabled={isSubmitting}
-            accessibilityLabel={t('register.submit')}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator accessibilityLabel={t('common.loading')} />
-            ) : (
-              <Text>{t('register.submit')}</Text>
-            )}
-          </Button>
+      <View className="gap-5">
+        <View className="gap-2">
+          <Text className="text-sm font-medium" nativeID="register-email-label">
+            {t('common.email')}
+          </Text>
+          <Input
+            accessibilityLabel={t('common.email')}
+            accessibilityLabelledBy="register-email-label"
+            accessibilityHint={t('register.emailHint')}
+            invalid={Boolean(errors.email)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="email"
+            keyboardType="email-address"
+            value={form.email}
+            onChangeText={(value) => updateField('email', value)}
+            editable={!isSubmitting}
+          />
+          <Text variant="muted">{t('register.emailHint')}</Text>
+          {errors.email ? <FormMessage>{t(errors.email)}</FormMessage> : null}
         </View>
-      )}
+
+        <View className="gap-2">
+          <Text
+            className="text-sm font-medium"
+            nativeID="register-username-label"
+          >
+            {t('common.username')}
+          </Text>
+          <Input
+            accessibilityLabel={t('common.username')}
+            accessibilityLabelledBy="register-username-label"
+            invalid={Boolean(errors.username)}
+            accessibilityHint={t('common.usernameHint')}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="username-new"
+            value={form.username}
+            onChangeText={(value) => updateField('username', value)}
+            editable={!isSubmitting}
+          />
+          {errors.username && <FormMessage>{t(errors.username)}</FormMessage>}
+        </View>
+
+        <View className="gap-2">
+          <Text
+            className="text-sm font-medium"
+            nativeID="register-password-label"
+          >
+            {t('common.password')}
+          </Text>
+          <PasswordInput
+            accessibilityLabel={t('common.password')}
+            accessibilityLabelledBy="register-password-label"
+            invalid={Boolean(errors.password)}
+            autoCapitalize="none"
+            autoComplete="new-password"
+            value={form.password}
+            onChangeText={(value) => updateField('password', value)}
+            editable={!isSubmitting}
+          />
+          {errors.password && <FormMessage>{t(errors.password)}</FormMessage>}
+        </View>
+
+        <View className="gap-2">
+          <Text
+            className="text-sm font-medium"
+            nativeID="register-confirm-label"
+          >
+            {t('common.confirmPassword')}
+          </Text>
+          <PasswordInput
+            accessibilityLabel={t('common.confirmPassword')}
+            accessibilityLabelledBy="register-confirm-label"
+            invalid={Boolean(errors.confirmPassword)}
+            autoCapitalize="none"
+            autoComplete="new-password"
+            value={form.confirmPassword}
+            onChangeText={(value) => updateField('confirmPassword', value)}
+            editable={!isSubmitting}
+          />
+          {errors.confirmPassword && (
+            <FormMessage>{t(errors.confirmPassword)}</FormMessage>
+          )}
+        </View>
+
+        {serverError ? <FormMessage>{t(serverError)}</FormMessage> : null}
+
+        <Button
+          onPress={handleSubmit}
+          disabled={isSubmitting}
+          accessibilityLabel={t('register.submit')}
+        >
+          {isSubmitting ? (
+            <ActivityIndicator accessibilityLabel={t('common.loading')} />
+          ) : (
+            <Text>{t('register.submit')}</Text>
+          )}
+        </Button>
+      </View>
 
       <View className="flex-row flex-wrap justify-center gap-1">
         <Text className="text-sm text-muted-foreground">

@@ -32,12 +32,16 @@ import TournamentDetailsPage from '@/pages/TournamentDetailsPage'
 import TournamentEditorPage from '@/pages/TournamentEditorPage'
 import TournamentTransferPage from '@/pages/TournamentTransferPage'
 import TournamentsPage from '@/pages/TournamentsPage'
+import ResetPasswordPage from '@/pages/ResetPasswordPage'
+import VerifyEmailPage from '@/pages/VerifyEmailPage'
 
 export default function App() {
   return (
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/app" replace />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route element={<GuestRoute />}>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />

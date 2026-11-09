@@ -11,6 +11,7 @@ const ERROR_KEYS: Record<number, string> = {
 // Return keys so errors already on screen follow subsequent language changes.
 export function getUserErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    if (error.code === 'email_taken') return 'errors.emailConflict';
     return ERROR_KEYS[error.status] ?? 'errors.server';
   }
   return 'errors.network';

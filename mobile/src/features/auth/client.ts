@@ -1,17 +1,16 @@
 import * as SecureStore from 'expo-secure-store';
 import { apiRequest, ApiError } from '@/lib/api';
 import type { ApiRequestOptions } from '@/lib/api';
-import { accountId } from '@/features/users/api';
 import type {
-  RegisterRequest,
+  AccountUser,
+  LoginRequest,
   StoredSession,
   TokenResponse,
-  User,
 } from './types';
 
 const STORAGE_KEY = 'epickem.session';
 
-export function login(credentials: RegisterRequest) {
+export function login(credentials: LoginRequest) {
   return apiRequest<TokenResponse>('/login', {
     method: 'POST',
     body: JSON.stringify(credentials),
@@ -49,7 +48,7 @@ export class SessionClient {
     await this.store(null);
   }
 
-  async authenticate(credentials: RegisterRequest) {
+  async authenticate(credentials: LoginRequest) {
     const generation = ++this.generation;
     const tokens = await login(credentials);
     if (generation !== this.generation) return;
@@ -156,23 +155,11 @@ export class SessionClient {
     }
   };
 
-  async currentUser(): Promise<User> {
+  async currentUser(): Promise<AccountUser> {
     if (!this.session) throw new ApiError(401, 'Authentication is required');
-    // The unverified subject only locates a profile; the backend validates Bearer auth.
     const generation = this.generation;
-    const payload = this.session.access_token.split('.')[1];
-    const claims: unknown = JSON.parse(
-      atob(payload.replace(/-/g, '+').replace(/_/g, '/')),
-    );
-    if (
-      !claims ||
-      typeof claims !== 'object' ||
-      !('sub' in claims) ||
-      typeof claims.sub !== 'string'
-    )
-      throw new Error('Invalid session');
     try {
-      const user = await this.request<User>(`/user/${accountId(claims.sub)}`);
+      const user = await this.request<AccountUser>('/me');
       if (generation !== this.generation)
         throw new ApiError(401, 'Session changed');
       return user;

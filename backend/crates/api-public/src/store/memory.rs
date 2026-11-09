@@ -23,6 +23,13 @@ struct RefreshToken {
     revoked: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VerificationStatus {
+    Staged,
+    Active,
+    Retired,
+}
+
 struct ResetToken {
     user_id: Uuid,
     expires_at: Instant,
@@ -38,7 +45,6 @@ struct State {
     /// Statistiques que le barème d'un tournoi en cours rend indélébiles.
     locked_stats: HashSet<Uuid>,
     tokens: HashMap<String, RefreshToken>,
-    reset_tokens: HashMap<String, ResetToken>,
     teams: Vec<Team>,
     team_members: Vec<(Uuid, TeamMember)>,
     tournament_teams: Vec<TournamentTeam>,
@@ -52,6 +58,9 @@ struct State {
     step_participants: Vec<StepParticipant>,
     matches: Vec<Match>,
     match_participants: Vec<MatchParticipant>,
+    verification_limits: HashMap<String, (Instant, u32)>,
+    verification: HashMap<String, (Uuid, String, Instant, VerificationStatus)>,
+    reset_tokens: HashMap<String, ResetToken>,
 }
 
 #[derive(Default)]
@@ -93,11 +102,12 @@ impl MemoryStore {
 
 #[async_trait]
 impl AuthStore for MemoryStore {
-    async fn create_user(
+    async fn create_user_with_token(
         &self,
         username: &str,
         email: Option<&str>,
         password_hash: &str,
+        verification_hash: Option<&str>,
     ) -> Result<UserRecord, StoreError> {
         let mut state = self.state();
         if state
@@ -108,10 +118,9 @@ impl AuthStore for MemoryStore {
             return Err(StoreError::UsernameTaken);
         }
         if let Some(email) = email
-            && state
-                .users
-                .iter()
-                .any(|user| user.email.as_deref() == Some(email))
+            && state.users.iter().any(|user| {
+                user.email.as_deref() == Some(email) || user.pending_email.as_deref() == Some(email)
+            })
         {
             return Err(StoreError::EmailTaken);
         }
@@ -121,9 +130,170 @@ impl AuthStore for MemoryStore {
             password_hash: password_hash.to_string(),
             role: Role::User,
             email: email.map(str::to_string),
+            pending_email: None,
+            email_verified_at: None,
         };
+        if let (Some(hash), Some(address)) = (verification_hash, email) {
+            state.verification.insert(
+                hash.into(),
+                (
+                    user.id,
+                    address.into(),
+                    Instant::now(),
+                    VerificationStatus::Active,
+                ),
+            );
+        }
         state.users.push(user.clone());
         Ok(user)
+    }
+
+    async fn enroll_legacy(
+        &self,
+        id: Uuid,
+        password_hash: &str,
+        email: &str,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if state.users.iter().any(|u| {
+            u.id != id
+                && (u.email.as_deref() == Some(email) || u.pending_email.as_deref() == Some(email))
+        }) {
+            return Err(StoreError::EmailTaken);
+        }
+        let Some(u) = state
+            .users
+            .iter_mut()
+            .find(|u| u.id == id && u.email.is_none() && u.password_hash == password_hash)
+        else {
+            return Ok(false);
+        };
+        u.pending_email = Some(email.into());
+        for (owner, address, _, active) in state.verification.values_mut() {
+            if *owner == id && address != email {
+                *active = VerificationStatus::Retired
+            }
+        }
+        Ok(true)
+    }
+
+    async fn allow_verification_request(&self, peer_hash: &str) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        state
+            .verification_limits
+            .retain(|_, (at, _)| at.elapsed() < Duration::from_secs(3600));
+        let (_, count) = state
+            .verification_limits
+            .entry(peer_hash.into())
+            .or_insert((Instant::now(), 0));
+        if *count >= 30 {
+            return Ok(false);
+        }
+        *count += 1;
+        Ok(true)
+    }
+
+    async fn issue_verification(&self, email: &str, hash: &str) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let Some(user) = state.users.iter().find(|u| {
+            u.pending_email.as_deref().or(u.email.as_deref()) == Some(email)
+                && (u.pending_email.is_some() || u.email_verified_at.is_none())
+        }) else {
+            return Ok(false);
+        };
+        let id = user.id;
+        state
+            .verification
+            .retain(|_, (_, _, at, _)| at.elapsed() < Duration::from_secs(3600));
+        let recent: Vec<_> = state
+            .verification
+            .values()
+            .filter(|(owner, address, _, _)| *owner == id || address == email)
+            .collect();
+        if recent.len() >= 5
+            || recent
+                .iter()
+                .any(|(_, _, at, _)| at.elapsed() < Duration::from_secs(60))
+        {
+            return Ok(false);
+        }
+        for (owner, _, _, active) in state.verification.values_mut() {
+            if *owner == id && *active == VerificationStatus::Staged {
+                *active = VerificationStatus::Retired
+            }
+        }
+        state.verification.insert(
+            hash.into(),
+            (id, email.into(), Instant::now(), VerificationStatus::Staged),
+        );
+        Ok(true)
+    }
+
+    async fn activate_verification(&self, hash: &str) -> Result<(), StoreError> {
+        let mut state = self.state();
+        let Some((id, email, at, VerificationStatus::Staged)) =
+            state.verification.get(hash).cloned()
+        else {
+            return Ok(());
+        };
+        if at.elapsed() >= Duration::from_secs(900)
+            || !state.users.iter().any(|u| {
+                u.id == id
+                    && u.pending_email.as_ref().or(u.email.as_ref()) == Some(&email)
+                    && (u.pending_email.is_some() || u.email_verified_at.is_none())
+            })
+        {
+            return Ok(());
+        }
+        for (key, (owner, _, _, status)) in &mut state.verification {
+            if *owner == id {
+                *status = if key == hash {
+                    VerificationStatus::Active
+                } else {
+                    VerificationStatus::Retired
+                };
+            }
+        }
+        Ok(())
+    }
+
+    async fn consume_verification(&self, hash: &str) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let Some((id, email, time, VerificationStatus::Active)) =
+            state.verification.get(hash).cloned()
+        else {
+            return Ok(false);
+        };
+        if time.elapsed() >= Duration::from_secs(900)
+            || state
+                .users
+                .iter()
+                .any(|u| u.id != id && u.email.as_ref() == Some(&email))
+        {
+            return Ok(false);
+        }
+        let Some(user) = state
+            .users
+            .iter_mut()
+            .find(|u| u.id == id && u.pending_email.as_ref().or(u.email.as_ref()) == Some(&email))
+        else {
+            return Ok(false);
+        };
+        let address_changed = user.email.as_ref() != Some(&email);
+        user.email = Some(email);
+        user.pending_email = None;
+        user.email_verified_at = Some(now_rfc3339());
+        for (owner, _, _, status) in state.verification.values_mut() {
+            if *owner == id {
+                *status = VerificationStatus::Retired;
+            }
+        }
+        for token in state.reset_tokens.values_mut() {
+            if address_changed && token.user_id == id {
+                token.used = true
+            }
+        }
+        Ok(true)
     }
 
     async fn find_user_by_username(
@@ -191,13 +361,15 @@ impl AuthStore for MemoryStore {
             return Err(StoreError::UsernameTaken);
         }
         if let Some(email) = &update.email
-            && state
-                .users
-                .iter()
-                .any(|u| u.id != id && u.email.as_deref() == Some(email))
+            && state.users.iter().any(|u| {
+                u.id != id
+                    && (u.email.as_deref() == Some(email)
+                        || u.pending_email.as_deref() == Some(email))
+            })
         {
             return Err(StoreError::EmailTaken);
         }
+        let password_changed = update.password_hash.is_some();
         let Some(user) = state.users.iter_mut().find(|user| user.id == id) else {
             return Ok(None);
         };
@@ -211,9 +383,23 @@ impl AuthStore for MemoryStore {
             user.role = role;
         }
         if let Some(email) = update.email {
-            user.email = Some(email);
+            user.pending_email = (user.email.as_ref() != Some(&email)).then_some(email);
         }
-        Ok(Some(UserProfile::from(&*user)))
+        let target = user.pending_email.clone().or_else(|| user.email.clone());
+        let profile = UserProfile::from(&*user);
+        for (owner, email, _, active) in state.verification.values_mut() {
+            if *owner == id && Some(&*email) != target.as_ref() {
+                *active = VerificationStatus::Retired;
+            }
+        }
+        if password_changed {
+            for token in state.tokens.values_mut() {
+                if token.user_id == id {
+                    token.revoked = true;
+                }
+            }
+        }
+        Ok(Some(profile))
     }
 
     async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError> {
@@ -1823,10 +2009,18 @@ impl AuthStore for MemoryStore {
     async fn insert_password_reset_token(
         &self,
         user_id: Uuid,
+        expected_email: Option<&str>,
         token_hash: &str,
         ttl: Duration,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
         let mut state = self.state();
+        if !state
+            .users
+            .iter()
+            .any(|u| u.id == user_id && u.email.as_deref() == expected_email)
+        {
+            return Ok(false);
+        }
         for token in state.reset_tokens.values_mut() {
             if token.user_id == user_id {
                 token.used = true;
@@ -1840,7 +2034,7 @@ impl AuthStore for MemoryStore {
                 used: false,
             },
         );
-        Ok(())
+        Ok(true)
     }
 
     async fn consume_password_reset_token(

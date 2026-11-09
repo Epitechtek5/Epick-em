@@ -9,7 +9,7 @@ use crate::error::{ApiError, ErrorResponse};
 use crate::password_reset::{email_error, normalize_email};
 use crate::store::{Role, StoreError, UserProfile, UserUpdate};
 use actix_web::{HttpResponse, delete, get, patch, web};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
@@ -23,6 +23,7 @@ pub fn routes(cfg: &mut ServiceConfig) {
         .service(get_user)
         .service(update_user)
         .service(delete_user)
+        .service(get_me)
         .service(update_me)
         .service(delete_me);
 }
@@ -38,6 +39,30 @@ struct UpdateUserRequest {
     /// Sert à réinitialiser le mot de passe.
     #[schema(max_length = 254, format = Email, example = "alice@example.com")]
     email: Option<String>,
+}
+
+/// Private account view, only returned to the authenticated owner.
+#[derive(Serialize, ToSchema)]
+struct SelfProfile {
+    pending_email: Option<String>,
+    email_verified_at: Option<String>,
+    id: Uuid,
+    username: String,
+    role: Role,
+    email: Option<String>,
+}
+
+impl From<crate::store::UserRecord> for SelfProfile {
+    fn from(user: crate::store::UserRecord) -> Self {
+        SelfProfile {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            email: user.email,
+            pending_email: user.pending_email,
+            email_verified_at: user.email_verified_at,
+        }
+    }
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -160,6 +185,32 @@ async fn delete_user(
     Ok(HttpResponse::NoContent().finish())
 }
 
+/// Returns the authenticated owner's private account view.
+#[utoipa::path(
+    get,
+    path = "/me",
+    tag = "users",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Authenticated account", body = SelfProfile),
+        (status = 401, description = "Access token rejected", body = ErrorResponse),
+        (status = 404, description = "Account not found", body = ErrorResponse),
+    ),
+)]
+#[get("/me")]
+async fn get_me(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+) -> Result<HttpResponse, ApiError> {
+    let user = state
+        .store
+        .find_user_by_id(claims.sub)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or(ApiError::NotFound)?;
+    Ok(HttpResponse::Ok().json(SelfProfile::from(user)))
+}
+
 /// Modifie son propre compte. Le rôle ne peut pas être changé ici.
 #[utoipa::path(
     patch,
@@ -168,7 +219,7 @@ async fn delete_user(
     security(("bearer" = [])),
     request_body = UpdateUserRequest,
     responses(
-        (status = 200, description = "Compte modifié", body = UserProfile),
+        (status = 200, description = "Compte modifié", body = SelfProfile),
         (status = 400, description = "Requête invalide", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Le rôle n'est pas modifiable ici", body = ErrorResponse),
@@ -187,8 +238,14 @@ async fn update_me(
     if body.role.is_some() {
         return Err(ApiError::Forbidden);
     }
-    let user = update(&state, claims.sub, body.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(user))
+    update(&state, claims.sub, body.into_inner()).await?;
+    let user = state
+        .store
+        .find_user_by_id(claims.sub)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or(ApiError::NotFound)?;
+    Ok(HttpResponse::Ok().json(SelfProfile::from(user)))
 }
 
 /// Supprime son propre compte et révoque ses jetons de rafraîchissement.
@@ -267,7 +324,7 @@ async fn update(
         None => None,
     };
 
-    state
+    let profile = state
         .store
         .update_user(
             id,
@@ -275,7 +332,7 @@ async fn update(
                 username,
                 password_hash,
                 role,
-                email,
+                email: email.clone(),
             },
         )
         .await
@@ -284,7 +341,11 @@ async fn update(
             StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?
-        .ok_or(ApiError::NotFound)
+        .ok_or(ApiError::NotFound)?;
+    if let Some(email) = email {
+        crate::verification::dispatch(state, email).await?;
+    }
+    Ok(profile)
 }
 
 async fn delete(state: &AppState, id: Uuid) -> Result<(), ApiError> {

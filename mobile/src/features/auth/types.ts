@@ -1,13 +1,23 @@
 export interface RegisterRequest {
   username: string;
   password: string;
+  email: string;
 }
+
+export type LoginRequest = Pick<RegisterRequest, 'email' | 'password'>;
 
 export interface User {
   /** Account UUID. */
   id: string;
   username: string;
   role: 'user' | 'admin' | 'watcher';
+}
+
+/** Private account data returned only by authenticated self-service routes. */
+export interface AccountUser extends User {
+  email?: string | null;
+  pending_email?: string | null;
+  email_verified_at?: string | null;
 }
 
 /** Registration creates an account without authenticating it. */

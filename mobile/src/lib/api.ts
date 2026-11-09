@@ -96,6 +96,9 @@ export async function apiRequest<T>(
               'scheduled_at',
               'participant_ids',
               'results',
+              'email',
+              'password',
+              'token',
             ].includes(field),
           )
         : [];
