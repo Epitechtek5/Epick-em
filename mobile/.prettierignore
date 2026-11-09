@@ -1,10 +1,12 @@
 node_modules/
 .expo/
+.agents/
 android/
 ios/
 dist/
 build/
 coverage/
+vendor/
 package-lock.json
 assets/
 docs/evidence/

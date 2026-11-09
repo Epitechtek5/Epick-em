@@ -16,6 +16,18 @@ Keep the checkout in the Linux filesystem for file watcher and installation perf
 
 An Android emulator may run on Windows while Metro runs in WSL. Configure ADB connectivity explicitly; do not assume Windows and Linux share ADB devices. Alternatively, build and run Android on a native Linux environment with Android SDK tooling. iOS compilation and simulators require macOS.
 
+### Signed Git commits
+
+Keep Git commit signing enabled and use the configured personal signing key. In an interactive WSL terminal, unlock the key and prime the agent cache:
+
+```sh
+export GPG_TTY="$(tty)"
+gpg-connect-agent updatestartuptty /bye
+printf 'Epickem commit signing cache check\n' | gpg --clearsign >/dev/null
+```
+
+The local GPG agent caches the unlocked key for at most eight hours. Codex can then create signed commits without an interactive TTY until that bounded cache expires. The shell profiles set `GPG_TTY` only when a terminal is available. After the cache expires, repeat the unlock procedure in an interactive terminal and retry the commit. Never store or pass the key passphrase through Git, shell arguments, environment variables or files.
+
 ## macOS
 
 Install Xcode and its command line tools for iOS, accept the Xcode license and install a simulator runtime. SDK 58 requires Xcode 26.4 or newer. Install CocoaPods 1.17.0 (`gem install cocoapods -v 1.17.0 --user-install`) before using `npm run build:ios:simulator`. Android needs Android Studio or command line SDK tools, the generated project's SDK versions, and a compatible JDK (CI uses 17).
@@ -60,3 +72,11 @@ npm start -- --localhost
 Open the installed app manually and set its development server to `localhost:8081` if needed. Use the installed Windows SDK's full `adb.exe` path if it is not on PATH. The native compile is needed initially; subsequent source edits only need Metro.
 
 `10.0.2.2` maps to the emulator host (Windows), not a physical device or WSL directly. Windows `http://localhost:8080` must reach the Docker backend, as it does in the reported setup. Physical-device testing uses an accessible HTTPS API URL. The debug policy intentionally allows only emulator/loopback HTTP, so use ADB reverse for Metro rather than a cleartext LAN address.
+
+For an iOS simulator, use the existing root configuration with `EXPO_PUBLIC_API_URL=http://localhost:8080` when the backend runs on the same Mac. For an Android emulator, use `http://10.0.2.2:8080`. Restart Metro after changing this value. The existing release transport policy requires HTTPS; use an accessible HTTPS backend when testing a Release APK. Do not add another environment file or weaken the transport policy for account credentials.
+
+## Language and appearance preferences
+
+Settings provides Account, Appearance, Language and Session sections. Theme and language selections apply without restarting and persist independently of authentication. The first language comes from the device (`fr` uses French; unsupported languages use English), while the initial theme follows the system. To change copy, edit the matching keys in both bundled files under `src/i18n/locales/`; do not add language conditionals to screens or translate backend role values.
+
+Expo Localization is a native dependency and config plugin. Rebuild the native app after installing these changes; Fast Refresh alone cannot install the native module. The existing API URL configuration, backend connectivity and release build commands are unchanged.

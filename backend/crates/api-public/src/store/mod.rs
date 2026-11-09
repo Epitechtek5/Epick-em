@@ -3,14 +3,37 @@
 //! Le trait [`AuthStore`] isole les handlers de PostgreSQL : [`PgStore`] sert en production,
 //! [`MemoryStore`] sert aux tests sans base.
 
+mod games;
 mod memory;
 mod postgres;
+mod stats;
+mod steps;
+mod teams;
+mod tournaments;
 
+pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
+pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
+pub use self::steps::{
+    MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
+    StepParticipant, StepParticipantStatus, StepStart, StepStatus,
+};
+pub(crate) use self::teams::now_rfc3339;
+pub use self::teams::{
+    MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
+    TournamentTeamInput, TournamentTeamMember,
+};
+pub use self::tournaments::{
+    ParticipantImport, ParticipantInput, ParticipantStatus, ParticipantType, ScoringMode,
+    ScoringRule, ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, TeamScoringMode,
+    Tournament, TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus,
+    TournamentUpdate,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
@@ -94,6 +117,32 @@ pub enum StoreError {
     UsernameTaken,
     /// L'adresse e-mail est déjà utilisée par un autre compte.
     EmailTaken,
+    /// Le nom de jeu existe déjà (sans tenir compte de la casse).
+    GameNameTaken,
+    /// La clé de statistique existe déjà.
+    StatKeyTaken,
+    /// La statistique est utilisée par le barème d'un tournoi en cours.
+    StatInUse,
+    /// Le nom d'équipe existe déjà pour ce jeu (sans tenir compte de la casse).
+    TeamNameTaken,
+    /// Le compte est déjà membre actif de l'équipe.
+    AlreadyTeamMember,
+    /// L'équipe globale est déjà inscrite à ce tournoi.
+    TeamAlreadyRegistered,
+    /// Le joueur est déjà dans une équipe de ce tournoi.
+    PlayerAlreadyRegistered,
+    /// Le nom de tournoi existe déjà pour ce jeu (sans tenir compte de la casse).
+    TournamentNameTaken,
+    /// Une règle de barème existe déjà pour cette statistique dans ce tournoi.
+    ScoringRuleTaken,
+    /// Le joueur ou l'équipe est déjà inscrit à ce tournoi.
+    AlreadyParticipant,
+    /// Le tournoi a atteint son nombre maximum de participants.
+    TournamentFull,
+    /// Une étape occupe déjà cette position dans le tournoi.
+    StepPositionTaken,
+    /// L'étape n'est pas dans l'état attendu pour cette opération.
+    StepState,
     Other(String),
 }
 
@@ -102,6 +151,23 @@ impl fmt::Display for StoreError {
         match self {
             StoreError::UsernameTaken => f.write_str("nom d'utilisateur déjà pris"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
+            StoreError::GameNameTaken => f.write_str("nom de jeu déjà pris"),
+            StoreError::StatKeyTaken => f.write_str("clé de statistique déjà prise"),
+            StoreError::StatInUse => f.write_str("statistique utilisée par un tournoi en cours"),
+            StoreError::TeamNameTaken => f.write_str("nom d'équipe déjà pris"),
+            StoreError::AlreadyTeamMember => f.write_str("compte déjà membre de l'équipe"),
+            StoreError::TeamAlreadyRegistered => f.write_str("équipe déjà inscrite au tournoi"),
+            StoreError::PlayerAlreadyRegistered => {
+                f.write_str("joueur déjà dans une équipe du tournoi")
+            }
+            StoreError::TournamentNameTaken => f.write_str("nom de tournoi déjà pris"),
+            StoreError::ScoringRuleTaken => {
+                f.write_str("règle de barème déjà définie pour cette statistique")
+            }
+            StoreError::AlreadyParticipant => f.write_str("participant déjà inscrit au tournoi"),
+            StoreError::TournamentFull => f.write_str("tournoi complet"),
+            StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
+            StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -175,6 +241,344 @@ pub trait AuthStore: Send + Sync {
     /// appartenant à un autre compte n'est pas une erreur (et n'est pas modifié).
     async fn revoke_refresh_token(&self, user_id: Uuid, token_hash: &str)
     -> Result<(), StoreError>;
+
+    /// Jeux par ordre de nom, `limit` à partir de `offset`.
+    async fn list_games(&self, limit: i64, offset: i64) -> Result<Vec<Game>, StoreError>;
+
+    async fn find_game(&self, id: Uuid) -> Result<Option<Game>, StoreError>;
+
+    /// Crée le jeu ; [`StoreError::GameNameTaken`] si le nom est déjà utilisé.
+    async fn create_game(&self, game: GameInput) -> Result<Game, StoreError>;
+
+    /// Applique `update` ; `None` si le jeu n'existe pas, [`StoreError::GameNameTaken`] si le
+    /// nouveau nom est déjà utilisé.
+    async fn update_game(&self, id: Uuid, update: GameUpdate) -> Result<Option<Game>, StoreError>;
+
+    /// Supprime le jeu ; `false` s'il n'existait pas.
+    async fn delete_game(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par nom, sans tenir compte de la casse) les jeux donnés, en une
+    /// seule opération : en cas d'erreur, aucun n'est modifié. Chaque jeu est renvoyé avec
+    /// `true` s'il vient d'être créé. Les noms de `games` sont distincts.
+    async fn upsert_games(&self, games: Vec<GameInput>) -> Result<Vec<(Game, bool)>, StoreError>;
+
+    /// Statistiques par ordre de nom, `limit` à partir de `offset`.
+    async fn list_stats(&self, limit: i64, offset: i64) -> Result<Vec<Stat>, StoreError>;
+
+    async fn find_stat(&self, id: Uuid) -> Result<Option<Stat>, StoreError>;
+
+    /// Crée la statistique ; [`StoreError::StatKeyTaken`] si la clé est déjà utilisée.
+    async fn create_stat(&self, stat: StatInput) -> Result<Stat, StoreError>;
+
+    /// Applique `update` ; `None` si la statistique n'existe pas, [`StoreError::StatKeyTaken`]
+    /// si la nouvelle clé est déjà utilisée.
+    async fn update_stat(&self, id: Uuid, update: StatUpdate) -> Result<Option<Stat>, StoreError>;
+
+    /// Supprime la statistique (et ses liaisons avec les jeux) ; `false` si elle n'existait pas,
+    /// [`StoreError::StatInUse`] si le barème d'un tournoi `ongoing` s'en sert.
+    async fn delete_stat(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Statistiques liées au jeu, par ordre de nom ; `None` si le jeu n'existe pas.
+    async fn list_game_stats(&self, game_id: Uuid) -> Result<Option<Vec<Stat>>, StoreError>;
+
+    /// Lie la statistique au jeu (sans effet si elle l'est déjà) ; `false` si le jeu ou la
+    /// statistique n'existe pas.
+    async fn link_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Délie la statistique du jeu ; `false` si elle n'y était pas liée.
+    async fn unlink_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par clé) les statistiques données, en une seule opération : en cas
+    /// d'erreur, aucune n'est modifiée. Chacune est renvoyée avec `true` si elle vient d'être
+    /// créée. Les clés de `stats` sont distinctes.
+    async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError>;
+
+    /// Remplace les statistiques liées au jeu par `stat_ids`, en une seule opération. `false`
+    /// si le jeu ou l'une des statistiques n'existe pas (rien n'est alors modifié).
+    async fn set_game_stats(&self, game_id: Uuid, stat_ids: Vec<Uuid>) -> Result<bool, StoreError>;
+
+    /// Remplace les jeux liés à la statistique par `game_ids`, en une seule opération. `false`
+    /// si la statistique ou l'un des jeux n'existe pas (rien n'est alors modifié).
+    async fn set_stat_games(&self, stat_id: Uuid, game_ids: Vec<Uuid>) -> Result<bool, StoreError>;
+
+    /// Équipes globales par ordre de nom, éventuellement d'un seul jeu, `limit` à partir de
+    /// `offset`.
+    async fn list_teams(
+        &self,
+        game_id: Option<Uuid>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Team>, StoreError>;
+
+    async fn find_team(&self, id: Uuid) -> Result<Option<Team>, StoreError>;
+
+    /// Crée l'équipe et y inscrit son propriétaire (rôle `owner`) ;
+    /// [`StoreError::TeamNameTaken`] si le nom est déjà pris pour ce jeu. Le jeu et le
+    /// propriétaire existent.
+    async fn create_team(&self, team: TeamInput) -> Result<Team, StoreError>;
+
+    /// Applique `update` ; `None` si l'équipe n'existe pas, [`StoreError::TeamNameTaken`] si le
+    /// nouveau nom est déjà pris pour ce jeu.
+    async fn update_team(&self, id: Uuid, update: TeamUpdate) -> Result<Option<Team>, StoreError>;
+
+    /// Supprime l'équipe et ses membres ; les équipes de tournoi copiées sont conservées
+    /// (`team_id` repasse à `null`). `false` si elle n'existait pas.
+    async fn delete_team(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Membres de l'équipe, actuels et anciens, par date d'arrivée ; `None` si elle n'existe pas.
+    async fn list_team_members(&self, team_id: Uuid)
+    -> Result<Option<Vec<TeamMember>>, StoreError>;
+
+    /// Ajoute le compte à l'équipe ; `None` si l'équipe ou le compte n'existe pas,
+    /// [`StoreError::AlreadyTeamMember`] s'il en est déjà membre actif.
+    async fn add_team_member(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError>;
+
+    /// Change le rôle d'un membre actif ; `None` s'il n'en est pas un.
+    async fn set_team_member_role(
+        &self,
+        team_id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TeamMember>, StoreError>;
+
+    /// Fait quitter l'équipe à un membre actif (la ligne est conservée avec `left_at`) ;
+    /// `false` s'il n'en était pas un.
+    async fn remove_team_member(&self, team_id: Uuid, user_id: Uuid) -> Result<bool, StoreError>;
+
+    /// Crée ou met à jour (par jeu et nom, sans tenir compte de la casse) les équipes données,
+    /// en une seule opération : en cas d'erreur, aucune n'est modifiée. Les membres d'une équipe
+    /// existante sont **remplacés** par ceux du fichier. Chaque équipe est renvoyée avec `true`
+    /// si elle vient d'être créée. Les couples (jeu, nom) sont distincts, les jeux et les
+    /// comptes existent, et les membres respectent les contraintes d'appartenance (un seul
+    /// `owner` actif, un seul passage actif par compte).
+    async fn import_teams(&self, teams: Vec<TeamImport>) -> Result<Vec<(Team, bool)>, StoreError>;
+
+    /// Équipes d'un tournoi par ordre de nom, `limit` à partir de `offset`.
+    async fn list_tournament_teams(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentTeam>, StoreError>;
+
+    async fn find_tournament_team(&self, id: Uuid) -> Result<Option<TournamentTeam>, StoreError>;
+
+    /// Crée l'équipe de tournoi et ses membres en une seule opération ;
+    /// [`StoreError::TeamAlreadyRegistered`] si l'équipe globale d'origine est déjà inscrite à
+    /// ce tournoi, [`StoreError::PlayerAlreadyRegistered`] si un membre est déjà dans une autre
+    /// équipe du tournoi.
+    async fn create_tournament_team(
+        &self,
+        team: TournamentTeamInput,
+    ) -> Result<TournamentTeam, StoreError>;
+
+    /// Applique `update` ; `None` si l'équipe de tournoi n'existe pas. Aucune propagation vers
+    /// l'équipe globale d'origine.
+    async fn update_tournament_team(
+        &self,
+        id: Uuid,
+        update: TeamUpdate,
+    ) -> Result<Option<TournamentTeam>, StoreError>;
+
+    /// Supprime l'équipe de tournoi et ses membres ; `false` si elle n'existait pas.
+    async fn delete_tournament_team(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Membres de l'équipe de tournoi ; `None` si elle n'existe pas.
+    async fn list_tournament_team_members(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<Vec<TournamentTeamMember>>, StoreError>;
+
+    /// Ajoute le compte à l'équipe de tournoi ; `None` si l'équipe ou le compte n'existe pas,
+    /// [`StoreError::PlayerAlreadyRegistered`] s'il est déjà dans une équipe de ce tournoi.
+    async fn add_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError>;
+
+    /// Change le rôle d'un membre ; `None` s'il n'est pas dans l'équipe.
+    async fn set_tournament_team_member_role(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        role: TeamRole,
+    ) -> Result<Option<TournamentTeamMember>, StoreError>;
+
+    /// Retire un membre de l'équipe de tournoi ; `false` s'il n'y était pas.
+    async fn remove_tournament_team_member(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool, StoreError>;
+    /// Tournois par date de début, éventuellement d'un seul jeu ou d'un seul statut, `limit` à
+    /// partir de `offset`.
+    async fn list_tournaments(
+        &self,
+        game_id: Option<Uuid>,
+        status: Option<TournamentStatus>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Tournament>, StoreError>;
+
+    async fn find_tournament(&self, id: Uuid) -> Result<Option<Tournament>, StoreError>;
+
+    /// Crée le tournoi au statut `draft`. Le jeu existe et les champs sont cohérents.
+    async fn create_tournament(
+        &self,
+        tournament: TournamentInput,
+    ) -> Result<Tournament, StoreError>;
+
+    /// Applique `update` ; `None` si le tournoi n'existe pas.
+    async fn update_tournament(
+        &self,
+        id: Uuid,
+        update: TournamentUpdate,
+    ) -> Result<Option<Tournament>, StoreError>;
+
+    /// Change le statut ; `None` si le tournoi n'existe pas. Les transitions autorisées sont
+    /// vérifiées par l'appelant.
+    async fn set_tournament_status(
+        &self,
+        id: Uuid,
+        status: TournamentStatus,
+    ) -> Result<Option<Tournament>, StoreError>;
+
+    /// Supprime le tournoi, ses équipes, son barème et ses inscriptions ; `false` s'il n'existait
+    /// pas.
+    async fn delete_tournament(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Barème du tournoi, par statistique.
+    async fn list_scoring_rules(&self, tournament_id: Uuid)
+    -> Result<Vec<ScoringRule>, StoreError>;
+
+    async fn find_scoring_rule(&self, id: Uuid) -> Result<Option<ScoringRule>, StoreError>;
+
+    /// Ajoute la règle ; `None` si le tournoi n'existe pas ou si la statistique n'est pas liée
+    /// à son jeu, [`StoreError::ScoringRuleTaken`] si la statistique a déjà une règle.
+    async fn create_scoring_rule(
+        &self,
+        rule: ScoringRuleInput,
+    ) -> Result<Option<ScoringRule>, StoreError>;
+
+    /// Remplace la façon de calculer les points ; `None` si la règle n'existe pas.
+    async fn replace_scoring_rule(
+        &self,
+        id: Uuid,
+        definition: ScoringRuleDefinition,
+    ) -> Result<Option<ScoringRule>, StoreError>;
+
+    /// Supprime la règle ; `false` si elle n'existait pas.
+    async fn delete_scoring_rule(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Inscrits du tournoi par date d'inscription, `limit` à partir de `offset`.
+    async fn list_participants(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentParticipant>, StoreError>;
+
+    async fn find_participant(&self, id: Uuid)
+    -> Result<Option<TournamentParticipant>, StoreError>;
+
+    /// Inscrit au statut `registered` ; `None` si le tournoi n'existe pas,
+    /// [`StoreError::AlreadyParticipant`] si le joueur ou l'équipe est déjà inscrit,
+    /// [`StoreError::TournamentFull`] si `max_participants` inscrits (hors `withdrawn`) sont
+    /// atteints. Le compte et l'équipe existent, l'équipe appartient au tournoi.
+    async fn add_participant(
+        &self,
+        participant: ParticipantInput,
+    ) -> Result<Option<TournamentParticipant>, StoreError>;
+
+    /// Change le statut d'un inscrit ; `None` s'il n'existe pas.
+    async fn set_participant_status(
+        &self,
+        id: Uuid,
+        status: ParticipantStatus,
+    ) -> Result<Option<TournamentParticipant>, StoreError>;
+
+    /// Supprime l'inscription ; `false` si elle n'existait pas.
+    async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Points de chaque inscrit (par identifiant d'inscription), somme de ses points dans les
+    /// étapes du tournoi ; un inscrit absent d'une étape n'a aucun point.
+    async fn participant_points(
+        &self,
+        tournament_id: Uuid,
+    ) -> Result<HashMap<Uuid, f64>, StoreError>;
+
+    /// Étapes du tournoi par position.
+    async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError>;
+
+    async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError>;
+
+    /// Crée l'étape au statut `pending` ; `None` si le tournoi n'existe pas,
+    /// [`StoreError::StepPositionTaken`] si la position est prise.
+    async fn create_step(&self, step: StepInput) -> Result<Option<Step>, StoreError>;
+
+    /// Remplace les réglages de l'étape ; `None` si elle n'existe pas,
+    /// [`StoreError::StepPositionTaken`] si la position est prise.
+    async fn replace_step(
+        &self,
+        id: Uuid,
+        definition: StepDefinition,
+    ) -> Result<Option<Step>, StoreError>;
+
+    /// Supprime l'étape, ses groupes et ses participants ; `false` si elle n'existait pas.
+    async fn delete_step(&self, id: Uuid) -> Result<bool, StoreError>;
+
+    /// Groupes de l'étape par rang.
+    async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError>;
+
+    /// Participants de l'étape, par groupe puis par inscrit.
+    async fn list_step_participants(
+        &self,
+        step_id: Uuid,
+    ) -> Result<Vec<StepParticipant>, StoreError>;
+
+    /// Passe l'étape `pending` en `ongoing` et crée ses groupes et ses participants, en une
+    /// seule opération ; `None` si elle n'existe pas, [`StoreError::StepState`] si elle n'est pas
+    /// `pending`. Les inscrits appartiennent au tournoi de l'étape.
+    async fn start_step(&self, start: StepStart) -> Result<Option<Step>, StoreError>;
+
+    /// Passe l'étape `ongoing` en `finished`, enregistre l'issue de chaque participant et lance
+    /// l'étape suivante si `next` est renseigné, en une seule opération ; `None` si elle n'existe
+    /// pas, [`StoreError::StepState`] si elle n'est pas `ongoing`.
+    async fn close_step(&self, closing: StepClosing) -> Result<Option<Step>, StoreError>;
+
+    /// Fixe le total de points d'un participant dans l'étape (renseigné par la saisie des
+    /// résultats des matchs) ; `false` s'il n'y participe pas.
+    async fn set_step_points(
+        &self,
+        step_id: Uuid,
+        participant_id: Uuid,
+        points: f64,
+    ) -> Result<bool, StoreError>;
+    /// Crée ou met à jour (par jeu et nom, sans tenir compte de la casse) les tournois donnés,
+    /// en une seule opération : en cas d'erreur, aucun n'est modifié. Le barème d'un tournoi
+    /// existant est **remplacé** ; ses inscrits, ses équipes, ses étapes et ses matchs sont
+    /// laissés à leurs sous-niveaux. Chaque tournoi est renvoyé avec `true` s'il vient d'être
+    /// créé. Les couples (jeu, nom) sont distincts, les jeux existent et les statistiques sont
+    /// liées au jeu de leur tournoi.
+    async fn import_tournaments(
+        &self,
+        tournaments: Vec<TournamentImport>,
+    ) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
+    /// et les équipes existent, et les équipes sont celles du tournoi.
+    async fn replace_participants(
+        &self,
+        tournament_id: Uuid,
+        participants: Vec<ParticipantImport>,
+    ) -> Result<(), StoreError>;
 
     /// Enregistre l'empreinte d'un jeton de réinitialisation valable pendant `ttl`, et invalide
     /// les jetons de réinitialisation encore en attente du compte.

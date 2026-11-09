@@ -124,7 +124,7 @@ describe('User API', () => {
 
       await expect(getUser(TOKEN, UID)).rejects.toMatchObject({
         status,
-        message: 'Backend error',
+        message: `HTTP error ${status}`,
       });
     },
   );

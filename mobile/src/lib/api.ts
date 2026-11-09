@@ -2,15 +2,22 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly code?: string,
+    public readonly fields: string[] = [],
+    public readonly fileDetails?: string,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
 
+export interface ApiRequestOptions extends RequestInit {
+  responseType?: 'json' | 'response';
+}
+
 export async function apiRequest<T>(
   path: string,
-  options: RequestInit = {},
+  options: ApiRequestOptions = {},
 ): Promise<T> {
   const apiUrl = process.env.EXPO_PUBLIC_API_URL;
 
@@ -18,8 +25,9 @@ export async function apiRequest<T>(
     throw new Error('EXPO_PUBLIC_API_URL is not configured');
   }
 
+  const { responseType = 'json', ...requestOptions } = options;
   const response = await fetch(`${apiUrl}${path}`, {
-    ...options,
+    ...requestOptions,
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
@@ -28,23 +36,96 @@ export async function apiRequest<T>(
   });
 
   if (!response.ok) {
+    // Never surface server-controlled text that could contain credentials.
+    const message = `HTTP error ${response.status}`;
+
     const body: unknown = await response.json().catch(() => null);
-
-    // L'API répond `{ error, message }` : `error` est un code stable, `message` son libellé.
-    const message =
-      typeof body === 'object' &&
-      body !== null &&
-      'message' in body &&
-      typeof body.message === 'string'
-        ? body.message
-        : `HTTP error ${response.status}`;
-
-    throw new ApiError(response.status, message);
+    const metadata = body && typeof body === 'object' ? body : {};
+    const code =
+      'error' in metadata && typeof metadata.error === 'string'
+        ? metadata.error
+        : undefined;
+    const errors = 'errors' in metadata ? metadata.errors : null;
+    // Field identifiers are allowlisted; only import errors.file text is displayed.
+    const fields =
+      errors && typeof errors === 'object'
+        ? Object.keys(errors).filter((field) =>
+            [
+              'name',
+              'key',
+              'type',
+              'description',
+              'images',
+              'file',
+              'body',
+              'game_id',
+              'tag',
+              'picture_url',
+              'user_id',
+              'role',
+              'team_id',
+              'member_ids',
+              'start_date',
+              'end_date',
+              'registration_open_at',
+              'registration_close_at',
+              'participant_type',
+              'team_size',
+              'max_participants',
+              'team_scoring_mode',
+              'team_scoring_n',
+              'tournament_team_id',
+              'stat_id',
+              'coefficient',
+              'points_table',
+              'status',
+              'position',
+              'format',
+              'match_type',
+              'group_count',
+              'group_size',
+              'matches_per_group',
+              'advance_per_group',
+              'tiebreak',
+              'steps',
+              'participants',
+            ].includes(field),
+          )
+        : [];
+    const fileDetails =
+      errors &&
+      typeof errors === 'object' &&
+      'file' in errors &&
+      typeof errors.file === 'string'
+        ? errors.file
+        : undefined;
+    throw new ApiError(response.status, message, code, fields, fileDetails);
   }
 
   if (response.status === 204) {
     return undefined as T;
   }
 
+  if (responseType === 'response') return response as T;
+
   return (await response.json()) as T;
+}
+
+export type AuthenticatedRequest = <T>(
+  path: string,
+  options: ApiRequestOptions,
+) => Promise<T>;
+let sessionRequest: AuthenticatedRequest | null = null;
+
+export function configureSessionRequest(request: AuthenticatedRequest | null) {
+  sessionRequest = request;
+}
+
+export function authenticatedRequest<T>(
+  path: string,
+  options: ApiRequestOptions,
+): Promise<T> {
+  return sessionRequest
+    ? sessionRequest<T>(path, options)
+    : apiRequest<T>(path, options);
 }

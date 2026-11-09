@@ -10,9 +10,14 @@
 
 use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
+use crate::game_io::GameStats;
 use crate::mail::{Mailer, NoopMailer};
 use crate::password_reset::{email_error, normalize_email};
+use crate::stat_io::StoreStats;
+use crate::step_io::StoreSteps;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
+use crate::tournament_io::{NoChild, TournamentChild};
+use crate::tournament_team_io::StoreTournamentTeams;
 use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
@@ -40,6 +45,15 @@ pub struct AppState {
     /// Empreinte factice, vérifiée quand le compte n'existe pas pour que « compte inconnu »
     /// et « mauvais mot de passe » prennent le même temps.
     dummy_hash: Arc<str>,
+    /// Statistiques des jeux, importées et exportées avec eux (opaques pour les jeux). Par défaut
+    /// celles de la base ([`StoreStats`]).
+    pub(crate) stats: Arc<dyn GameStats>,
+    /// Équipes, étapes et matchs des tournois, importés et exportés avec eux (opaques pour les
+    /// tournois). Par défaut les équipes et les étapes sont celles de la base
+    /// ([`StoreTournamentTeams`], [`StoreSteps`]) ; les matchs ne sont pas encore pris en charge.
+    pub(crate) tournament_teams: Arc<dyn TournamentChild>,
+    pub(crate) steps: Arc<dyn TournamentChild>,
+    pub(crate) matches: Arc<dyn TournamentChild>,
     /// Envoi des e-mails ; par défaut [`NoopMailer`] (Resend n'est pas branché).
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
@@ -53,12 +67,40 @@ impl AppState {
     ) -> Result<Self, argon2::password_hash::Error> {
         let dummy_hash = hash_password("mot de passe factice")?;
         Ok(AppState {
+            stats: Arc::new(StoreStats(store.clone())),
+            tournament_teams: Arc::new(StoreTournamentTeams(store.clone())),
+            steps: Arc::new(StoreSteps::new(store.clone())),
+            matches: Arc::new(NoChild("les matchs")),
             store,
             config: Arc::new(config),
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
         })
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les équipes des tournois.
+    pub fn with_tournament_teams(mut self, teams: Arc<dyn TournamentChild>) -> Self {
+        self.tournament_teams = teams;
+        self
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les étapes des tournois.
+    pub fn with_steps(mut self, steps: Arc<dyn TournamentChild>) -> Self {
+        self.steps = steps;
+        self
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les matchs des tournois.
+    pub fn with_matches(mut self, matches: Arc<dyn TournamentChild>) -> Self {
+        self.matches = matches;
+        self
+    }
+
+    /// Branche le sous-niveau qui importe et exporte les statistiques des jeux.
+    pub fn with_stats(mut self, stats: Arc<dyn GameStats>) -> Self {
+        self.stats = stats;
+        self
     }
 
     /// Branche l'envoi des e-mails ; `public_url` est l'origine publique du site (ex.
@@ -100,12 +142,6 @@ struct RegisterRequest {
 #[derive(Deserialize, ToSchema)]
 struct RefreshRequest {
     refresh_token: String,
-}
-
-#[derive(Serialize, ToSchema)]
-struct RegisterResponse {
-    id: Uuid,
-    username: String,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -152,14 +188,14 @@ fn decode_claims(token: &str, secret: &str, check_expiry: bool) -> Option<Claims
     .map(|data| data.claims)
 }
 
-/// Crée un compte.
+/// Crée un compte et renvoie directement les jetons, comme `/login`.
 #[utoipa::path(
     post,
     path = "/register",
     tag = "auth",
     request_body = RegisterRequest,
     responses(
-        (status = 201, description = "Compte créé", body = RegisterResponse),
+        (status = 201, description = "Compte créé, jetons émis", body = TokenResponse),
         (status = 400, description = "Requête invalide", body = ErrorResponse),
         (status = 409, description = "Nom d'utilisateur ou adresse e-mail déjà pris", body = ErrorResponse),
     ),
@@ -183,10 +219,17 @@ async fn register(
             StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?;
-    Ok(HttpResponse::Created().json(RegisterResponse {
-        id: user.id,
-        username: user.username,
-    }))
+    let refresh_token = new_token();
+    state
+        .store
+        .insert_refresh_token(
+            user.id,
+            &hash_token(&refresh_token),
+            state.config.refresh_token_ttl,
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(HttpResponse::Created().json(token_response(&state.config, &user, refresh_token)?))
 }
 
 /// Échange des identifiants contre un jeton d'accès et un jeton de rafraîchissement.

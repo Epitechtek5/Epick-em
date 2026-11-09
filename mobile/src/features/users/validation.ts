@@ -1,4 +1,9 @@
 import type { UserRole } from './api';
+import {
+  normalizeUsername,
+  validateNewPassword,
+  validateUsername,
+} from '@/features/auth/validation';
 
 export interface UserFormValues {
   username: string;
@@ -11,30 +16,25 @@ export type UserFormErrors = Partial<
   Record<'username' | 'password' | 'confirmPassword', string>
 >;
 
-const USERNAME_PATTERN = /^[A-Za-z0-9_.-]{3,32}$/;
-
 export function validateUserForm(
   form: UserFormValues,
   originalUsername: string,
 ): UserFormErrors {
   const errors: UserFormErrors = {};
 
-  if (
-    form.username !== originalUsername &&
-    !USERNAME_PATTERN.test(form.username)
-  ) {
-    errors.username = 'Username must contain 3–32 letters, numbers, _, . or -.';
+  const username = normalizeUsername(form.username);
+  if (username !== originalUsername) {
+    const usernameError = validateUsername(username);
+    if (usernameError) errors.username = usernameError;
   }
 
-  if (
-    form.password &&
-    (form.password.length < 8 || form.password.length > 128)
-  ) {
-    errors.password = 'Password must contain 8–128 characters.';
+  if (form.password) {
+    const passwordError = validateNewPassword(form.password);
+    if (passwordError) errors.password = passwordError;
   }
 
   if (form.password !== form.confirmPassword) {
-    errors.confirmPassword = 'Passwords do not match.';
+    errors.confirmPassword = 'validation.match';
   }
 
   return errors;

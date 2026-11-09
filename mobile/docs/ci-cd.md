@@ -42,7 +42,7 @@ The `build_signed_ios` manual Release input defaults to false. Enabling it reque
 
 1. Create/link the EAS project and commit its project ID in app configuration.
 2. Configure Apple membership, certificates and provisioning profiles in EAS using an authorized account.
-3. Create the `mobile-production` GitHub environment, set any required reviewers, and store `EXPO_TOKEN` as an environment secret.
+3. Use the `prod` GitHub environment (required reviewers set), and store `EXPO_TOKEN` as an environment secret.
 4. Review EAS usage costs and run the manual workflow only from an approved revision.
 
 The optional job pins EAS CLI 25.2.0. Apple credentials stay in EAS credential management, outside source and Docker. No credentials or accounts were available, so this path was not executed. Production Android uses the `production` EAS AAB profile documented in [builds](builds.md).

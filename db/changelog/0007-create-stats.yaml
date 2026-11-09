@@ -1,0 +1,84 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0007-create-stats
+      author: epickem
+      changes:
+        - createTable:
+            tableName: stats
+            remarks: Statistiques saisies pour un match (kills, placement...), valeurs stockées en JSON dans match_participant.stats
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: varchar(64)
+                  remarks: Libellé affiché
+                  constraints:
+                    nullable: false
+              - column:
+                  name: key
+                  type: varchar(64)
+                  remarks: Slug unique, clé dans le JSON match_participant.stats
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: stats_key_key
+              - column:
+                  name: type
+                  type: varchar(8)
+                  remarks: "flat : valeur brute ; percent : pourcentage"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE stats
+              ADD CONSTRAINT stats_key_slug CHECK (key ~ '^[a-z0-9]+(_[a-z0-9]+)*$'),
+              ADD CONSTRAINT stats_type_check CHECK (type IN ('flat', 'percent'))
+            rollback: >-
+              ALTER TABLE stats DROP CONSTRAINT stats_key_slug, DROP CONSTRAINT stats_type_check
+        - createTable:
+            tableName: stat_game
+            remarks: Statistiques disponibles pour un jeu
+            columns:
+              - column:
+                  name: stat_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: stat_game_stat_fk
+                    references: stats(id)
+                    deleteCascade: true
+              - column:
+                  name: game_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: stat_game_game_fk
+                    references: games(id)
+                    deleteCascade: true
+        - addPrimaryKey:
+            tableName: stat_game
+            columnNames: stat_id, game_id
+            constraintName: stat_game_pkey
+        - createIndex:
+            tableName: stat_game
+            indexName: stat_game_game_idx
+            columns:
+              - column:
+                  name: game_id
+      rollback:
+        - dropTable:
+            tableName: stat_game
+        - dropTable:
+            tableName: stats

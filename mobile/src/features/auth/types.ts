@@ -4,11 +4,21 @@ export interface RegisterRequest {
 }
 
 export interface User {
-  /** UUID du compte. */
+  /** Account UUID. */
   id: string;
   username: string;
   role: 'user' | 'admin' | 'watcher';
 }
 
-/** Réponse de `POST /register` : le rôle n'y figure pas, tout nouveau compte est `user`. */
+/** Registration creates an account without authenticating it. */
 export type RegisterResponse = Pick<User, 'id' | 'username'>;
+
+export interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+}
+export interface StoredSession extends TokenResponse {
+  expiresAt: number;
+}

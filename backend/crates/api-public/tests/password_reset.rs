@@ -255,8 +255,13 @@ async fn resetting_the_password_ends_open_sessions() {
 async fn expired_links_are_refused() {
     let store = Arc::new(MemoryStore::new());
     let app = app_with_mailer(store.clone(), Arc::new(MemoryMailer::new())).await;
-    let (_, user) = register_with_email(&app, "alice", "alice@example.com").await;
-    let id = user["id"].as_str().unwrap().parse().unwrap();
+    register_with_email(&app, "alice", "alice@example.com").await;
+    let id = store
+        .find_user_by_email("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
     store
         .insert_password_reset_token(id, &sha256_hex("expire"), Duration::from_millis(1))
         .await

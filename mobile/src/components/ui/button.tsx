@@ -1,6 +1,7 @@
 import { TextClassContext } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
+import { MotionPressable } from './motion-pressable';
 import { Platform, Pressable } from 'react-native';
 
 const buttonVariants = cva(
@@ -41,18 +42,18 @@ const buttonVariants = cva(
       },
       size: {
         default: cn(
-          'h-10 px-4 py-2 sm:h-9',
+          'min-h-12 px-4 py-3',
           Platform.select({ web: 'has-[>svg]:px-3' }),
         ),
         sm: cn(
-          'h-9 gap-1.5 rounded-md px-3 sm:h-8',
+          'min-h-11 gap-1.5 rounded-md px-3 py-2',
           Platform.select({ web: 'has-[>svg]:px-2.5' }),
         ),
         lg: cn(
-          'h-11 rounded-md px-6 sm:h-10',
+          'min-h-12 rounded-md px-6 py-3',
           Platform.select({ web: 'has-[>svg]:px-4' }),
         ),
-        icon: 'h-10 w-10 sm:h-9 sm:w-9',
+        icon: 'h-11 w-11',
       },
     },
     defaultVariants: {
@@ -64,7 +65,7 @@ const buttonVariants = cva(
 
 const buttonTextVariants = cva(
   cn(
-    'text-foreground text-sm font-medium',
+    'text-foreground shrink text-center text-sm font-medium',
     Platform.select({ web: 'pointer-events-none transition-colors' }),
   ),
   {
@@ -100,13 +101,12 @@ const buttonTextVariants = cva(
 );
 
 type ButtonProps = React.ComponentProps<typeof Pressable> &
-  React.RefAttributes<typeof Pressable> &
   VariantProps<typeof buttonVariants>;
 
 function Button({ className, variant, size, ...props }: ButtonProps) {
   return (
     <TextClassContext.Provider value={buttonTextVariants({ variant, size })}>
-      <Pressable
+      <MotionPressable
         className={cn(
           props.disabled && 'opacity-50',
           buttonVariants({ variant, size }),

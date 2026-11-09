@@ -1,7 +1,9 @@
 name: Release
 
 # Manual dispatch runs the existing semantic-release process and publishes a vX.Y.Z release.
-# Main pushes and manual releases continue to publish service images to GHCR.
+# The release only starts once the `prod` environment is approved by a required reviewer.
+# Main pushes only publish service images to GHCR: native mobile builds are slow, so they run
+# on manual releases only.
 # The deploy key allows semantic-release to push its version commit to protected main.
 on:
   push:
@@ -24,6 +26,7 @@ jobs:
   semantic-release:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    environment: prod
     permissions:
       contents: write
       issues: write
@@ -102,7 +105,7 @@ jobs:
 
   mobile-source:
     needs: semantic-release
-    if: ${{ !cancelled() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped') && (github.event_name == 'push' || needs.semantic-release.outputs.version != '') }}
+    if: ${{ !cancelled() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped') && github.event_name == 'workflow_dispatch' && needs.semantic-release.outputs.version != '' }}
     runs-on: ubuntu-latest
     outputs:
       commit: ${{ steps.source.outputs.commit }}
@@ -167,7 +170,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.build_signed_ios
     needs: semantic-release
     runs-on: ubuntu-latest
-    environment: mobile-production
+    environment: prod
     steps:
       - uses: actions/checkout@v4
         with:

@@ -28,10 +28,40 @@ pub enum ApiError {
     Unauthorized,
     /// Authentifié, mais sans le rôle exigé ou sans droit sur cette ressource.
     Forbidden,
-    /// Compte introuvable.
+    /// Compte ou jeu introuvable.
     NotFound,
     /// Nom d'utilisateur déjà pris.
     Conflict,
+    /// Nom de jeu déjà pris.
+    GameNameTaken,
+    /// Clé de statistique déjà prise.
+    StatKeyTaken,
+    /// Statistique utilisée par un tournoi en cours.
+    StatInUse,
+    /// Nom d'équipe déjà pris pour ce jeu.
+    TeamNameTaken,
+    /// Le compte est déjà membre de l'équipe.
+    AlreadyTeamMember,
+    /// Équipe globale déjà inscrite à ce tournoi.
+    TeamAlreadyRegistered,
+    /// Joueur déjà dans une équipe de ce tournoi.
+    PlayerAlreadyRegistered,
+    /// Nom de tournoi déjà pris pour ce jeu.
+    TournamentNameTaken,
+    /// Le barème contient déjà une règle pour cette statistique.
+    ScoringRuleTaken,
+    /// Joueur ou équipe déjà inscrit à ce tournoi.
+    AlreadyRegistered,
+    /// Le tournoi a atteint son nombre maximum de participants.
+    TournamentFull,
+    /// Barème ou paramètres verrouillés : le tournoi est en cours ou terminé.
+    TournamentLocked,
+    /// Une étape occupe déjà cette position dans le tournoi.
+    StepPositionTaken,
+    /// Les inscriptions ne sont pas ouvertes.
+    RegistrationClosed,
+    /// Changement de statut impossible depuis le statut actuel.
+    InvalidTransition,
     /// Adresse e-mail déjà utilisée par un autre compte.
     EmailTaken,
     /// Lien de réinitialisation du mot de passe inconnu, expiré ou déjà utilisé.
@@ -58,15 +88,86 @@ impl ApiError {
                 "Identifiants ou jeton invalides",
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Action non autorisée"),
-            ApiError::NotFound => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "Utilisateur introuvable",
-            ),
+            ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Ressource introuvable"),
             ApiError::Conflict => (
                 StatusCode::CONFLICT,
                 "username_taken",
                 "Ce nom d'utilisateur est déjà pris",
+            ),
+            ApiError::GameNameTaken => (
+                StatusCode::CONFLICT,
+                "game_name_taken",
+                "Ce nom de jeu est déjà pris",
+            ),
+            ApiError::StatKeyTaken => (
+                StatusCode::CONFLICT,
+                "stat_key_taken",
+                "Cette clé de statistique est déjà prise",
+            ),
+            ApiError::StatInUse => (
+                StatusCode::CONFLICT,
+                "stat_in_use",
+                "Cette statistique est utilisée par un tournoi en cours",
+            ),
+            ApiError::TeamNameTaken => (
+                StatusCode::CONFLICT,
+                "team_name_taken",
+                "Ce nom d'équipe est déjà pris pour ce jeu",
+            ),
+            ApiError::AlreadyTeamMember => (
+                StatusCode::CONFLICT,
+                "already_team_member",
+                "Ce compte est déjà membre de l'équipe",
+            ),
+            ApiError::TeamAlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "team_already_registered",
+                "Cette équipe est déjà inscrite à ce tournoi",
+            ),
+            ApiError::PlayerAlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "player_already_registered",
+                "Ce joueur est déjà dans une équipe de ce tournoi",
+            ),
+            ApiError::TournamentNameTaken => (
+                StatusCode::CONFLICT,
+                "tournament_name_taken",
+                "Ce nom de tournoi est déjà pris pour ce jeu",
+            ),
+            ApiError::ScoringRuleTaken => (
+                StatusCode::CONFLICT,
+                "scoring_rule_taken",
+                "Le barème de ce tournoi définit déjà cette statistique",
+            ),
+            ApiError::AlreadyRegistered => (
+                StatusCode::CONFLICT,
+                "already_registered",
+                "Ce participant est déjà inscrit à ce tournoi",
+            ),
+            ApiError::TournamentFull => (
+                StatusCode::CONFLICT,
+                "tournament_full",
+                "Ce tournoi a atteint son nombre maximum de participants",
+            ),
+            ApiError::TournamentLocked => (
+                StatusCode::CONFLICT,
+                "tournament_locked",
+                "Le tournoi est en cours ou terminé : cette modification est verrouillée",
+            ),
+            ApiError::StepPositionTaken => (
+                StatusCode::CONFLICT,
+                "step_position_taken",
+                "Une étape occupe déjà cette position dans le tournoi",
+            ),
+            ApiError::RegistrationClosed => (
+                StatusCode::CONFLICT,
+                "registration_closed",
+                "Les inscriptions à ce tournoi ne sont pas ouvertes",
+            ),
+            ApiError::InvalidTransition => (
+                StatusCode::CONFLICT,
+                "invalid_status_transition",
+                "Ce changement de statut n'est pas possible depuis le statut actuel",
             ),
             ApiError::EmailTaken => (
                 StatusCode::CONFLICT,

@@ -1,14 +1,13 @@
+import { useTranslation } from '@/i18n';
 import { Redirect } from 'expo-router';
-
+import { ActivityIndicator } from 'react-native';
 import { useAuth } from '@/features/auth/session';
-import AppNavigator from '@/navigation/AppNavigator';
-
 export default function IndexScreen() {
-  const { token, user } = useAuth();
-
-  if (!token || !user) {
-    return <Redirect href="/register" />;
-  }
-
-  return <AppNavigator />;
+  const { t } = useTranslation();
+  const { user, initializing } = useAuth();
+  if (initializing)
+    return <ActivityIndicator accessibilityLabel={t('common.restoring')} />;
+  return (
+    <Redirect href={user ? '/(authenticated)/(tabs)/profile' : '/login'} />
+  );
 }
