@@ -18,15 +18,16 @@ npm run build     # typecheck + build de production dans dist/
 
 | Dossier | Contenu |
 |---|---|
-| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `NotFoundPage` |
-| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin), `games/` (carte, image, formulaire, confirmation de suppression) |
+| `src/pages/` | Écrans : `LoginPage`, `RegisterPage`, `HomePage` (zone authentifiée), `GamesPage`, `GameDetailsPage`, `GameEditorPage`, `GameTransferPage`, `StatsPage`, `StatEditorPage`, `StatTransferPage`, `NotFoundPage` |
+| `src/components/` | `ui/` (shadcn), `form/` (champ accessible, résumé d'erreurs), `layout/` (shell, en-tête), `home/` (blocs du tableau de bord), `auth/` (routes protégée, invité, admin), `games/` (carte, image, formulaire), `stats/` (formulaire, section « statistiques » d'un jeu), `common/` (confirmation de suppression, écran d'import/export partagé) |
 | `src/lib/api/` | Client HTTP (`client.ts`), appels d'authentification (`auth.ts`), lecture des erreurs serveur |
 | `src/lib/auth/` | `AuthProvider`, `useAuth` (rôle, `isAdmin`), stockage observable des tokens (`token-store.ts`), renouvellement de session (`session.ts`), lecture des claims JWT (`jwt.ts`) |
 | `src/features/games/` | Types, appels API, validation, import/export de fichiers, messages d'erreur |
+| `src/features/stats/` | Types, appels API (définitions et associations jeu/statistique), validation, messages d'erreur |
 | `src/i18n/` | Traductions FR/EN (`fr.ts`, `en.ts`), `I18nProvider`, `LanguageSwitcher` |
 | `src/lib/validation/` | Règles de validation alignées sur le backend |
 
-Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs).
+Routes : `/login`, `/register`, `/app` (protégée, redirige vers `/login`), `/games`, `/games/:id` (tous les rôles), `/games/new`, `/games/:id/edit`, `/games/transfer` (administrateurs), `/stats` (tous les rôles), `/stats/new`, `/stats/:id/edit`, `/stats/transfer` (administrateurs).
 
 `/app` est la page principale, atteinte après connexion : en-tête avec navigation principale, nom du compte et déconnexion, puis un tableau de bord en quatre blocs (tournois en direct, mes pronostics, classement général, mes groupes). Les blocs affichent « Bientôt disponible » tant que les API correspondantes n'existent pas ; pour en brancher un, passer le contenu réel en `children` de `DashboardSection` (`src/components/home/`). Pour ajouter une entrée de navigation, compléter `NAV_ITEMS` dans `src/components/layout/AppHeader.tsx`.
 
@@ -55,8 +56,18 @@ Contrat : `GET /games?limit=&offset=` (ordre alphabétique du serveur), `GET /ga
 - **Validation** (`features/games/validation.ts`), identique au serveur : nom 1–64 caractères après trim, description ≤ 2000 caractères, ≤ 10 images, URL `http(s)` sans espace ≤ 2048 octets UTF-8. Un nom déjà pris (409 `game_name_taken`, insensible à la casse) est affiché sur le champ.
 - **Export** : le fichier du serveur est téléchargé tel quel (`Content-Disposition` pour le nom, repli `games.<format>`).
 - **Import** : contrôles locaux (extension `.json`/`.csv`, 1 octet–256 Kio, UTF-8, JSON syntaxiquement valide) puis envoi du corps brut ; le résultat `{ created, updated }` et `errors.file` du serveur sont affichés.
-- **Statistiques** : hors périmètre. Les exports contiennent des statistiques vides et le serveur refuse les imports qui en contiennent.
+- **Statistiques des jeux** : l'export et l'import de jeux transportent la liste `stats` (`name`, `key`, `type`) de chaque jeu ; importer un jeu remplace les statistiques qui lui sont liées (voir la section suivante).
 - Les types de `/games` sont écrits à la main : l'OpenAPI du dépôt ne décrit pas encore cette ressource.
+
+## Statistiques
+
+Définitions de statistiques (`flat` ou `percent`) et leurs associations aux jeux. Contrat : `GET /stats?limit=&offset=` (alphabétique), `GET /stats/{id}`, `POST /stats` (201), `PATCH /stats/{id}` (champs modifiés uniquement), `DELETE /stats/{id}` (204 ; **409 `stat_in_use`** si un tournoi en cours s'en sert), `GET /games/{id}/stats`, `PUT /games/{id}/stats/{stat_id}` (204, sans effet si déjà liée), `DELETE /games/{id}/stats/{stat_id}` (204, 404 si la liaison n'existe pas), `GET /stats/export?format=json|csv`, `POST /stats/import?format=json|csv` (corps brut, 256 Kio max). Tous les rôles consultent ; seuls les administrateurs créent, modifient, suppriment, associent, importent et exportent.
+
+- **Catalogue** (`/stats`) : même pagination que les jeux (taille 12, `limit=13`, `?page=`), lecture seule pour `user` et `watcher`.
+- **Fiche d'un jeu** : section « Statistiques du jeu » (`GameStatsSection`). Un administrateur associe une statistique existante (liste des statistiques pas encore liées) ou la retire ; la liste est relue après chaque modification, et un 404 sur une liaison déjà supprimée relit aussi la liste.
+- **Validation** (`features/stats/validation.ts`), identique au serveur : nom 1–64 caractères après trim ; clé de 64 caractères maximum au format `^[a-z0-9]+(_[a-z0-9]+)*$` (unicité contrôlée par le serveur : **409 `stat_key_taken`** affiché sur le champ) ; type `flat` ou `percent`.
+- **Import / export** : écran partagé avec les jeux (`components/common/TransferView.tsx`), fichiers `stats.json` / `stats.csv`. JSON `{ "version": 1, "stats": [{ "name", "key", "type", "games": [] }] }`, CSV `name,key,type,games`. Importer une statistique dont la clé existe la met à jour et **remplace** ses jeux liés ; un fichier invalide renvoie `errors.file`, affiché tel quel.
+- Hors périmètre : saisie de valeurs de statistiques par match. Les types de `/stats` sont écrits à la main (l'OpenAPI du dépôt ne les décrit pas encore).
 
 ## Langues
 

@@ -53,6 +53,23 @@ export default function AuthenticatedLayout() {
         name="games/transfer"
         options={{ title: t('games.transfer') }}
       />
+      <Stack.Screen
+        name="games/[id]/stats"
+        options={{ title: t('stats.manageGame') }}
+      />
+      <Stack.Screen name="stats/index" options={{ title: t('stats.title') }} />
+      <Stack.Screen
+        name="stats/create"
+        options={{ title: t('stats.create') }}
+      />
+      <Stack.Screen
+        name="stats/[id]/edit"
+        options={{ title: t('stats.edit') }}
+      />
+      <Stack.Screen
+        name="stats/transfer"
+        options={{ title: t('stats.transfer') }}
+      />
     </Stack>
   );
 }

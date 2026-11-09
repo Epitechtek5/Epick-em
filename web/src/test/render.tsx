@@ -84,3 +84,16 @@ export function routeFetch(
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
+
+export const STAT_A = {
+  id: '55555555-5555-4555-8555-555555555555',
+  name: 'Éliminations',
+  key: 'kills',
+  type: 'flat' as const,
+}
+export const STAT_B = {
+  id: '66666666-6666-4666-8666-666666666666',
+  name: 'Précision',
+  key: 'accuracy',
+  type: 'percent' as const,
+}

@@ -50,7 +50,7 @@ export default function GamesPage() {
           <h1 className="text-3xl font-semibold tracking-tight">{t('games.title')}</h1>
           <p className="text-muted-foreground">{t('games.description')}</p>
         </div>
-        <div className="flex flex-wrap gap-2" role="group" aria-label={isAdmin ? t('games.adminActions') : t('games.title')}>
+        <div className="flex flex-wrap gap-2 sm:flex-nowrap" role="group" aria-label={isAdmin ? t('games.adminActions') : t('games.title')}>
           <Button variant="outline" onClick={reload} disabled={state.status === 'loading'}>
             <Icon icon={RefreshIcon} />
             {t('games.refresh')}

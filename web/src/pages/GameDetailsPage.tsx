@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { DeleteGameDialog } from '@/components/games/DeleteGameDialog'
 import { GameImage } from '@/components/games/GameImage'
 import { StateMessage } from '@/components/games/StateMessage'
+import { GameStatsSection } from '@/components/stats/GameStatsSection'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { deleteGame, getGame } from '@/features/games/api'
@@ -150,6 +151,8 @@ export default function GameDetailsPage() {
           </div>
         </article>
       ) : null}
+
+      {game ? <GameStatsSection gameId={game.id} /> : null}
     </div>
   )
 }

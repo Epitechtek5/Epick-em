@@ -12,6 +12,9 @@ import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import RegisterPage from '@/pages/RegisterPage'
+import StatEditorPage from '@/pages/StatEditorPage'
+import StatTransferPage from '@/pages/StatTransferPage'
+import StatsPage from '@/pages/StatsPage'
 
 export default function App() {
   return (
@@ -29,8 +32,12 @@ export default function App() {
             <Route path="/games/new" element={<GameEditorPage />} />
             <Route path="/games/transfer" element={<GameTransferPage />} />
             <Route path="/games/:id/edit" element={<GameEditorPage />} />
+            <Route path="/stats/new" element={<StatEditorPage />} />
+            <Route path="/stats/transfer" element={<StatTransferPage />} />
+            <Route path="/stats/:id/edit" element={<StatEditorPage />} />
           </Route>
           <Route path="/games/:id" element={<GameDetailsPage />} />
+          <Route path="/stats" element={<StatsPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>

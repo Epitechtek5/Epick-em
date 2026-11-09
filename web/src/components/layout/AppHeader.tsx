@@ -10,6 +10,7 @@ import { LanguageSwitcher } from '@/i18n/LanguageSwitcher'
 const NAV_ITEMS: Array<{ to: string; label: MessageKey }> = [
   { to: '/app', label: 'nav.home' },
   { to: '/games', label: 'nav.games' },
+  { to: '/stats', label: 'nav.stats' },
 ]
 
 // En-tête commun. Pour un utilisateur connecté : navigation principale, nom du

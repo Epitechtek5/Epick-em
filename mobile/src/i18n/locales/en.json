@@ -126,6 +126,11 @@
     "title": "Games",
     "description": "Explore the game catalog.",
     "create": "Create game",
+    "actions": {
+      "create": "Create",
+      "transfer": "Transfer",
+      "stats": "Stats"
+    },
     "edit": "Edit game",
     "details": "Game details",
     "transfer": "Import / Export",
@@ -183,6 +188,71 @@
       "sharing": "File sharing is unavailable on this device.",
       "readFile": "Unable to read the selected file. Choose another local file and try again.",
       "saveFile": "Unable to save the file. Check folder access and available storage."
+    }
+  },
+  "stats": {
+    "title": "Statistics",
+    "description": "Manage statistic definitions used by games.",
+    "gameTitle": "Statistics",
+    "manageGame": "Manage statistics",
+    "associated": "Associated statistics",
+    "available": "Catalog",
+    "alreadyAssociated": "Associated",
+    "addAssociation": "Associate with game",
+    "removeAssociation": "Remove association",
+    "addNamed": "Associate {{name}} with this game",
+    "removeNamed": "Remove {{name}} from this game",
+    "confirmRemoval": "Remove {{name}} from this game?",
+    "name": "Name",
+    "key": "Key",
+    "type": "Type",
+    "types": {
+      "flat": "Flat",
+      "percent": "Percent"
+    },
+    "information": "Statistic definition",
+    "formHint": "Name, unique key and type",
+    "create": "Create statistic",
+    "edit": "Edit statistic",
+    "editNamed": "Edit {{name}}",
+    "delete": "Delete statistic",
+    "deleting": "Deleting…",
+    "confirmDelete": "Permanently delete {{name}}? Its game associations will also be removed.",
+    "saving": "Saving…",
+    "empty": "No statistics found.",
+    "gameEmpty": "No statistics are associated with this game.",
+    "loading": "Loading statistics",
+    "refresh": "Refresh statistics",
+    "transfer": "Import / export",
+    "import": "Import statistics",
+    "importHint": "Select a UTF-8 JSON or CSV file (maximum 256 KiB). Referenced games must exist.",
+    "export": "Export statistics",
+    "exportHint": "Save or share all statistic definitions and their game associations.",
+    "chooseFile": "Choose file",
+    "saveFile": "Save file",
+    "shareFile": "Share file",
+    "transferring": "Transferring statistics",
+    "shareClosed": "Share sheet closed.",
+    "exportSaved": "Statistics file saved.",
+    "transferCanceled": "File selection canceled.",
+    "importResult": "Created {{created}}, updated {{updated}} statistics.",
+    "returnToCatalog": "Return to statistics",
+    "validation": {
+      "name": "Name must contain 1–64 characters after trimming.",
+      "key": "Key must be at most 64 lowercase letters, digits or underscore-separated segments.",
+      "type": "Choose Flat or Percent.",
+      "fileFormat": "Choose a .json or .csv file.",
+      "fileSize": "File must be between 1 byte and 256 KiB.",
+      "fileContent": "File must contain valid UTF-8; JSON files must be valid JSON."
+    },
+    "errors": {
+      "keyTaken": "This statistic key is already in use.",
+      "inUse": "This statistic is used by an ongoing tournament.",
+      "notFound": "Statistic or game not found.",
+      "file": "The import file is invalid.",
+      "readFile": "Unable to read the selected file.",
+      "saveFile": "Unable to save the file.",
+      "sharing": "Unable to share the file."
     }
   }
 }

@@ -14,7 +14,7 @@ export interface GameInput {
 }
 
 export type GameChanges = Partial<GameInput>
-export type GameFormat = 'json' | 'csv'
+export type { FileFormat as GameFormat } from '@/lib/api/file-format'
 
 export interface ImportReport {
   created: number

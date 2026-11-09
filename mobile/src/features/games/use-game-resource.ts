@@ -3,7 +3,10 @@ import { useFocusEffect } from 'expo-router';
 import { useAuth } from '@/features/auth/session';
 import { gameErrorKey } from './errors';
 
-export function useGameResource<T>(load: (token: string) => Promise<T>) {
+export function useGameResource<T>(
+  load: (token: string) => Promise<T>,
+  errorKey: (error: unknown) => string = gameErrorKey,
+) {
   const { token, refreshUser } = useAuth();
   const tokenRef = useRef(token);
   const generation = useRef(0);
@@ -32,7 +35,7 @@ export function useGameResource<T>(load: (token: string) => Promise<T>) {
           if (generation.current === requestGeneration) setData(result);
         } catch (caught) {
           if (generation.current === requestGeneration)
-            setError(gameErrorKey(caught));
+            setError(errorKey(caught));
         } finally {
           if (generation.current === requestGeneration) {
             setLoading(false);
@@ -44,7 +47,7 @@ export function useGameResource<T>(load: (token: string) => Promise<T>) {
       pending.current = operation;
       return operation;
     },
-    [load],
+    [load, errorKey],
   );
 
   useFocusEffect(
@@ -60,5 +63,5 @@ export function useGameResource<T>(load: (token: string) => Promise<T>) {
     }, [reload, refreshUser]),
   );
 
-  return { data, loading, refreshing, error, reload };
+  return { data, loading, refreshing, error, reload, setData };
 }

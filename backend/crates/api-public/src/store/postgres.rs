@@ -2,7 +2,8 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Role, StoreError, UserProfile, UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, Role, Stat, StatInput, StatUpdate, StoreError,
+    UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
@@ -12,6 +13,8 @@ use uuid::Uuid;
 
 /// Code SQLSTATE d'une violation de contrainte d'unicité.
 const UNIQUE_VIOLATION: &str = "23505";
+/// Code SQLSTATE d'une violation de clé étrangère.
+const FOREIGN_KEY_VIOLATION: &str = "23503";
 
 /// Durée de vie d'un profil en cache. Les modifications et suppressions invalident l'entrée ;
 /// le TTL ne borne que la durée d'une valeur périmée si l'invalidation échoue.
@@ -74,6 +77,26 @@ fn game_name_taken(err: sqlx::Error) -> StoreError {
     match &err {
         sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
             StoreError::GameNameTaken
+        }
+        _ => err.into(),
+    }
+}
+
+type StatRow = (Uuid, String, String, String);
+
+fn stat(row: StatRow) -> Result<Stat, StoreError> {
+    Ok(Stat {
+        id: row.0,
+        name: row.1,
+        key: row.2,
+        kind: row.3.parse()?,
+    })
+}
+
+fn stat_key_taken(err: sqlx::Error) -> StoreError {
+    match &err {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some(UNIQUE_VIOLATION) => {
+            StoreError::StatKeyTaken
         }
         _ => err.into(),
     }
@@ -359,5 +382,202 @@ impl AuthStore for PgStore {
         }
         tx.commit().await?;
         Ok(result)
+    }
+
+    async fn list_stats(&self, limit: i64, offset: i64) -> Result<Vec<Stat>, StoreError> {
+        sqlx::query_as::<_, StatRow>(
+            "SELECT id, name, key, type FROM stats \
+             ORDER BY lower(name), id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(stat)
+        .collect()
+    }
+
+    async fn find_stat(&self, id: Uuid) -> Result<Option<Stat>, StoreError> {
+        sqlx::query_as::<_, StatRow>("SELECT id, name, key, type FROM stats WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(stat)
+            .transpose()
+    }
+
+    async fn create_stat(&self, input: StatInput) -> Result<Stat, StoreError> {
+        sqlx::query_as::<_, StatRow>(
+            "INSERT INTO stats (name, key, type) VALUES ($1, $2, $3) \
+             RETURNING id, name, key, type",
+        )
+        .bind(input.name)
+        .bind(input.key)
+        .bind(input.kind.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(stat_key_taken)
+        .and_then(stat)
+    }
+
+    async fn update_stat(&self, id: Uuid, update: StatUpdate) -> Result<Option<Stat>, StoreError> {
+        sqlx::query_as::<_, StatRow>(
+            "UPDATE stats SET \
+                 name = COALESCE($2, name), \
+                 key = COALESCE($3, key), \
+                 type = COALESCE($4, type) \
+             WHERE id = $1 RETURNING id, name, key, type",
+        )
+        .bind(id)
+        .bind(update.name)
+        .bind(update.key)
+        .bind(update.kind.map(|kind| kind.as_str()))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(stat_key_taken)?
+        .map(stat)
+        .transpose()
+    }
+
+    async fn delete_stat(&self, id: Uuid) -> Result<bool, StoreError> {
+        // Le barème des tournois (`scoring_rule`, #62) n'existe pas encore : aucune statistique
+        // n'est utilisée par un tournoi `ongoing`. Le contrôle `StatInUse` se branche ici avec
+        // cette table.
+        let result = sqlx::query("DELETE FROM stats WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_game_stats(&self, game_id: Uuid) -> Result<Option<Vec<Stat>>, StoreError> {
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM games WHERE id = $1)")
+                .bind(game_id)
+                .fetch_one(&self.pool)
+                .await?;
+        if !exists {
+            return Ok(None);
+        }
+        sqlx::query_as::<_, StatRow>(
+            "SELECT s.id, s.name, s.key, s.type FROM stats s \
+             JOIN stat_game sg ON sg.stat_id = s.id WHERE sg.game_id = $1 \
+             ORDER BY lower(s.name), s.id",
+        )
+        .bind(game_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(stat)
+        .collect::<Result<_, _>>()
+        .map(Some)
+    }
+
+    async fn link_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "INSERT INTO stat_game (stat_id, game_id) VALUES ($1, $2) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(stat_id)
+        .bind(game_id)
+        .execute(&self.pool)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sqlx::Error::Database(db))
+                if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn unlink_stat(&self, game_id: Uuid, stat_id: Uuid) -> Result<bool, StoreError> {
+        let result = sqlx::query("DELETE FROM stat_game WHERE stat_id = $1 AND game_id = $2")
+            .bind(stat_id)
+            .bind(game_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let mut result = Vec::with_capacity(stats.len());
+        for input in stats {
+            // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour.
+            let row = sqlx::query_as::<_, (Uuid, String, String, String, bool)>(
+                "INSERT INTO stats (name, key, type) VALUES ($1, $2, $3) \
+                 ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type \
+                 RETURNING id, name, key, type, (xmax = 0)",
+            )
+            .bind(input.name)
+            .bind(input.key)
+            .bind(input.kind.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            result.push((stat((row.0, row.1, row.2, row.3))?, row.4));
+        }
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    async fn set_game_stats(&self, game_id: Uuid, stat_ids: Vec<Uuid>) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM stat_game WHERE game_id = $1")
+            .bind(game_id)
+            .execute(&mut *tx)
+            .await?;
+        let inserted = sqlx::query(
+            "INSERT INTO stat_game (stat_id, game_id) SELECT unnest($1::uuid[]), $2 \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(&stat_ids)
+        .bind(game_id)
+        .execute(&mut *tx)
+        .await;
+        match inserted {
+            Ok(_) => {
+                tx.commit().await?;
+                Ok(true)
+            }
+            // Le jeu ou une statistique n'existe pas : la transaction est abandonnée.
+            Err(sqlx::Error::Database(db))
+                if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn set_stat_games(&self, stat_id: Uuid, game_ids: Vec<Uuid>) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM stat_game WHERE stat_id = $1")
+            .bind(stat_id)
+            .execute(&mut *tx)
+            .await?;
+        let inserted = sqlx::query(
+            "INSERT INTO stat_game (stat_id, game_id) SELECT $1, unnest($2::uuid[]) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(stat_id)
+        .bind(&game_ids)
+        .execute(&mut *tx)
+        .await;
+        match inserted {
+            Ok(_) => {
+                tx.commit().await?;
+                Ok(true)
+            }
+            Err(sqlx::Error::Database(db))
+                if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 }
