@@ -23,6 +23,12 @@ struct RefreshToken {
     revoked: bool,
 }
 
+struct ResetToken {
+    user_id: Uuid,
+    expires_at: Instant,
+    used: bool,
+}
+
 #[derive(Default)]
 struct State {
     users: Vec<UserRecord>,
@@ -32,6 +38,7 @@ struct State {
     /// Statistiques que le barème d'un tournoi en cours rend indélébiles.
     locked_stats: HashSet<Uuid>,
     tokens: HashMap<String, RefreshToken>,
+    reset_tokens: HashMap<String, ResetToken>,
     teams: Vec<Team>,
     team_members: Vec<(Uuid, TeamMember)>,
     tournament_teams: Vec<TournamentTeam>,
@@ -89,6 +96,7 @@ impl AuthStore for MemoryStore {
     async fn create_user(
         &self,
         username: &str,
+        email: Option<&str>,
         password_hash: &str,
     ) -> Result<UserRecord, StoreError> {
         let mut state = self.state();
@@ -99,11 +107,20 @@ impl AuthStore for MemoryStore {
         {
             return Err(StoreError::UsernameTaken);
         }
+        if let Some(email) = email
+            && state
+                .users
+                .iter()
+                .any(|user| user.email.as_deref() == Some(email))
+        {
+            return Err(StoreError::EmailTaken);
+        }
         let user = UserRecord {
             id: Uuid::new_v4(),
             username: username.to_string(),
             password_hash: password_hash.to_string(),
             role: Role::User,
+            email: email.map(str::to_string),
         };
         state.users.push(user.clone());
         Ok(user)
@@ -118,6 +135,15 @@ impl AuthStore for MemoryStore {
             .users
             .iter()
             .find(|user| user.username.eq_ignore_ascii_case(username))
+            .cloned())
+    }
+
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, StoreError> {
+        Ok(self
+            .state()
+            .users
+            .iter()
+            .find(|user| user.email.as_deref() == Some(email))
             .cloned())
     }
 
@@ -164,6 +190,14 @@ impl AuthStore for MemoryStore {
         {
             return Err(StoreError::UsernameTaken);
         }
+        if let Some(email) = &update.email
+            && state
+                .users
+                .iter()
+                .any(|u| u.id != id && u.email.as_deref() == Some(email))
+        {
+            return Err(StoreError::EmailTaken);
+        }
         let Some(user) = state.users.iter_mut().find(|user| user.id == id) else {
             return Ok(None);
         };
@@ -176,6 +210,9 @@ impl AuthStore for MemoryStore {
         if let Some(role) = update.role {
             user.role = role;
         }
+        if let Some(email) = update.email {
+            user.email = Some(email);
+        }
         Ok(Some(UserProfile::from(&*user)))
     }
 
@@ -184,6 +221,7 @@ impl AuthStore for MemoryStore {
         let before = state.users.len();
         state.users.retain(|user| user.id != id);
         state.tokens.retain(|_, token| token.user_id != id);
+        state.reset_tokens.retain(|_, token| token.user_id != id);
         Ok(state.users.len() != before)
     }
 
@@ -1780,6 +1818,53 @@ impl AuthStore for MemoryStore {
                 registered_at: p.registered_at.unwrap_or_else(|| now.clone()),
             }));
         Ok(())
+    }
+
+    async fn insert_password_reset_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        ttl: Duration,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state();
+        for token in state.reset_tokens.values_mut() {
+            if token.user_id == user_id {
+                token.used = true;
+            }
+        }
+        state.reset_tokens.insert(
+            token_hash.to_string(),
+            ResetToken {
+                user_id,
+                expires_at: Instant::now() + ttl,
+                used: false,
+            },
+        );
+        Ok(())
+    }
+
+    async fn consume_password_reset_token(
+        &self,
+        token_hash: &str,
+        password_hash: &str,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let user_id = match state.reset_tokens.get_mut(token_hash) {
+            Some(token) if !token.used && token.expires_at > Instant::now() => {
+                token.used = true;
+                token.user_id
+            }
+            _ => return Ok(false),
+        };
+        if let Some(user) = state.users.iter_mut().find(|user| user.id == user_id) {
+            user.password_hash = password_hash.to_string();
+        }
+        for token in state.tokens.values_mut() {
+            if token.user_id == user_id {
+                token.revoked = true;
+            }
+        }
+        Ok(true)
     }
 }
 

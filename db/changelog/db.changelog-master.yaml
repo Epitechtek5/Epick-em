@@ -9,6 +9,8 @@ databaseChangeLog:
   - include:
       file: changelog/0004-allow-watcher-role.yaml
   - include:
+      file: changelog/0005-password-reset.yaml
+  - include:
       file: changelog/0005-create-games.yaml
   - include:
       file: changelog/0006-seed-games.yaml

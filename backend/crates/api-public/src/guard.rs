@@ -24,7 +24,8 @@ pub enum RoutePolicy {
 /// La documentation OpenAPI (`/docs`, `/openapi.json`) est publique.
 pub fn route_policy(path: &str) -> RoutePolicy {
     match path {
-        "/register" | "/login" | "/hello" | "/health" | "/openapi.json" => RoutePolicy::Public,
+        "/register" | "/login" | "/forgot-password" | "/reset-password" | "/hello" | "/health"
+        | "/openapi.json" => RoutePolicy::Public,
         "/docs" => RoutePolicy::Public,
         _ if path.starts_with("/docs/") => RoutePolicy::Public,
         "/refresh" => RoutePolicy::SignatureOnly,
@@ -74,6 +75,8 @@ mod tests {
         for path in [
             "/register",
             "/login",
+            "/forgot-password",
+            "/reset-password",
             "/hello",
             "/health",
             "/openapi.json",
