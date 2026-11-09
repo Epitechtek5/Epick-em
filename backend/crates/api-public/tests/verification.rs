@@ -59,7 +59,9 @@ async fn registration_and_login_require_verification() {
     );
     assert_eq!(mailer.verification.lock().unwrap().len(), 1);
     let link = mailer.verification.lock().unwrap()[0].1.clone();
-    let token = link.strip_prefix(&format!("{}/verify-email?token=", common::PUBLIC_URL)).unwrap();
+    let token = link
+        .strip_prefix(&format!("{}/verify-email?token=", common::PUBLIC_URL))
+        .unwrap();
     assert_eq!(token.len(), 64);
     let token = json!({"token":token});
     assert_eq!(

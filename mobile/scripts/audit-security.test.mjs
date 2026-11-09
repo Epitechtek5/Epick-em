@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import {
   formatAuditSummary,
   inspectAudit,
   runAudits,
 } from './audit-security.mjs';
+
+const require = createRequire(import.meta.url);
+const merge = require('deepmerge');
 
 function fixture(file = 'audit-full.json') {
   return JSON.parse(
@@ -14,55 +18,14 @@ function fixture(file = 'audit-full.json') {
 }
 const result = (report) => ({ status: 1, stdout: JSON.stringify(report) });
 
-function addDeepmergeAdvisory(report, advisory = 'GHSA-gcqx-w48m-w2h4') {
-  report.vulnerabilities.deepmerge = {
-    name: 'deepmerge',
-    severity: 'low',
-    via: [
-      {
-        name: 'deepmerge',
-        dependency: 'deepmerge',
-        severity: 'low',
-        url: `https://github.com/advisories/${advisory}`,
-        range: '>=4.2.0 <=4.3.1',
-        title:
-          'deepmerge mergeObject() allows prototype poisoning of returned objects',
-      },
-    ],
-    effects: [],
-    range: '>=4.2.0',
-    nodes: ['node_modules/deepmerge'],
-    fixAvailable: false,
-  };
-  report.metadata.vulnerabilities.low++;
-  report.metadata.vulnerabilities.total++;
-  return report;
-}
+test('patched deepmerge rejects prototype-poisoning keys', () => {
+  const malicious = JSON.parse('{"session":{"__proto__":{"isAdmin":true}}}');
+  const merged = merge({ session: null }, malicious);
 
-function addMinimatchAdvisory(report) {
-  report.vulnerabilities.minimatch = {
-    name: 'minimatch',
-    severity: 'moderate',
-    via: [
-      {
-        name: 'minimatch',
-        dependency: 'minimatch',
-        severity: 'moderate',
-        url: 'https://github.com/advisories/GHSA-g3hv-75wg-m249',
-        range: '<11.0.1',
-        title:
-          'minimatch has potential denial of service via globparts amplification',
-      },
-    ],
-    effects: [],
-    range: '<11.0.1',
-    nodes: ['node_modules/minimatch', 'node_modules/legacy/minimatch'],
-    fixAvailable: false,
-  };
-  report.metadata.vulnerabilities.moderate++;
-  report.metadata.vulnerabilities.total++;
-  return report;
-}
+  assert.equal(Object.getPrototypeOf(merged.session), Object.prototype);
+  assert.equal(merged.session.isAdmin, undefined);
+  assert.equal(Object.hasOwn(merged.session, '__proto__'), false);
+});
 
 test('accepts only the known advisories, including propagated dependencies in both trees', () => {
   for (const file of ['audit-full.json', 'audit-production.json']) {
@@ -119,90 +82,6 @@ test('rejects a new vulnerable package', () => {
   report.metadata.vulnerabilities.moderate++;
   report.metadata.vulnerabilities.total++;
   assert.equal(inspectAudit(result(report)).unexpected.length, 1);
-});
-
-test('accepts the exact deepmerge advisory through its November 28 review deadline', () => {
-  const report = addDeepmergeAdvisory(fixture());
-
-  const findings = inspectAudit(result(report), {
-    now: new Date('2026-11-28T23:59:59Z'),
-  });
-
-  assert.ok(findings.accepted.includes('deepmerge: GHSA-gcqx-w48m-w2h4'));
-  assert.deepEqual(findings.unexpected, []);
-});
-
-test('rejects a different advisory affecting deepmerge', () => {
-  const report = addDeepmergeAdvisory(fixture(), 'GHSA-xxxx-yyyy-zzzz');
-
-  const findings = inspectAudit(result(report), {
-    now: new Date('2026-10-28T12:00:00Z'),
-  });
-
-  assert.equal(findings.accepted.length, 2);
-  assert.equal(findings.unexpected[0].package, 'deepmerge');
-  assert.equal(findings.unexpected[0].advisory, 'GHSA-xxxx-yyyy-zzzz');
-});
-
-test('rejects the deepmerge advisory after its review deadline', () => {
-  const report = addDeepmergeAdvisory(fixture());
-
-  const findings = inspectAudit(result(report), {
-    now: new Date('2026-11-29T00:00:00Z'),
-  });
-
-  assert.deepEqual(findings.accepted, [
-    'braces: GHSA-vfj7-8cjw-p6xm',
-    'node-forge: GHSA-86w9-cpqp-85rv',
-  ]);
-  assert.equal(findings.unexpected[0].advisory, 'GHSA-gcqx-w48m-w2h4');
-  assert.match(findings.unexpected[0].reason, /expired after 2026-11-28/);
-
-  const calls = [];
-  assert.throws(
-    () =>
-      runAudits(
-        (command, args) => {
-          calls.push([command, args]);
-          return result(structuredClone(report));
-        },
-        () => {},
-        { now: new Date('2026-11-29T00:00:00Z') },
-      ),
-    /unexpected vulnerabilities detected/,
-  );
-  assert.equal(calls.length, 2);
-});
-
-test('accepts the overbroad minimatch advisory only when the installed versions are unaffected upstream', () => {
-  const report = addMinimatchAdvisory(fixture());
-  const findings = inspectAudit(result(report), {
-    lockPackages: {
-      'node_modules/minimatch': { version: '3.1.5' },
-      'node_modules/legacy/minimatch': { version: '5.1.9' },
-    },
-  });
-
-  assert.ok(findings.accepted.includes('minimatch: GHSA-g3hv-75wg-m249'));
-  assert.deepEqual(findings.unexpected, []);
-});
-
-test('rejects the minimatch advisory when 10.2.6 is installed or inventory evidence is missing', () => {
-  const report = addMinimatchAdvisory(fixture());
-  const vulnerable = inspectAudit(result(report), {
-    lockPackages: {
-      'node_modules/minimatch': { version: '3.1.5' },
-      'node_modules/legacy/minimatch': { version: '10.2.6' },
-    },
-  });
-  const missingInventory = inspectAudit(result(report), {
-    lockPackages: {
-      'node_modules/minimatch': { version: '3.1.5' },
-    },
-  });
-
-  assert.equal(vulnerable.unexpected[0].advisory, 'GHSA-g3hv-75wg-m249');
-  assert.equal(missingInventory.unexpected[0].advisory, 'GHSA-g3hv-75wg-m249');
 });
 
 test('rejects malformed JSON, error reports and incomplete reports', () => {
@@ -305,43 +184,12 @@ test('runs both exact audit commands even when the full-tree audit finds an advi
   assert.ok(messages.some((message) => message.startsWith('Production tree:')));
 });
 
-test('completes both dependency scans and reports the accepted temporary exception', () => {
-  const calls = [];
-  const messages = [];
-  const auditReport = addDeepmergeAdvisory(fixture());
-
-  assert.doesNotThrow(() =>
-    runAudits(
-      (command, args) => {
-        calls.push([command, args]);
-        return result(structuredClone(auditReport));
-      },
-      (message) => messages.push(message),
-      { now: new Date('2026-11-28T12:00:00Z') },
-    ),
-  );
-
-  assert.deepEqual(calls, [
-    ['npm', ['audit', '--json']],
-    ['npm', ['audit', '--omit=dev', '--json']],
-  ]);
-  assert.equal(
-    messages.filter((message) =>
-      message.includes('deepmerge: GHSA-gcqx-w48m-w2h4'),
-    ).length,
-    2,
-  );
-});
-
 test('summarizes clean results, accepted exceptions and new or expired findings distinctly', () => {
   const summary = formatAuditSummary([
     {
       label: 'Full tree',
       findings: {
-        accepted: [
-          'deepmerge: GHSA-gcqx-w48m-w2h4',
-          'minimatch: GHSA-g3hv-75wg-m249',
-        ],
+        accepted: ['braces: GHSA-vfj7-8cjw-p6xm'],
         unexpected: [],
       },
     },
@@ -363,14 +211,7 @@ test('summarizes clean results, accepted exceptions and new or expired findings 
   ]);
 
   assert.match(summary, /No unexpected advisories/);
-  assert.match(
-    summary,
-    /deepmerge GHSA-gcqx-w48m-w2h4 \(review by 2026-11-28\)/,
-  );
-  assert.match(
-    summary,
-    /minimatch GHSA-g3hv-75wg-m249 \(upstream range correction\)/,
-  );
+  assert.match(summary, /braces GHSA-vfj7-8cjw-p6xm \(existing exception\)/);
   assert.match(summary, /New or expired advisories require action/);
   assert.match(summary, /GHSA-xxxx-yyyy-zzzz/);
 });

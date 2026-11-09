@@ -210,7 +210,7 @@ fn decode_claims(token: &str, secret: &str, check_expiry: bool) -> Option<Claims
     .map(|data| data.claims)
 }
 
-/// Crée un compte.
+/// Crée un compte et renvoie directement les jetons, comme `/login`.
 #[utoipa::path(
     post,
     path = "/register",
