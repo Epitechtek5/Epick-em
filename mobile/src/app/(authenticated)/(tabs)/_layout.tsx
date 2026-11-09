@@ -3,6 +3,7 @@ import { TabIcon } from '@/components/ui/tab-icon';
 import { colors as themeColors } from '@/theme/colors';
 import Settings01Icon from '@hugeicons/core-free-icons/Settings01Icon';
 import UserGroupIcon from '@hugeicons/core-free-icons/UserGroupIcon';
+import GameController03Icon from '@hugeicons/core-free-icons/GameController03Icon';
 import { useReducedMotionPreference } from '@/lib/motion';
 import { useTheme } from '@react-navigation/native';
 import { useTranslation } from '@/i18n';
@@ -35,6 +36,21 @@ export default function TabsLayout() {
         sceneStyle: { backgroundColor: colors.background },
       }}
     >
+      <Tabs.Screen
+        name="games"
+        options={{
+          title: t('games.title'),
+          tabBarAccessibilityLabel: t('games.title'),
+          tabBarIcon: ({ focused, size }) => (
+            <TabIcon
+              icon={GameController03Icon}
+              size={size}
+              focused={focused}
+              testID="games-tab-icon"
+            />
+          ),
+        }}
+      />
       <Tabs.Screen
         name="profile"
         options={{

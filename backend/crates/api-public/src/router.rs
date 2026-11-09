@@ -23,7 +23,8 @@ fn api_routes(cfg: &mut ServiceConfig) {
     cfg.service(health)
         .service(hello)
         .configure(crate::auth::routes)
-        .configure(crate::users::routes);
+        .configure(crate::users::routes)
+        .configure(crate::games::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).
