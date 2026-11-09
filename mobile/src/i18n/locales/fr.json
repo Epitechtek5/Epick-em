@@ -373,7 +373,7 @@
     "participantType": { "solo": "Solo", "team": "Équipe" },
     "participantStatus": {
       "registered": "Inscrit",
-      "checked_in": "Pointé",
+      "checked_in": "Confirmé",
       "disqualified": "Disqualifié",
       "withdrawn": "Retiré"
     },
@@ -404,6 +404,12 @@
     },
     "registration": {
       "soloTitle": "S’inscrire au tournoi",
+      "chooseTeamTitle": "Choisissez votre équipe",
+      "participantCount": "{{count}} places confirmées sur {{capacity}}",
+      "journeyTitle": "Progression de l’inscription",
+      "journeyRegistered": "Inscription enregistrée",
+      "journeyConfirmed": "Présence confirmée",
+      "journeyCompetition": "Tournoi en cours",
       "soloHelp": "Votre compte actuel sera inscrit. Représenter une équipe du tournoi est facultatif.",
       "teamTitle": "Inscrire une équipe",
       "teamHelp": "Seul le propriétaire de l’équipe ou un administrateur peut l’inscrire. Le nombre de titulaires doit être exact ; les remplaçants ne sont pas comptabilisés.",
@@ -537,5 +543,115 @@
     "filterByGame": "Filtrer par jeu",
     "filterSelection": "Filtre de jeu : {{game}}",
     "noGames": "Aucun jeu disponible."
+  },
+  "steps": {
+    "title": "Étapes du tournoi",
+    "details": "Détails de l’étape",
+    "create": "Ajouter une étape",
+    "edit": "Modifier l’étape",
+    "loading": "Chargement des étapes du tournoi",
+    "empty": "Aucune étape n’est configurée.",
+    "progressionHint": "Les étapes sont ordonnées du premier tour jusqu’à la qualification finale.",
+    "open": "Ouvrir l’étape {{position}}",
+    "position": "Étape {{position}}",
+    "summary": "{{groups}} groupes · {{size}} participants par groupe · {{advance}} qualifiés par groupe",
+    "capacityProgression": "{{capacity}} participants · {{qualified}} qualifiés",
+    "configuration": "Configuration",
+    "groups": "Groupes et classements",
+    "group": "Groupe {{index}}",
+    "noGroups": "Les groupes apparaîtront après le démarrage de cette étape.",
+    "unknownParticipant": "Participant inconnu",
+    "points": "{{points}} pts",
+    "start": "Démarrer l’étape",
+    "close": "Clôturer l’étape",
+    "confirmTitle": "Confirmer l’action sur l’étape",
+    "confirmStart": "Démarrer cette étape et répartir aléatoirement les participants admissibles dans les groupes ? Cette répartition ne pourra plus être modifiée.",
+    "confirmClose": "Clôturer cette étape et laisser le serveur déterminer les qualifications ? L’étape suivante pourra démarrer automatiquement.",
+    "confirmDelete": "Supprimer cette étape et les données de ses groupes ?",
+    "startSuccess": "Étape démarrée et groupes constitués.",
+    "closeSuccess": "Étape clôturée et qualifications mises à jour.",
+    "format": {
+      "pool": "Poules",
+      "swiss": "Ronde suisse",
+      "single_elim": "Élimination directe",
+      "double_elim": "Double élimination"
+    },
+    "matchType": {
+      "duel": "Duel",
+      "ffa": "Chacun pour soi"
+    },
+    "status": {
+      "pending": "À venir",
+      "ongoing": "En cours",
+      "finished": "Terminée"
+    },
+    "participantStatus": {
+      "in": "En compétition",
+      "qualified": "Qualifié",
+      "eliminated": "Éliminé"
+    },
+    "fields": {
+      "position": "Position",
+      "format": "Format",
+      "matchType": "Type de match",
+      "groupCount": "Nombre de groupes",
+      "groupSize": "Participants par groupe",
+      "matchesPerGroup": "Matchs ou rondes par groupe",
+      "advancePerGroup": "Qualifiés par groupe",
+      "totalQualified": "Total qualifié"
+    },
+    "editor": {
+      "format": "Format et type de match",
+      "formatHelp": "Choisissez comment le serveur organise cette étape.",
+      "groups": "Configuration des groupes",
+      "groupsHelp": "Les rondes suisses et les formats à élimination utilisent un seul groupe.",
+      "matches": "Configuration des matchs et rondes",
+      "matchesHelp": "Cette valeur configure l’étape. La génération des matchs n’est pas encore disponible.",
+      "qualification": "Règles de qualification",
+      "qualificationHelp": "Le serveur applique ces règles à la clôture de l’étape."
+    },
+    "tiebreak": {
+      "title": "Critères de départage",
+      "help": "Ajoutez jusqu’à huit clés en minuscules, puis ordonnez-les par priorité.",
+      "criterion": "Critère de départage",
+      "add": "Ajouter le critère",
+      "placeholder": "Exemple : wins",
+      "empty": "Aucun critère de départage.",
+      "moveUp": "Remonter {{item}}",
+      "moveDown": "Descendre {{item}}",
+      "remove": "Supprimer {{item}}",
+      "limitation": "Le backend conserve cet ordre, mais n’évalue pas encore les critères de départage. En cas d’égalité, l’ordre d’inscription est actuellement utilisé."
+    },
+    "matches": {
+      "title": "Matchs et tableaux",
+      "limitation": "Le backend actuel ne génère pas les matchs, les appariements suisses ni les tableaux d’élimination au démarrage d’une étape."
+    },
+    "validation": {
+      "form": "Vérifiez les champs de l’étape signalés.",
+      "position": "Saisissez une position de 1 à 100.",
+      "format": "Choisissez un format pris en charge.",
+      "matchType": "Choisissez un type de match pris en charge.",
+      "groupCount": "Saisissez de 1 à 1 000 groupes.",
+      "groupSize": "Saisissez de 2 à 10 000 participants par groupe.",
+      "matchesPerGroup": "Saisissez de 1 à 1 000 matchs ou rondes.",
+      "advancePerGroup": "Le nombre de qualifiés doit être compris entre 1 et la taille du groupe.",
+      "tiebreak": "Utilisez au plus huit clés distinctes de 1 à 32 lettres minuscules, chiffres ou underscores.",
+      "tiebreakDuplicate": "Chaque critère de départage doit être unique.",
+      "singleGroup": "Les rondes suisses et les formats à élimination exigent un seul groupe.",
+      "totalCapacity": "Une étape peut contenir au plus 10 000 participants.",
+      "positionSequence": "Les positions doivent se suivre à partir de 1.",
+      "firstCapacity": "La capacité de la première étape doit correspondre à celle du tournoi.",
+      "previousCapacity": "La capacité de cette étape doit correspondre aux qualifiés de l’étape précédente.",
+      "nextCapacity": "Cette étape doit qualifier exactement la capacité de l’étape suivante.",
+      "chainCapacity": "La capacité de chaque étape doit correspondre aux qualifiés de la précédente.",
+      "finalWinner": "La dernière étape configurée doit finalement qualifier un seul vainqueur.",
+      "chain": "La progression des étapes est invalide.",
+      "participants": "Le nombre de participants admissibles ne correspond pas à cette étape."
+    },
+    "errors": {
+      "notFound": "Tournoi ou étape introuvable.",
+      "conflict": "Cette action est incompatible avec le cycle de vie du tournoi ou de l’étape.",
+      "locked": "La configuration des étapes est verrouillée dès le démarrage du tournoi."
+    }
   }
 }

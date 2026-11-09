@@ -404,6 +404,12 @@
     },
     "registration": {
       "soloTitle": "Register for tournament",
+      "chooseTeamTitle": "Choose your team",
+      "participantCount": "{{count}} of {{capacity}} places confirmed",
+      "journeyTitle": "Registration progress",
+      "journeyRegistered": "Registration submitted",
+      "journeyConfirmed": "Attendance confirmed",
+      "journeyCompetition": "Tournament underway",
       "soloHelp": "Your current account will be registered. Representing a tournament team is optional.",
       "teamTitle": "Register a team",
       "teamHelp": "Only the team owner or an administrator may register it. The required number of starters must be exact; substitutes are not counted.",
@@ -537,5 +543,115 @@
     "filterByGame": "Filter by game",
     "filterSelection": "Game filter: {{game}}",
     "noGames": "No games available."
+  },
+  "steps": {
+    "title": "Tournament stages",
+    "details": "Stage details",
+    "create": "Add stage",
+    "edit": "Edit stage",
+    "loading": "Loading tournament stages",
+    "empty": "No stages have been configured.",
+    "progressionHint": "Stages are ordered from the first round to the final qualification.",
+    "open": "Open stage {{position}}",
+    "position": "Stage {{position}}",
+    "summary": "{{groups}} groups · {{size}} participants per group · {{advance}} qualify per group",
+    "capacityProgression": "{{capacity}} participants · {{qualified}} qualified",
+    "configuration": "Configuration",
+    "groups": "Groups and rankings",
+    "group": "Group {{index}}",
+    "noGroups": "Groups will appear after this stage starts.",
+    "unknownParticipant": "Unknown participant",
+    "points": "{{points}} pts",
+    "start": "Start stage",
+    "close": "Close stage",
+    "confirmTitle": "Confirm stage action",
+    "confirmStart": "Start this stage and randomly assign eligible participants to groups? The assignment cannot be edited afterward.",
+    "confirmClose": "Close this stage and let the server determine qualifications? The next stage may start automatically.",
+    "confirmDelete": "Delete this stage and its related group data?",
+    "startSuccess": "Stage started and groups assigned.",
+    "closeSuccess": "Stage closed and qualifications updated.",
+    "format": {
+      "pool": "Groups",
+      "swiss": "Swiss",
+      "single_elim": "Single elimination",
+      "double_elim": "Double elimination"
+    },
+    "matchType": {
+      "duel": "Duel",
+      "ffa": "Free-for-all"
+    },
+    "status": {
+      "pending": "Pending",
+      "ongoing": "In progress",
+      "finished": "Finished"
+    },
+    "participantStatus": {
+      "in": "Competing",
+      "qualified": "Qualified",
+      "eliminated": "Eliminated"
+    },
+    "fields": {
+      "position": "Position",
+      "format": "Format",
+      "matchType": "Match type",
+      "groupCount": "Number of groups",
+      "groupSize": "Participants per group",
+      "matchesPerGroup": "Matches or rounds per group",
+      "advancePerGroup": "Qualified per group",
+      "totalQualified": "Total qualified"
+    },
+    "editor": {
+      "format": "Format and match type",
+      "formatHelp": "Choose how the server organizes this stage.",
+      "groups": "Group configuration",
+      "groupsHelp": "Swiss and elimination formats use one group.",
+      "matches": "Match and round configuration",
+      "matchesHelp": "This value configures the stage. Match generation is not available yet.",
+      "qualification": "Qualification rules",
+      "qualificationHelp": "The server applies these rules when the stage closes."
+    },
+    "tiebreak": {
+      "title": "Tiebreak criteria",
+      "help": "Add up to eight lowercase keys, then order them by priority.",
+      "criterion": "Tiebreak criterion",
+      "add": "Add criterion",
+      "placeholder": "Example: wins",
+      "empty": "No tiebreak criteria configured.",
+      "moveUp": "Move {{item}} up",
+      "moveDown": "Move {{item}} down",
+      "remove": "Remove {{item}}",
+      "limitation": "The backend stores this order but does not evaluate tiebreak criteria yet. Equal points currently fall back to registration order."
+    },
+    "matches": {
+      "title": "Matches and brackets",
+      "limitation": "The current backend does not generate matches, Swiss pairings or elimination brackets when a stage starts."
+    },
+    "validation": {
+      "form": "Review the highlighted stage fields.",
+      "position": "Enter a position from 1 to 100.",
+      "format": "Choose a supported format.",
+      "matchType": "Choose a supported match type.",
+      "groupCount": "Enter 1 to 1,000 groups.",
+      "groupSize": "Enter 2 to 10,000 participants per group.",
+      "matchesPerGroup": "Enter 1 to 1,000 matches or rounds.",
+      "advancePerGroup": "Qualified participants must be between 1 and the group size.",
+      "tiebreak": "Use up to eight distinct keys containing 1–32 lowercase letters, digits or underscores.",
+      "tiebreakDuplicate": "Each tiebreak criterion must be unique.",
+      "singleGroup": "Swiss and elimination formats require exactly one group.",
+      "totalCapacity": "A stage may contain at most 10,000 participants.",
+      "positionSequence": "Stage positions must be consecutive, starting at 1.",
+      "firstCapacity": "The first stage capacity must equal the tournament capacity.",
+      "previousCapacity": "This stage capacity must equal the number qualified by the previous stage.",
+      "nextCapacity": "This stage must qualify exactly the capacity of the following stage.",
+      "chainCapacity": "Each stage capacity must equal the number qualified by the previous stage.",
+      "finalWinner": "The last configured stage must eventually qualify one winner.",
+      "chain": "The stage progression is invalid.",
+      "participants": "The eligible participant count does not fit this stage."
+    },
+    "errors": {
+      "notFound": "Tournament or stage not found.",
+      "conflict": "This action conflicts with the tournament or stage lifecycle.",
+      "locked": "Stage configuration is locked once the tournament starts."
+    }
   }
 }

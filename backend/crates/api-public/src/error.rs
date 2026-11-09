@@ -56,6 +56,8 @@ pub enum ApiError {
     TournamentFull,
     /// Barème ou paramètres verrouillés : le tournoi est en cours ou terminé.
     TournamentLocked,
+    /// Une étape occupe déjà cette position dans le tournoi.
+    StepPositionTaken,
     /// Les inscriptions ne sont pas ouvertes.
     RegistrationClosed,
     /// Changement de statut impossible depuis le statut actuel.
@@ -147,6 +149,11 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "tournament_locked",
                 "Le tournoi est en cours ou terminé : cette modification est verrouillée",
+            ),
+            ApiError::StepPositionTaken => (
+                StatusCode::CONFLICT,
+                "step_position_taken",
+                "Une étape occupe déjà cette position dans le tournoi",
             ),
             ApiError::RegistrationClosed => (
                 StatusCode::CONFLICT,

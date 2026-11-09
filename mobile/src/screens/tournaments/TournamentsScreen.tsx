@@ -14,6 +14,7 @@ import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Icon } from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { useAuth } from '@/features/auth/session';
 import { getGame } from '@/features/games/api';
 import { useGameResource } from '@/features/games/use-game-resource';
@@ -271,11 +272,10 @@ export default function TournamentsScreen() {
                     {data?.names[item.game_id] ?? item.game_id}
                   </Text>
                 </View>
-                <View className="rounded-full bg-muted px-3 py-1">
-                  <Text className="text-xs font-medium">
-                    {t(`tournaments.status.${item.status}`)}
-                  </Text>
-                </View>
+                <StatusBadge
+                  status={item.status}
+                  label={t(`tournaments.status.${item.status}`)}
+                />
               </View>
               <View className="flex-row items-center gap-2">
                 <Icon icon={Calendar03Icon} tone="muted-foreground" size={18} />
