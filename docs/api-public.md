@@ -20,10 +20,14 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /reset-password` | aucune | `{ token, password }` | `204` |
 | `GET /users` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, username, role }]` |
 | `GET /user/{id}` | JWT valide | — | `200` `{ id, username, role }` |
-| `GET /me` | JWT valide | — | `200` `{ id, username, role, email }` (compte courant uniquement) |
-| `PATCH /user/{id}/update` | JWT valide, **administrateur** | `{ username?, password?, role?, email? }` | `200` `{ id, username, role }` |
+| `GET /me/settings` | JWT valide | — | `200` `{ language, theme, notifications }` (voir [notifications](notifications.md)) |
+| `PATCH /me/settings` | JWT valide | `{ language?, theme?, notifications? }` | `200` réglages complets |
+| `POST /me/push-tokens` | JWT valide | `{ token, platform }` | `201` `{ id, platform }` |
+| `DELETE /me/push-tokens` | JWT valide | `{ token }` | `204` |
+| `GET /me` | JWT valide | — | `200` `{ id, username, role, email, picture_url }` (compte courant uniquement) |
+| `PATCH /user/{id}/update` | JWT valide, **administrateur** | `{ username?, password?, role?, email?, picture_url? }` | `200` `{ id, username, role }` |
 | `DELETE /user/{id}/delete` | JWT valide, **administrateur** | — | `204` |
-| `PATCH /me/update` | JWT valide | `{ username?, password?, email? }` (`role` refusé) | `200` `{ id, username, role, email }` |
+| `PATCH /me/update` | JWT valide | `{ username?, password?, email?, picture_url? }` (`role` refusé ; `picture_url` vide = effacer) | `200` `{ id, username, role, email }` |
 | `DELETE /me/delete` | JWT valide | — | `204` |
 | `GET /games` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, name, description, images }]`, par ordre alphabétique |
 | `GET /games/{id}` | JWT valide | — | `200` `{ id, name, description, images }` |

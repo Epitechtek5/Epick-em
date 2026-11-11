@@ -11,7 +11,11 @@ use super::{
     TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
     TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
+use super::{
+    Channel, MAX_PUSH_TOKENS, Platform, PushToken, SettingsUpdate, UserSettings, override_key,
+};
 use async_trait::async_trait;
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -39,6 +43,10 @@ struct ResetToken {
 #[derive(Default)]
 struct State {
     users: Vec<UserRecord>,
+    settings: HashMap<Uuid, UserSettings>,
+    /// Appareils push, du plus ancien au plus récent.
+    push_tokens: Vec<PushToken>,
+    notification_log: HashSet<(String, Uuid, Channel)>,
     games: Vec<Game>,
     stats: Vec<Stat>,
     stat_games: HashSet<(Uuid, Uuid)>,
@@ -132,6 +140,7 @@ impl AuthStore for MemoryStore {
             email: email.map(str::to_string),
             pending_email: None,
             email_verified_at: None,
+            picture_url: None,
         };
         if let (Some(hash), Some(address)) = (verification_hash, email) {
             state.verification.insert(
@@ -382,6 +391,9 @@ impl AuthStore for MemoryStore {
         if let Some(role) = update.role {
             user.role = role;
         }
+        if let Some(picture_url) = update.picture_url {
+            user.picture_url = picture_url;
+        }
         if let Some(email) = update.email {
             user.pending_email = (user.email.as_ref() != Some(&email)).then_some(email);
         }
@@ -402,10 +414,150 @@ impl AuthStore for MemoryStore {
         Ok(Some(profile))
     }
 
+    async fn user_settings(&self, user_id: Uuid) -> Result<Option<UserSettings>, StoreError> {
+        let state = self.state();
+        if !state.users.iter().any(|user| user.id == user_id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            state
+                .settings
+                .get(&user_id)
+                .cloned()
+                .unwrap_or_else(UserSettings::defaults),
+        ))
+    }
+
+    async fn update_user_settings(
+        &self,
+        user_id: Uuid,
+        update: SettingsUpdate,
+    ) -> Result<Option<UserSettings>, StoreError> {
+        let mut state = self.state();
+        if !state.users.iter().any(|user| user.id == user_id) {
+            return Ok(None);
+        }
+        let current = state
+            .settings
+            .get(&user_id)
+            .cloned()
+            .unwrap_or_else(UserSettings::defaults);
+        // Même fusion qu'en base : seules les clés fournies changent.
+        let mut overrides: BTreeMap<String, bool> = BTreeMap::new();
+        for (category, prefs) in &current.notifications {
+            overrides.insert(override_key(*category, Channel::Email), prefs.email);
+            overrides.insert(override_key(*category, Channel::Push), prefs.push);
+        }
+        overrides.extend(update.overrides());
+        let settings = UserSettings::from_overrides(
+            update.language.unwrap_or(current.language),
+            update.theme.unwrap_or(current.theme),
+            &overrides,
+        );
+        state.settings.insert(user_id, settings.clone());
+        Ok(Some(settings))
+    }
+
+    async fn register_push_token(
+        &self,
+        user_id: Uuid,
+        token: &str,
+        platform: Platform,
+    ) -> Result<Option<PushToken>, StoreError> {
+        let mut state = self.state();
+        if !state.users.iter().any(|user| user.id == user_id) {
+            return Ok(None);
+        }
+        let id = state
+            .push_tokens
+            .iter()
+            .find(|t| t.token == token)
+            .map_or_else(Uuid::new_v4, |t| t.id);
+        state.push_tokens.retain(|t| t.token != token);
+        let entry = PushToken {
+            id,
+            user_id,
+            token: token.to_string(),
+            platform,
+        };
+        state.push_tokens.push(entry.clone());
+        let owned = state
+            .push_tokens
+            .iter()
+            .filter(|t| t.user_id == user_id)
+            .count();
+        let excess = owned.saturating_sub(usize::try_from(MAX_PUSH_TOKENS).unwrap_or(0));
+        let mut dropped = 0;
+        state.push_tokens.retain(|t| {
+            if t.user_id == user_id && dropped < excess {
+                dropped += 1;
+                false
+            } else {
+                true
+            }
+        });
+        Ok(Some(entry))
+    }
+
+    async fn list_push_tokens(&self, user_id: Uuid) -> Result<Vec<PushToken>, StoreError> {
+        Ok(self
+            .state()
+            .push_tokens
+            .iter()
+            .rev()
+            .filter(|t| t.user_id == user_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn revoke_push_token(&self, user_id: Uuid, token: &str) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let before = state.push_tokens.len();
+        state
+            .push_tokens
+            .retain(|t| !(t.user_id == user_id && t.token == token));
+        Ok(state.push_tokens.len() != before)
+    }
+
+    async fn remove_push_token(&self, token: &str) -> Result<(), StoreError> {
+        self.state().push_tokens.retain(|t| t.token != token);
+        Ok(())
+    }
+
+    async fn claim_notification(
+        &self,
+        event_key: &str,
+        user_id: Uuid,
+        channel: Channel,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if !state.users.iter().any(|user| user.id == user_id) {
+            return Ok(false);
+        }
+        Ok(state
+            .notification_log
+            .insert((event_key.to_string(), user_id, channel)))
+    }
+
+    async fn release_notification(
+        &self,
+        event_key: &str,
+        user_id: Uuid,
+        channel: Channel,
+    ) -> Result<(), StoreError> {
+        self.state()
+            .notification_log
+            .remove(&(event_key.to_string(), user_id, channel));
+        Ok(())
+    }
+
     async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError> {
         let mut state = self.state();
         let before = state.users.len();
         state.users.retain(|user| user.id != id);
+        state.settings.remove(&id);
+        state.push_tokens.retain(|t| t.user_id != id);
+        state.notification_log.retain(|(_, user, _)| *user != id);
         state.tokens.retain(|_, token| token.user_id != id);
         state.reset_tokens.retain(|_, token| token.user_id != id);
         Ok(state.users.len() != before)

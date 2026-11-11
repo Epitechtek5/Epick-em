@@ -12,6 +12,9 @@ use api_public::store::{
     TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
     UserUpdate,
 };
+use api_public::store::{
+    Category, Channel, Language, Platform, SettingsUpdate, Theme, UserSettings,
+};
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
 use std::sync::Arc;
@@ -2692,5 +2695,279 @@ async fn expired_password_reset_tokens_are_refused() {
             .unwrap()
             .password_hash,
         "old"
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn settings_default_merge_and_cascade() {
+    let store = store().await;
+    let user = store.create_user(&unique("set"), None, "h").await.unwrap();
+    // Aucune ligne : les valeurs par défaut.
+    assert_eq!(
+        store.user_settings(user.id).await.unwrap(),
+        Some(UserSettings::defaults())
+    );
+    assert_eq!(store.user_settings(Uuid::new_v4()).await.unwrap(), None);
+    assert_eq!(
+        store
+            .update_user_settings(Uuid::new_v4(), SettingsUpdate::default())
+            .await
+            .unwrap(),
+        None
+    );
+
+    let first = store
+        .update_user_settings(
+            user.id,
+            SettingsUpdate {
+                language: Some(Language::Es),
+                notifications: vec![(Category::Teams, Channel::Email, false)],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.language, first.theme), (Language::Es, Theme::System));
+    assert!(!first.allows(Category::Teams, Channel::Email));
+    assert!(first.allows(Category::Teams, Channel::Push));
+
+    // La deuxième modification fusionne : l'e-mail des équipes reste coupé.
+    let second = store
+        .update_user_settings(
+            user.id,
+            SettingsUpdate {
+                theme: Some(Theme::Dark),
+                notifications: vec![
+                    (Category::Matches, Channel::Push, false),
+                    (Category::Teams, Channel::Push, false),
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((second.language, second.theme), (Language::Es, Theme::Dark));
+    assert!(!second.allows(Category::Teams, Channel::Email));
+    assert!(!second.allows(Category::Teams, Channel::Push));
+    assert!(!second.allows(Category::Matches, Channel::Push));
+    assert!(second.allows(Category::Matches, Channel::Email));
+    assert_eq!(store.user_settings(user.id).await.unwrap(), Some(second));
+
+    // Une modification vide ne change rien.
+    let before = store.user_settings(user.id).await.unwrap();
+    store
+        .update_user_settings(user.id, SettingsUpdate::default())
+        .await
+        .unwrap();
+    assert_eq!(store.user_settings(user.id).await.unwrap(), before);
+
+    // Réglages, appareils et journal partent avec le compte.
+    store
+        .register_push_token(
+            user.id,
+            &format!("ExponentPushToken[{}]", unique("c")),
+            Platform::Ios,
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_notification("k", user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+    assert!(store.delete_user(user.id).await.unwrap());
+    assert_eq!(store.user_settings(user.id).await.unwrap(), None);
+    assert!(store.list_push_tokens(user.id).await.unwrap().is_empty());
+    assert!(
+        !store
+            .claim_notification("k", user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn push_tokens_are_unique_owned_and_capped() {
+    let store = store().await;
+    let alice = store.create_user(&unique("pa"), None, "h").await.unwrap();
+    let bob = store.create_user(&unique("pb"), None, "h").await.unwrap();
+    let token = format!("ExponentPushToken[{}]", unique("t"));
+
+    let first = store
+        .register_push_token(alice.id, &token, Platform::Ios)
+        .await
+        .unwrap()
+        .unwrap();
+    let again = store
+        .register_push_token(alice.id, &token, Platform::Android)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.id, again.id);
+    assert_eq!(again.platform, Platform::Android);
+    assert!(
+        store
+            .register_push_token(Uuid::new_v4(), &token, Platform::Ios)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Révoquer ne marche que pour le propriétaire.
+    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
+    // Le jeton change de compte quand l'appareil change de compte.
+    let moved = store
+        .register_push_token(bob.id, &token, Platform::Ios)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.user_id, bob.id);
+    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
+    assert!(store.revoke_push_token(bob.id, &token).await.unwrap());
+    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
+
+    store
+        .register_push_token(alice.id, &token, Platform::Ios)
+        .await
+        .unwrap();
+    store.remove_push_token(&token).await.unwrap();
+    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
+
+    for index in 0..12 {
+        store
+            .register_push_token(
+                alice.id,
+                &format!("ExponentPushToken[{}-{index}]", unique("cap")),
+                Platform::Android,
+            )
+            .await
+            .unwrap();
+    }
+    let kept = store.list_push_tokens(alice.id).await.unwrap();
+    assert_eq!(kept.len(), 10);
+    assert!(kept[0].token.ends_with("-11]"), "le plus récent d'abord");
+    assert!(!kept.iter().any(|t| t.token.ends_with("-0]")));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn notification_claims_are_exclusive_and_releasable() {
+    let store = store().await;
+    let user = store.create_user(&unique("nl"), None, "h").await.unwrap();
+    let key = unique("evt");
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    // Un autre canal ou un autre événement est indépendant.
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_notification(&unique("evt"), user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    store
+        .release_notification(&key, user.id, Channel::Email)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    // Deux réservations simultanées : une seule gagne.
+    let key = unique("race");
+    let (a, b) = tokio::join!(
+        store.claim_notification(&key, user.id, Channel::Push),
+        store.claim_notification(&key, user.id, Channel::Push)
+    );
+    assert_eq!(
+        [a.unwrap(), b.unwrap()].iter().filter(|won| **won).count(),
+        1
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn profile_pictures_are_set_cleared_and_kept_by_other_updates() {
+    let store = store().await;
+    let user = store.create_user(&unique("pic"), None, "h").await.unwrap();
+    assert_eq!(user.picture_url, None);
+    let url = "https://cdn.example.com/a.png".to_string();
+    let profile = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                picture_url: Some(Some(url.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(profile.picture_url.as_deref(), Some(url.as_str()));
+    // Le profil en cache et le compte voient la photo ; une autre modification la garde.
+    assert_eq!(
+        store
+            .find_profile(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .picture_url
+            .as_deref(),
+        Some(url.as_str())
+    );
+    let renamed = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                username: Some(unique("pic2")),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.picture_url.as_deref(), Some(url.as_str()));
+    let cleared = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                picture_url: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cleared.picture_url, None);
+    assert_eq!(
+        store
+            .find_user_by_id(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .picture_url,
+        None
     );
 }

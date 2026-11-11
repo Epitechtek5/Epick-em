@@ -1,0 +1,42 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0016-user-settings
+      author: epickem
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE users ADD COLUMN picture_url varchar(2048);
+              CREATE TABLE user_settings (
+                user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                language varchar(2) NOT NULL DEFAULT 'fr' CHECK (language IN ('fr','en','es')),
+                theme varchar(6) NOT NULL DEFAULT 'system' CHECK (theme IN ('system','light','dark')),
+                notifications jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(notifications) = 'object'),
+                updated_at timestamptz NOT NULL DEFAULT now()
+              );
+              COMMENT ON COLUMN user_settings.notifications IS
+                'Surcharges des préférences, clés plates "<catégorie>_<canal>" (ex. "teams_email") ; une clé absente vaut true';
+              INSERT INTO user_settings (user_id) SELECT id FROM users ON CONFLICT DO NOTHING;
+              CREATE TABLE push_tokens (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token varchar(256) NOT NULL UNIQUE,
+                platform varchar(7) NOT NULL CHECK (platform IN ('ios','android')),
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX push_tokens_user ON push_tokens(user_id, updated_at);
+              CREATE TABLE notification_log (
+                event_key varchar(256) NOT NULL,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                channel varchar(5) NOT NULL CHECK (channel IN ('email','push')),
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (event_key, user_id, channel)
+              );
+              CREATE INDEX notification_log_created ON notification_log(created_at);
+      rollback:
+        - sql:
+            sql: |
+              DROP TABLE notification_log;
+              DROP TABLE push_tokens;
+              DROP TABLE user_settings;
+              ALTER TABLE users DROP COLUMN picture_url;

@@ -3,6 +3,7 @@
 //! [`ResendMailer`] passe par l'API HTTP de Resend en production ; [`MemoryMailer`] garde les
 //! messages en mémoire pour les tests, et [`NoopMailer`] sert quand Resend n'est pas configuré.
 
+use crate::store::{Category, Language};
 use async_trait::async_trait;
 use serde_json::json;
 use std::fmt;
@@ -24,6 +25,17 @@ impl fmt::Display for MailError {
 
 impl std::error::Error for MailError {}
 
+/// Notification optionnelle à envoyer par e-mail, déjà rédigée dans la langue du destinataire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationMail {
+    pub language: Language,
+    pub category: Category,
+    pub title: String,
+    pub body: String,
+    /// Lien absolu vers la page concernée, s'il y en a une.
+    pub action_url: Option<String>,
+}
+
 #[async_trait]
 pub trait Mailer: Send + Sync {
     fn available(&self) -> bool {
@@ -33,6 +45,9 @@ pub trait Mailer: Send + Sync {
     async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError>;
     /// Envoie à `to` le message qui contient `link`, le lien de réinitialisation du mot de passe.
     async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError>;
+    /// Envoie une notification du moteur (`notifications`) ; jamais utilisée pour les e-mails
+    /// de sécurité ci-dessus.
+    async fn send_notification(&self, to: &str, mail: &NotificationMail) -> Result<(), MailError>;
 }
 
 /// Configuration de l'envoi, lue dans l'environnement (voir `.env.example`).
@@ -48,6 +63,8 @@ pub struct MailConfig {
     pub password_reset_template: String,
     pub verification_template: String,
     pub welcome_template: String,
+    /// Modèles Resend des notifications, un par langue : `fr`, `en`, `es`.
+    pub notification_templates: [String; 3],
 }
 
 // Écrit à la main pour ne jamais journaliser la clé d'API.
@@ -79,6 +96,11 @@ impl MailConfig {
                 .unwrap_or_else(|| "email-address-confirmation".into()),
             welcome_template: get("RESEND_WELCOME_TEMPLATE")
                 .unwrap_or_else(|| "welcome-account".into()),
+            notification_templates: [
+                get("RESEND_NOTIFICATION_TEMPLATE_FR").unwrap_or_else(|| "notification-fr".into()),
+                get("RESEND_NOTIFICATION_TEMPLATE_EN").unwrap_or_else(|| "notification-en".into()),
+                get("RESEND_NOTIFICATION_TEMPLATE_ES").unwrap_or_else(|| "notification-es".into()),
+            ],
             password_reset_template: get("RESEND_PASSWORD_RESET_TEMPLATE")
                 .unwrap_or_else(|| DEFAULT_PASSWORD_RESET_TEMPLATE.into()),
         })
@@ -104,6 +126,7 @@ pub struct ResendMailer {
     template: String,
     verification_template: String,
     welcome_template: String,
+    notification_templates: [String; 3],
     endpoint: String,
 }
 
@@ -125,6 +148,7 @@ impl ResendMailer {
             verification_template: config.verification_template.clone(),
             welcome_template: config.welcome_template.clone(),
             template: config.password_reset_template.clone(),
+            notification_templates: config.notification_templates.clone(),
             endpoint: endpoint.to_string(),
         })
     }
@@ -137,18 +161,32 @@ impl ResendMailer {
         template: &str,
         variables: serde_json::Value,
     ) -> Result<(), MailError> {
+        self.send_message(to, template, variables, None).await
+    }
+
+    async fn send_message(
+        &self,
+        to: &str,
+        template: &str,
+        variables: serde_json::Value,
+        subject: Option<&str>,
+    ) -> Result<(), MailError> {
+        let mut message = json!({
+            "from": self.from,
+            "to": [to],
+            "template": {
+                "id": template,
+                "variables": variables,
+            },
+        });
+        if let Some(subject) = subject {
+            message["subject"] = json!(subject);
+        }
         let response = self
             .client
             .post(&self.endpoint)
             .bearer_auth(&self.api_key)
-            .json(&json!({
-                "from": self.from,
-                "to": [to],
-                "template": {
-                    "id": template,
-                    "variables": variables,
-                },
-            }))
+            .json(&message)
             .send()
             .await
             .map_err(|err| MailError(err.without_url().to_string()))?;
@@ -179,6 +217,32 @@ impl Mailer for ResendMailer {
         self.send_template(to, &self.welcome_template, json!({"USERNAME":username}))
             .await
     }
+    async fn send_notification(&self, to: &str, mail: &NotificationMail) -> Result<(), MailError> {
+        let template = &self.notification_templates[match mail.language {
+            Language::Fr => 0,
+            Language::En => 1,
+            Language::Es => 2,
+        }];
+        self.send_message(
+            to,
+            template,
+            notification_variables(mail),
+            Some(&mail.title),
+        )
+        .await
+    }
+}
+
+/// Variables transmises aux modèles Resend de notification (voir `docs/notifications.md`).
+pub fn notification_variables(mail: &NotificationMail) -> serde_json::Value {
+    json!({
+        "TITLE": mail.title,
+        "BODY": mail.body,
+        "CATEGORY": mail.category.as_str(),
+        "LANGUAGE": mail.language.as_str(),
+        "ACTION_URL": mail.action_url.as_deref().unwrap_or_default(),
+        "HAS_ACTION": mail.action_url.is_some(),
+    })
 }
 
 /// Resend n'est pas configuré : rien n'est envoyé.
@@ -199,6 +263,13 @@ impl Mailer for NoopMailer {
         eprintln!("api-public : RESEND_API_KEY absente, e-mail de réinitialisation non envoyé");
         Ok(())
     }
+    async fn send_notification(
+        &self,
+        _to: &str,
+        _mail: &NotificationMail,
+    ) -> Result<(), MailError> {
+        Err(MailError("Mailer unavailable".into()))
+    }
 }
 
 /// Garde les messages envoyés, pour les tests.
@@ -207,11 +278,22 @@ pub struct MemoryMailer {
     pub verification: Mutex<Vec<(String, String)>>,
     pub welcome: Mutex<Vec<(String, String)>>,
     sent: Mutex<Vec<(String, String)>>,
+    notifications: Mutex<Vec<(String, NotificationMail)>>,
+    /// Nombre d'envois de notification à refuser avant d'en accepter (tests de reprise).
+    pub notification_failures: Mutex<usize>,
 }
 
 impl MemoryMailer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Notifications envoyées, dans l'ordre.
+    pub fn notifications(&self) -> Vec<(String, NotificationMail)> {
+        self.notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Couples (destinataire, lien) envoyés, dans l'ordre.
@@ -241,6 +323,23 @@ impl Mailer for MemoryMailer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push((to.to_string(), link.to_string()));
+        Ok(())
+    }
+    async fn send_notification(&self, to: &str, mail: &NotificationMail) -> Result<(), MailError> {
+        {
+            let mut failures = self
+                .notification_failures
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *failures > 0 {
+                *failures -= 1;
+                return Err(MailError("échec simulé".into()));
+            }
+        }
+        self.notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((to.to_string(), mail.clone()));
         Ok(())
     }
 }

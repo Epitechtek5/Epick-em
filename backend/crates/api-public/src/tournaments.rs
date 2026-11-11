@@ -486,6 +486,10 @@ async fn set_status(
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
+    // Après le changement de statut, hors de la requête : un échec d'envoi ne le défait pas.
+    if let Some(event) = crate::notifications::tournament_status(&tournament, target) {
+        crate::notifications::emit(&state, event);
+    }
     Ok(HttpResponse::Ok().json(tournament))
 }
 
@@ -844,6 +848,12 @@ async fn update_participant(
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
+    if status == ParticipantStatus::Disqualified {
+        crate::notifications::emit(
+            &state,
+            crate::notifications::participant_disqualified(&tournament, participant.id),
+        );
+    }
     Ok(HttpResponse::Ok().json(participant))
 }
 
