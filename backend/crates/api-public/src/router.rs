@@ -33,7 +33,8 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::tournament_teams::routes)
         .configure(crate::tournaments::routes)
         .configure(crate::steps::routes)
-        .configure(crate::matches::routes);
+        .configure(crate::matches::routes)
+        .configure(crate::invitations::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).

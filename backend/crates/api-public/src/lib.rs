@@ -13,6 +13,7 @@ pub mod export_cache;
 pub mod game_io;
 pub mod games;
 pub mod guard;
+pub mod invitations;
 pub mod mail;
 pub mod match_io;
 pub mod matches;

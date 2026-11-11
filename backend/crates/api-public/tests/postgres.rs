@@ -3,14 +3,15 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, Bracket, GameInput, GameUpdate, MatchFinish, MatchInput, MatchResult, MatchScore,
-    MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
-    ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
-    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
-    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
-    StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
-    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
-    UserUpdate,
+    AuthStore, Bracket, GameInput, GameUpdate, InvitationAction, InvitationEventKind,
+    InvitationFilter, InvitationInput, InvitationStatus, InvitationType, MatchFinish, MatchInput,
+    MatchResult, MatchScore, MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport,
+    ParticipantInput, ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode,
+    ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate,
+    StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus,
+    StepStart, StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode,
+    TeamUpdate, TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput,
+    TournamentUpdate, UserUpdate,
 };
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
@@ -2692,5 +2693,504 @@ async fn expired_password_reset_tokens_are_refused() {
             .unwrap()
             .password_hash,
         "old"
+    );
+}
+
+async fn pool() -> sqlx::PgPool {
+    sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .await
+        .unwrap()
+}
+
+fn invitation_input(
+    kind: InvitationType,
+    resource_id: Uuid,
+    inviter_id: Uuid,
+    recipient_id: Option<Uuid>,
+) -> InvitationInput {
+    InvitationInput {
+        kind,
+        resource_id,
+        inviter_id,
+        recipient_id,
+        role: match kind {
+            InvitationType::Tournament => None,
+            _ => Some(TeamRole::Substitute),
+        },
+        token_hash: recipient_id
+            .is_none()
+            .then(|| Uuid::new_v4().simple().to_string().repeat(2)),
+        max_uses: recipient_id.is_none().then_some(1),
+        ttl: Duration::from_secs(3600),
+    }
+}
+
+async fn global_team(store: &PgStore, owner: Uuid) -> Uuid {
+    let game_id = game(store).await;
+    store
+        .create_team(TeamInput {
+            game_id,
+            name: unique("Team"),
+            tag: None,
+            picture_url: None,
+            owner_id: owner,
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+async fn registration_tournament(store: &PgStore, max: i32) -> Uuid {
+    let game_id = game(store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            registration_open_at: None,
+            max_participants: max,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    store
+        .set_tournament_status(tournament.id, TournamentStatus::Registration)
+        .await
+        .unwrap();
+    tournament.id
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn invitations_follow_their_lifecycle_and_keep_a_history() {
+    let store = store().await;
+    let (alice, bob, carol) = (
+        user(&store, "alice").await,
+        user(&store, "bob").await,
+        user(&store, "carol").await,
+    );
+    let team = global_team(&store, alice).await;
+    let input = || invitation_input(InvitationType::Team, team, alice, Some(bob));
+
+    let created = store.create_invitation(input()).await.unwrap();
+    assert_eq!(created.status, InvitationStatus::Pending);
+    assert_eq!(created.role, Some(TeamRole::Substitute));
+    assert!(!created.is_link);
+    // Pas de doublon actif, mais un lien n'est pas concerné.
+    assert!(matches!(
+        store.create_invitation(input()).await,
+        Err(StoreError::InvitationDuplicate)
+    ));
+    let link = invitation_input(InvitationType::Team, team, alice, None);
+    let link = store.create_invitation(link).await.unwrap();
+    assert!(link.is_link);
+
+    let (incoming, total) = store
+        .list_invitations(InvitationFilter {
+            recipient_id: Some(bob),
+            limit: 10,
+            ..InvitationFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!((incoming.len(), total), (1, 1));
+    let (outgoing, total) = store
+        .list_invitations(InvitationFilter {
+            inviter_id: Some(alice),
+            status: Some(InvitationStatus::Pending),
+            kind: Some(InvitationType::Team),
+            limit: 1,
+            offset: 1,
+            ..InvitationFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!((outgoing.len(), total), (1, 2));
+
+    // Seul l'invité accepte ; le compte tiers ne crée aucune adhésion.
+    assert!(matches!(
+        store
+            .respond_invitation(created.id, carol, InvitationAction::Accept)
+            .await,
+        Err(StoreError::InvitationUnavailable)
+    ));
+    let accepted = store
+        .respond_invitation(created.id, bob, InvitationAction::Accept)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.status, InvitationStatus::Accepted);
+    assert!(accepted.responded_at.is_some());
+    let members = store.list_team_members(team).await.unwrap().unwrap();
+    assert!(
+        members
+            .iter()
+            .any(|m| m.user_id == bob && m.role == TeamRole::Substitute)
+    );
+    for action in [
+        InvitationAction::Accept,
+        InvitationAction::Decline,
+        InvitationAction::Revoke,
+    ] {
+        assert!(matches!(
+            store.respond_invitation(created.id, bob, action).await,
+            Err(StoreError::InvitationNotPending)
+        ));
+    }
+    let kinds: Vec<_> = store
+        .list_invitation_events(created.id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        [InvitationEventKind::Created, InvitationEventKind::Accepted]
+    );
+
+    // Déjà membre : l'acceptation d'une autre invitation échoue sans effet de bord.
+    let again = store
+        .create_invitation(invitation_input(
+            InvitationType::Team,
+            team,
+            alice,
+            Some(carol),
+        ))
+        .await
+        .unwrap();
+    store
+        .add_team_member(team, carol, TeamRole::Member)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .respond_invitation(again.id, carol, InvitationAction::Accept)
+            .await,
+        Err(StoreError::AlreadyTeamMember)
+    ));
+    assert_eq!(
+        store
+            .find_invitation(again.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        InvitationStatus::Pending
+    );
+    let revoked = store
+        .respond_invitation(again.id, alice, InvitationAction::Revoke)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(revoked.status, InvitationStatus::Revoked);
+
+    assert!(
+        store
+            .respond_invitation(Uuid::new_v4(), bob, InvitationAction::Accept)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn invitations_expire_and_never_store_clear_tokens() {
+    let store = store().await;
+    let pool = pool().await;
+    let (alice, bob) = (user(&store, "alice").await, user(&store, "bob").await);
+    let team = global_team(&store, alice).await;
+    let direct = store
+        .create_invitation(invitation_input(
+            InvitationType::Team,
+            team,
+            alice,
+            Some(bob),
+        ))
+        .await
+        .unwrap();
+    let swept = store
+        .create_invitation(invitation_input(InvitationType::Team, team, alice, None))
+        .await
+        .unwrap();
+    for id in [direct.id, swept.id] {
+        sqlx::query(
+            "UPDATE invitations SET expires_at = now() - interval '1 second' WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    // L'acceptation tardive enregistre l'expiration et ne crée aucune adhésion.
+    assert!(matches!(
+        store
+            .respond_invitation(direct.id, bob, InvitationAction::Accept)
+            .await,
+        Err(StoreError::InvitationExpired)
+    ));
+    assert_eq!(
+        store
+            .find_invitation(direct.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        InvitationStatus::Expired
+    );
+    assert_eq!(
+        store.list_team_members(team).await.unwrap().unwrap().len(),
+        1
+    );
+    // La purge expire les autres et renvoie exactement celles-ci.
+    let expired = store.expire_invitations().await.unwrap();
+    assert!(expired.iter().any(|i| i.id == swept.id));
+    assert!(expired.iter().all(|i| i.id != direct.id));
+    assert!(
+        store
+            .expire_invitations()
+            .await
+            .unwrap()
+            .iter()
+            .all(|i| i.id != swept.id)
+    );
+    let kinds: Vec<_> = store
+        .list_invitation_events(swept.id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|e| (e.kind, e.actor_id))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (InvitationEventKind::Created, Some(alice)),
+            (InvitationEventKind::Expired, None)
+        ]
+    );
+
+    // Contraintes : une invitation sans invité ni lien, ou à soi-même, est refusée.
+    for (recipient, token) in [(None::<Uuid>, None::<&str>), (Some(alice), None)] {
+        let result = sqlx::query(
+            "INSERT INTO invitations (type, resource_id, inviter_id, recipient_id, token_hash, expires_at) \
+             VALUES ('team', $1, $2, $3, $4, now() + interval '1 hour')",
+        )
+        .bind(team)
+        .bind(alice)
+        .bind(recipient)
+        .bind(token)
+        .execute(&pool)
+        .await;
+        assert!(result.is_err());
+    }
+    let hash: String = sqlx::query_scalar("SELECT token_hash FROM invitations WHERE id = $1")
+        .bind(swept.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(hash.len(), 64);
+    assert!(
+        store
+            .find_invitation_by_token(&hash)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .find_invitation_by_token("inconnu")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_acceptances_are_atomic() {
+    let store = Arc::new(store().await);
+    let alice = user(&store, "alice").await;
+    let team = global_team(&store, alice).await;
+
+    // Lien à usage unique : un seul des huit comptes entre.
+    let link = store
+        .create_invitation(invitation_input(InvitationType::Team, team, alice, None))
+        .await
+        .unwrap();
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let (store, account) = (store.clone(), user(&store, "joiner").await);
+        tasks.push(tokio::spawn(async move {
+            store
+                .respond_invitation(link.id, account, InvitationAction::Accept)
+                .await
+        }));
+    }
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    assert_eq!(
+        results.iter().filter(|r| r.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|e| matches!(e, StoreError::InvitationNotPending))
+    );
+    assert_eq!(
+        store.list_team_members(team).await.unwrap().unwrap().len(),
+        2
+    );
+
+    // Tournoi de deux places : la capacité tient face à six acceptations simultanées.
+    let tournament = registration_tournament(&store, 2).await;
+    let mut tasks = Vec::new();
+    for _ in 0..6 {
+        let account = user(&store, "player").await;
+        let invitation = store
+            .create_invitation(invitation_input(
+                InvitationType::Tournament,
+                tournament,
+                alice,
+                Some(account),
+            ))
+            .await
+            .unwrap();
+        let store = store.clone();
+        tasks.push(tokio::spawn(async move {
+            store
+                .respond_invitation(invitation.id, account, InvitationAction::Accept)
+                .await
+        }));
+    }
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    assert_eq!(
+        results.iter().filter(|r| r.is_ok()).count(),
+        2,
+        "{results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|e| matches!(e, StoreError::TournamentFull))
+    );
+    let participants = store.list_participants(tournament, 10, 0).await.unwrap();
+    assert_eq!(participants.len(), 2);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn acceptance_revalidates_tournament_and_team_state() {
+    let store = store().await;
+    let (alice, bob, carol) = (
+        user(&store, "alice").await,
+        user(&store, "bob").await,
+        user(&store, "carol").await,
+    );
+    // Équipe de tournoi : rôle conservé, un seul passage par tournoi.
+    let tournament = registration_tournament(&store, 8).await;
+    let team = store
+        .create_tournament_team(TournamentTeamInput {
+            tournament_id: tournament,
+            team_id: None,
+            name: unique("Rocket"),
+            tag: None,
+            picture_url: None,
+            owner_id: alice,
+            members: vec![(alice, TeamRole::Owner)],
+        })
+        .await
+        .unwrap();
+    let invitation = store
+        .create_invitation(invitation_input(
+            InvitationType::TournamentTeam,
+            team.id,
+            alice,
+            Some(bob),
+        ))
+        .await
+        .unwrap();
+    store
+        .respond_invitation(invitation.id, bob, InvitationAction::Accept)
+        .await
+        .unwrap();
+    let members = store
+        .list_tournament_team_members(team.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        members
+            .iter()
+            .any(|m| m.user_id == bob && m.role == TeamRole::Substitute)
+    );
+    let second = store
+        .create_invitation(invitation_input(
+            InvitationType::TournamentTeam,
+            team.id,
+            alice,
+            Some(bob),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .respond_invitation(second.id, bob, InvitationAction::Accept)
+            .await,
+        Err(StoreError::PlayerAlreadyRegistered)
+    ));
+
+    // Tournoi passé en cours : plus d'inscription.
+    let pending = store
+        .create_invitation(invitation_input(
+            InvitationType::Tournament,
+            tournament,
+            alice,
+            Some(carol),
+        ))
+        .await
+        .unwrap();
+    store
+        .set_tournament_status(tournament, TournamentStatus::Ongoing)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .respond_invitation(pending.id, carol, InvitationAction::Accept)
+            .await,
+        Err(StoreError::InvitationUnavailable)
+    ));
+    // Équipe supprimée : indisponible, l'invitation reste en attente.
+    let global = global_team(&store, alice).await;
+    let invitation = store
+        .create_invitation(invitation_input(
+            InvitationType::Team,
+            global,
+            alice,
+            Some(carol),
+        ))
+        .await
+        .unwrap();
+    store.delete_team(global).await.unwrap();
+    assert!(matches!(
+        store
+            .respond_invitation(invitation.id, carol, InvitationAction::Accept)
+            .await,
+        Err(StoreError::InvitationUnavailable)
+    ));
+    assert_eq!(
+        store
+            .find_invitation(invitation.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        InvitationStatus::Pending
     );
 }

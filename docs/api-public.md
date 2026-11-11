@@ -96,6 +96,15 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `DELETE /tournaments/{id}/steps/{step_id}/matches/{match_id}` | JWT valide, **administrateur** | — | `204` ; `409` si le match est `finished` |
 | `PUT /tournaments/{id}/steps/{step_id}/matches/{match_id}/results` | JWT valide, **administrateur** | `{ results: [{ participant_id, stats, rank?, result? }] }` | `200` le match avec les points calculés ; `400` si une statistique est inconnue ou invalide ; `409` si le match est `finished` ou `cancelled` |
 | `POST /tournaments/{id}/steps/{step_id}/matches/{match_id}/status` | JWT valide, **administrateur** | `{ status }` (`ongoing`, `finished` ou `cancelled`) | `200` le match, et `step_closed` (`{ step, next_step }`) quand c'était le dernier de l'étape ; `400` si les participants ou les résultats ne conviennent pas ; `409` pour une transition impossible |
+| `POST /invitations` | JWT valide ; propriétaire de l'équipe ou de l'équipe de tournoi, **administrateur** pour un tournoi | `{ type, resource_id, recipient_id?, role?, max_uses?, expires_in_hours? }` | `201` l'invitation ; sans `recipient_id`, c'est un lien et `token` et `link` ne sont renvoyés qu'ici ; `409` si une invitation est déjà en attente, si l'invité est déjà membre ou inscrit ou si la ressource est verrouillée |
+| `GET /invitations` | JWT valide | `?direction` (`incoming` par défaut ou `outgoing`), `?status`, `?type`, `?limit`, `?offset` | `200` `{ items: [Invitation], total, limit, offset }`, les plus récentes d'abord |
+| `GET /invitations/{id}` | JWT valide, invitant, invité ou **administrateur** | — | `200` l'invitation ; `404` pour tout autre compte |
+| `GET /invitations/{id}/events` | idem | — | `200` `[{ kind, actor_id, created_at }]` : historique `created`, `accepted`, `declined`, `revoked`, `expired` |
+| `POST /invitations/{id}/accept` | JWT valide, **invité** | — | `200` l'invitation `accepted`, adhésion ou inscription créée dans la même transaction ; `409` si elle n'est plus en attente, si la ressource est indisponible, si le compte est déjà membre ou inscrit, si le tournoi est complet ; `410` si elle a expiré |
+| `POST /invitations/{id}/decline` | JWT valide, **invité** | — | `200` l'invitation `declined` |
+| `POST /invitations/{id}/revoke` | JWT valide, **invitant** ou **administrateur** | — | `200` l'invitation `revoked` ; son lien cesse de fonctionner |
+| `GET /invitation-links/{token}` | JWT valide | — | `200` `{ type, resource_name, inviter_username, role, expires_at }` ; `404` uniforme pour un lien inconnu, expiré, révoqué ou épuisé |
+| `POST /invitation-links/{token}/accept` | JWT valide | — | `200` `{ invitation_id, type, resource_id, role }` ; `404` comme ci-dessus ; `409` comme `accept` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -200,6 +209,18 @@ Un fichier exporté se réimporte sans perte (hors horodatages de création et d
 - **Import :** un tournoi dont le jeu et le nom (sans tenir compte de la casse) existent déjà met à jour ce tournoi et **remplace** son barème, ses inscrits, ses équipes, ses étapes et ses matchs, sinon il est créé avec le `status` du fichier (`draft` par défaut). Un tournoi existant `ongoing` ou `finished` est refusé, ses résultats étant verrouillés. Le fichier est validé en entier avant toute écriture (champs comme `POST /tournaments`, statistiques liées au jeu, barème, inscrits, plafond `max_participants`, sous-niveaux) ; un fichier invalide renvoie `400` avec `errors.file` (dix problèmes au plus). Les écritures se font ensuite dans l'ordre (tournois et barèmes en une transaction, puis équipes, étapes, matchs et inscrits de chaque tournoi) : une panne en cours de route peut laisser un tournoi à moitié importé, qu'un nouvel import du même fichier complète.
 - **Étapes :** `steps` est un tableau de `{ position, format, match_type, group_count, group_size, matches_per_group, advance_per_group, tiebreak, status, groups: [{ index, participants: [{ user | team, points, final_rank, status }] }], matches }` ; seuls `position`, `format`, `match_type`, `group_count`, `group_size` et `advance_per_group` sont obligatoires (`matches_per_group` vaut 1, `tiebreak` est vide, `status` vaut `pending`). Un participant d'étape désigne un inscrit comme le fichier du tournoi : `user` pour un joueur, `team` (rang dans `teams`) pour une équipe inscrite seule ; il doit figurer dans `participants`. Les réglages suivent les règles de `POST /tournaments/{id}/steps`. Une étape `pending` n'a pas de groupes ; une étape `ongoing` ou `finished` en a exactement `group_count`, numérotés de 1, d'au plus `group_size` participants chacun ; une étape `finished` donne à chaque participant un `final_rank` (de 1 à la taille du groupe, sans doublon) et un statut `qualified` pour les `advance_per_group` premiers, `eliminated` pour les autres ; une étape lancée suppose les précédentes `finished` et ses participants qualifiés à la précédente. `matches` est opaque pour ce niveau, qui délègue sa validation, son export et son import à `StepMatches` (voir *Import et export des matchs*). L'import remplace toutes les étapes du tournoi et reconstitue une étape lancée comme l'API (création, lancement, points, clôture), après l'écriture des inscrits.
 
+### Invitations
+
+Un moteur unique invite à une équipe globale (`team`), une équipe de tournoi (`tournament_team`) ou un tournoi solo (`tournament`), un compte précis ou, par lien, n'importe quel compte connecté. Table `invitations` (migration `0017`), historique dans `invitation_events`.
+
+- **Cycle de vie :** `pending` → `accepted`, `declined`, `revoked` ou `expired`, vérifié côté serveur. Une invitation à un compte n'a qu'une réponse. Un lien reste `pending` jusqu'à `max_uses` acceptations (1 par défaut, 1000 au plus) ; passée l'échéance, la première lecture, réponse ou purge périodique (toutes les 5 minutes) l'enregistre `expired`. Une seule invitation `pending` existe par invité et ressource (index unique partiel).
+- **Droits :** le propriétaire invite dans son équipe (administrateur compris : il n'a pas de droit particulier sur elle), seul un administrateur invite à un tournoi (solo, `draft` ou `registration`). Le rôle attribué est `member` (par défaut) ou `substitute`, jamais `owner`. Seul l'invité répond ; seuls l'invitant et les administrateurs révoquent ; une invitation étrangère est un `404`, sans fuite.
+- **Liens :** jeton aléatoire de 256 bits, montré à la création seulement ; seule son empreinte SHA-256 est stockée. `GET /invitation-links/{token}` ne révèle que le type, le nom de la ressource, le nom de l'invitant, le rôle et l'échéance.
+- **Acceptation :** dans une seule transaction qui verrouille l'invitation (et le tournoi pour sa capacité), elle revalide le statut, l'échéance, l'existence et l'état de la ressource (équipe de tournoi : `draft` ou `registration` ; tournoi : `registration` et fenêtre d'inscription, capacité `max_participants`), les doublons, puis crée l'adhésion (`team_member`, `tournament_team_member`) ou l'inscription (`tournament_participant`). Deux acceptations simultanées d'un lien à usage unique n'admettent qu'un compte.
+- **Durées :** `INVITATION_DEFAULT_TTL_HOURS` (168) et `INVITATION_MAX_TTL_HOURS` (720) ; `expires_in_hours` les respecte.
+- **Notifications :** chaque événement (création, acceptation, refus, révocation, expiration) est publié, après validation de la transaction et en tâche de fond, vers l'`InvitationNotifier` de l'`AppState` (`with_invitation_notifier`). Son échec est journalisé et n'affecte jamais l'invitation. Le moteur de notifications (#141) s'y branche ; par défaut les événements sont ignorés.
+- **Routes d'administration existantes :** `POST /teams/{id}/members` et `POST /tournament-teams/{id}/members` restent inchangées (ajout direct par le propriétaire).
+
 ### Cache des exports
 
 Les quatre exports (`/games`, `/stats`, `/teams` et `/tournaments`, en JSON et en CSV) sont gardés **une heure** dans le cache (Redis en production), un fichier par ressource et par format (`export:<ressource>:<json|csv>`) : l'export suivant est servi sans relire la base. Toute requête qui écrit (ni `GET`, `HEAD` ni `OPTIONS`) et qui ne finit pas en erreur du client (`4xx`) vide **tous** les exports : création, modification, suppression, import, changement de statut, résultat de match… Un export dépend de plusieurs tables et une suppression emporte ses dépendances (supprimer un jeu supprime ses équipes), alors invalider ressource par ressource laisserait des fichiers périmés. Les routes `/register`, `/login`, `/refresh` et `/logout` ne vident rien. Le cache n'est qu'une optimisation : s'il est indisponible, l'export est calculé depuis la base. Un export commencé juste avant une écriture peut remettre en cache un fichier périmé jusqu'à la prochaine écriture ou l'expiration de l'heure.
@@ -231,6 +252,10 @@ Format `{ "error", "message", "errors"? }` :
 | `409` | `tournament_locked` | tournoi en cours ou terminé : barème, capacité, suppression ou équipes verrouillés |
 | `409` | `step_position_taken` | une étape occupe déjà cette position dans le tournoi |
 | `409` | `registration_closed` | tournoi hors `registration` ou hors de la fenêtre d'inscription |
+| `409` | `invitation_already_pending` | invitation déjà en attente pour cet invité et cette ressource |
+| `409` | `invitation_not_pending` | invitation déjà acceptée, refusée ou révoquée |
+| `409` | `invitation_unavailable` | ressource de l'invitation disparue ou fermée |
+| `410` | `invitation_expired` | invitation expirée |
 | `409` | `invalid_status_transition` | changement de statut impossible depuis le statut actuel |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
@@ -243,6 +268,8 @@ Format `{ "error", "message", "errors"? }` :
 | `REFRESH_TOKEN_TTL_SECS` | `2592000` | durée du jeton de rafraîchissement |
 | `RESEND_API_KEY` | — (facultative) | clé d'API [Resend](https://resend.com) ; sans elle, aucun e-mail n'est envoyé (un avertissement est journalisé au démarrage) |
 | `MAIL_FROM` | `Epick'em <onboarding@resend.dev>` | expéditeur, sur un domaine vérifié chez Resend en production |
+| `INVITATION_DEFAULT_TTL_HOURS` | `168` | validité par défaut d'une invitation |
+| `INVITATION_MAX_TTL_HOURS` | `720` | validité maximale demandable |
 | `PUBLIC_URL` | `http://localhost:3000` | origine publique du site, sans chemin ; la route `/reset-password` est fixe (page web, ou app mobile via les liens universels) |
 
 ## Rôles

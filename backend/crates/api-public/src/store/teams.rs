@@ -150,9 +150,15 @@ pub struct MemberImport {
 /// Instant présent au format des horodatages de l'API (`2026-10-26T14:03:09.123456Z`), pour le
 /// store en mémoire ; PostgreSQL produit le même format.
 pub(crate) fn now_rfc3339() -> String {
+    rfc3339_in(std::time::Duration::ZERO)
+}
+
+/// Instant présent décalé de `delay`, au même format que [`now_rfc3339`].
+pub(crate) fn rfc3339_in(delay: std::time::Duration) -> String {
     let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        + delay;
     let secs = since_epoch.as_secs();
     let (days, rest) = (secs / 86_400, secs % 86_400);
     // Date civile depuis le nombre de jours écoulés depuis 1970 (algorithme de H. Hinnant).
