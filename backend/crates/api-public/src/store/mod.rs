@@ -14,15 +14,16 @@ mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::matches::{
-    Bracket, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchResult,
-    MatchScore, MatchStatus, MatchUpdate,
+    Bracket, GeneratedMatch, Generation, Match, MatchFinish, MatchImport, MatchInput,
+    MatchParticipant, MatchResult, MatchScore, MatchStatus, MatchUpdate, Placement,
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::steps::{
-    MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
-    StepParticipant, StepParticipantStatus, StepStart, StepStatus,
+    MatchType, QualificationPlacement, SeedingStrategy, Step, StepClosing, StepDefinition,
+    StepFormat, StepGroup, StepInput, StepOutcome, StepParticipant, StepParticipantStatus,
+    StepRules, StepScoring, StepStart, StepStatus,
 };
 pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
@@ -646,6 +647,12 @@ pub trait AuthStore: Send + Sync {
     /// Termine le match en une seule opération (voir [`MatchFinish`]) ; `None` s'il n'existe pas,
     /// [`StoreError::MatchState`] s'il est déjà `finished` ou `cancelled`.
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError>;
+
+    /// Génère des matchs dans l'étape `ongoing`, avec leurs liens et les points des byes, en une
+    /// seule opération ; [`StoreError::StepState`] si l'étape n'est pas `ongoing` ou si la
+    /// génération a déjà eu lieu (voir [`Generation::initial`]) — jamais de doublon, même en cas
+    /// d'appels concurrents. Renvoie les matchs créés, dans l'ordre de `matches`.
+    async fn generate_matches(&self, generation: Generation) -> Result<Vec<Match>, StoreError>;
 
     /// Remplace les matchs de l'étape (et leurs participants) par `matches`, en une seule
     /// opération ; `false` si l'étape n'existe pas. Les groupes et les inscrits appartiennent à

@@ -30,3 +30,5 @@ databaseChangeLog:
       file: changelog/0013-match-in-step.yaml
   - include:
       file: changelog/0015-email-verification.yaml
+  - include:
+      file: changelog/0016-bracket-generation.yaml

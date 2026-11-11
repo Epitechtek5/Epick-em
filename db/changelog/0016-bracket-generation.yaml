@@ -1,0 +1,54 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0016-bracket-generation
+      author: epickem
+      changes:
+        - sql:
+            sql: >-
+              ALTER TABLE step
+              ADD COLUMN rules jsonb NOT NULL DEFAULT '{}',
+              ADD CONSTRAINT step_rules_check CHECK (jsonb_typeof(rules) = 'object');
+              COMMENT ON COLUMN step.rules IS 'Réglages de génération : seeding (manual, random, ranking), qualification (random, rank, group_rank), best_of, best_of_by_round, scoring (win, draw, loss, placement)';
+              ALTER TABLE step_participant
+              ADD COLUMN seed integer,
+              ADD CONSTRAINT step_participant_seed_check CHECK (seed IS NULL OR seed > 0),
+              ADD CONSTRAINT step_participant_step_seed_key UNIQUE (step_id, seed);
+              COMMENT ON COLUMN step_participant.seed IS 'Tête de série dans l''étape (1 = meilleure)';
+              ALTER TABLE match
+              ADD COLUMN number integer,
+              ADD COLUMN next_slot smallint,
+              ADD COLUMN loser_next_match_id uuid,
+              ADD COLUMN loser_next_slot smallint,
+              ADD COLUMN best_of integer NOT NULL DEFAULT 1,
+              ADD CONSTRAINT match_number_check CHECK (number IS NULL OR number > 0),
+              ADD CONSTRAINT match_next_slot_check CHECK (next_slot IS NULL OR next_slot IN (1, 2)),
+              ADD CONSTRAINT match_loser_next_slot_check CHECK (loser_next_slot IS NULL OR loser_next_slot IN (1, 2)),
+              ADD CONSTRAINT match_loser_next_match_fk FOREIGN KEY (loser_next_match_id)
+                  REFERENCES match (id) ON DELETE SET NULL,
+              ADD CONSTRAINT match_loser_next_match_check CHECK (loser_next_match_id IS NULL OR loser_next_match_id <> id),
+              ADD CONSTRAINT match_best_of_check CHECK (best_of IN (1, 3, 5));
+              COMMENT ON COLUMN match.number IS 'Rang du match dans sa ronde (génération automatique)';
+              COMMENT ON COLUMN match.next_slot IS 'Emplacement (1 ou 2) du vainqueur dans le match suivant';
+              COMMENT ON COLUMN match.loser_next_match_id IS 'Match où va le perdant (double élimination)';
+              COMMENT ON COLUMN match.best_of IS 'Série au meilleur de 1, 3 ou 5 manches ; match.round reste la ronde de compétition';
+              CREATE UNIQUE INDEX match_generated_slot_key
+                  ON match (group_id, COALESCE(bracket, ''), round, number)
+                  WHERE number IS NOT NULL;
+              CREATE INDEX match_loser_next_match_idx ON match (loser_next_match_id);
+              ALTER TABLE match_participant
+              ADD COLUMN slot smallint,
+              ADD COLUMN games_won integer,
+              ADD CONSTRAINT match_participant_slot_check CHECK (slot IS NULL OR slot IN (1, 2)),
+              ADD CONSTRAINT match_participant_games_won_check CHECK (games_won IS NULL OR games_won >= 0);
+              COMMENT ON COLUMN match_participant.slot IS 'Emplacement (1 ou 2) dans le match, pour les tableaux';
+              COMMENT ON COLUMN match_participant.games_won IS 'Manches gagnées dans une série (BO3, BO5)'
+      rollback:
+        - sql:
+            sql: >-
+              ALTER TABLE match_participant DROP COLUMN games_won, DROP COLUMN slot;
+              DROP INDEX match_loser_next_match_idx;
+              DROP INDEX match_generated_slot_key;
+              ALTER TABLE match DROP COLUMN best_of, DROP COLUMN loser_next_slot,
+              DROP COLUMN loser_next_match_id, DROP COLUMN next_slot, DROP COLUMN number;
+              ALTER TABLE step_participant DROP COLUMN seed;
+              ALTER TABLE step DROP COLUMN rules

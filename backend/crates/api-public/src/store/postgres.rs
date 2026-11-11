@@ -2,18 +2,18 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
-    MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
-    ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
-    StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
-    StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate,
-    Tournament, TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus,
-    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
-    UserRecord, UserUpdate,
+    AuthStore, Game, GameInput, GameUpdate, Generation, Match, MatchFinish, MatchImport,
+    MatchInput, MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport,
+    ParticipantInput, ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition,
+    ScoringRuleInput, Stat, StatInput, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
+    StepInput, StepParticipant, StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember,
+    TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentParticipant,
+    TournamentStatus, TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate,
+    UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
@@ -316,7 +316,8 @@ fn scoring_rule(row: ScoringRuleRow) -> Result<ScoringRule, StoreError> {
 fn step_columns() -> String {
     format!(
         "id, tournament_id, position, format, match_type, group_count, group_size, \
-         matches_per_group, advance_per_group, tiebreak::text, status, {} AS created_at, \
+         matches_per_group, advance_per_group, tiebreak::text, rules::text, status, \
+         {} AS created_at, \
          {} AS updated_at",
         ts("created_at"),
         ts("updated_at")
@@ -337,6 +338,7 @@ type StepRow = (
     String,
     String,
     String,
+    String,
 );
 
 fn step(row: StepRow) -> Result<Step, StoreError> {
@@ -351,13 +353,14 @@ fn step(row: StepRow) -> Result<Step, StoreError> {
         matches_per_group: row.7,
         advance_per_group: row.8,
         tiebreak: serde_json::from_str(&row.9).map_err(|err| StoreError::Other(err.to_string()))?,
-        status: row.10.parse()?,
-        created_at: row.11,
-        updated_at: row.12,
+        rules: serde_json::from_str(&row.10).map_err(|err| StoreError::Other(err.to_string()))?,
+        status: row.11.parse()?,
+        created_at: row.12,
+        updated_at: row.13,
     })
 }
 
-type StepParticipantRow = (Uuid, Uuid, Uuid, f64, Option<i32>, String);
+type StepParticipantRow = (Uuid, Uuid, Uuid, f64, Option<i32>, String, Option<i32>);
 
 fn step_participant(row: StepParticipantRow) -> Result<StepParticipant, StoreError> {
     Ok(StepParticipant {
@@ -367,7 +370,12 @@ fn step_participant(row: StepParticipantRow) -> Result<StepParticipant, StoreErr
         points: row.3,
         final_rank: row.4,
         status: row.5.parse()?,
+        seed: row.6,
     })
+}
+
+fn rules_json(rules: &super::StepRules) -> String {
+    serde_json::to_string(rules).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn step_conflict(err: sqlx::Error) -> StoreError {
@@ -406,6 +414,13 @@ async fn start_step_in(
         };
     };
     let step = step(updated)?;
+    let seed_of = |id: &Uuid| {
+        start
+            .seeds
+            .iter()
+            .position(|s| s == id)
+            .and_then(|p| i32::try_from(p + 1).ok())
+    };
     for (index, ids) in start.groups.iter().enumerate() {
         let group_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO step_group (step_id, index) VALUES ($1, $2) RETURNING id",
@@ -416,13 +431,14 @@ async fn start_step_in(
         .await?;
         for participant_id in ids {
             sqlx::query(
-                "INSERT INTO step_participant (step_id, tournament_id, participant_id, group_id) \
-                 VALUES ($1, $2, $3, $4)",
+                "INSERT INTO step_participant (step_id, tournament_id, participant_id, group_id, seed) \
+                 VALUES ($1, $2, $3, $4, $5)",
             )
             .bind(step.id)
             .bind(step.tournament_id)
             .bind(participant_id)
             .bind(group_id)
+            .bind(seed_of(participant_id))
             .execute(&mut **tx)
             .await?;
         }
@@ -430,10 +446,22 @@ async fn start_step_in(
     Ok(Some(step))
 }
 
-/// Colonnes de `match`, dans l'ordre de [`MatchRow`].
+/// Une génération concurrente a déjà créé cette ronde : l'index d'unicité la refuse.
+fn generation_conflict(err: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db) = &err
+        && db.code().as_deref() == Some(UNIQUE_VIOLATION)
+        && db.constraint() == Some("match_generated_slot_key")
+    {
+        return StoreError::StepState;
+    }
+    err.into()
+}
+
+/// Colonnes de `match`, lues par [`MatchRow`].
 fn match_columns() -> String {
     format!(
-        "id, game_id, step_id, group_id, round, bracket, next_match_id, {} AS scheduled_at, \
+        "id, game_id, step_id, group_id, round, bracket, next_match_id, number, next_slot::int4, \
+         loser_next_match_id, loser_next_slot::int4, best_of, {} AS scheduled_at, \
          {} AS started_at, {} AS ended_at, status, {} AS created_at, {} AS updated_at",
         ts("scheduled_at"),
         ts("started_at"),
@@ -443,44 +471,89 @@ fn match_columns() -> String {
     )
 }
 
-type MatchRow = (
-    Uuid,
-    Uuid,
-    Uuid,
-    Option<Uuid>,
-    Option<i32>,
-    Option<String>,
-    Option<Uuid>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    String,
-    String,
-    String,
-);
+/// Ligne de `match` (trop large pour un tuple).
+struct MatchRow {
+    id: Uuid,
+    game_id: Uuid,
+    step_id: Uuid,
+    group_id: Option<Uuid>,
+    round: Option<i32>,
+    bracket: Option<String>,
+    next_match_id: Option<Uuid>,
+    number: Option<i32>,
+    next_slot: Option<i32>,
+    loser_next_match_id: Option<Uuid>,
+    loser_next_slot: Option<i32>,
+    best_of: i32,
+    scheduled_at: Option<String>,
+    started_at: Option<String>,
+    ended_at: Option<String>,
+    status: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for MatchRow {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get(0)?,
+            game_id: row.try_get(1)?,
+            step_id: row.try_get(2)?,
+            group_id: row.try_get(3)?,
+            round: row.try_get(4)?,
+            bracket: row.try_get(5)?,
+            next_match_id: row.try_get(6)?,
+            number: row.try_get(7)?,
+            next_slot: row.try_get(8)?,
+            loser_next_match_id: row.try_get(9)?,
+            loser_next_slot: row.try_get(10)?,
+            best_of: row.try_get(11)?,
+            scheduled_at: row.try_get(12)?,
+            started_at: row.try_get(13)?,
+            ended_at: row.try_get(14)?,
+            status: row.try_get(15)?,
+            created_at: row.try_get(16)?,
+            updated_at: row.try_get(17)?,
+        })
+    }
+}
 
 fn match_from(row: MatchRow) -> Result<Match, StoreError> {
     Ok(Match {
-        id: row.0,
-        game_id: row.1,
-        step_id: row.2,
-        group_id: row.3,
-        round: row.4,
-        bracket: row.5.map(|b| b.parse()).transpose()?,
-        next_match_id: row.6,
-        scheduled_at: row.7,
-        started_at: row.8,
-        ended_at: row.9,
-        status: row.10.parse()?,
-        created_at: row.11,
-        updated_at: row.12,
+        id: row.id,
+        game_id: row.game_id,
+        step_id: row.step_id,
+        group_id: row.group_id,
+        round: row.round,
+        bracket: row.bracket.map(|b| b.parse()).transpose()?,
+        next_match_id: row.next_match_id,
+        number: row.number,
+        next_slot: row.next_slot,
+        loser_next_match_id: row.loser_next_match_id,
+        loser_next_slot: row.loser_next_slot,
+        best_of: row.best_of,
+        scheduled_at: row.scheduled_at,
+        started_at: row.started_at,
+        ended_at: row.ended_at,
+        status: row.status.parse()?,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     })
 }
 
-type MatchParticipantRow = (Uuid, Uuid, String, f64, Option<i32>, Option<String>);
+type MatchParticipantRow = (
+    Uuid,
+    Uuid,
+    String,
+    f64,
+    Option<i32>,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+);
 
-const MATCH_PARTICIPANT_COLUMNS: &str =
-    "match_id, participant_id, stats::text, points::float8, rank, result";
+const MATCH_PARTICIPANT_COLUMNS: &str = "match_id, participant_id, stats::text, points::float8, \
+     rank, result, slot::int4, games_won";
 
 fn match_participant(row: MatchParticipantRow) -> Result<MatchParticipant, StoreError> {
     Ok(MatchParticipant {
@@ -490,6 +563,8 @@ fn match_participant(row: MatchParticipantRow) -> Result<MatchParticipant, Store
         points: row.3,
         rank: row.4,
         result: row.5.map(|r| r.parse()).transpose()?,
+        slot: row.6,
+        games_won: row.7,
     })
 }
 
@@ -505,7 +580,7 @@ async fn set_match_participants_in(
         .execute(&mut **tx)
         .await?;
     for participant_id in participants {
-        insert_match_participant(tx, match_id, *participant_id).await?;
+        insert_match_participant(tx, match_id, *participant_id, None).await?;
     }
     Ok(())
 }
@@ -514,13 +589,15 @@ async fn insert_match_participant(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     match_id: Uuid,
     participant_id: Uuid,
+    slot: Option<i32>,
 ) -> Result<(), StoreError> {
     sqlx::query(
-        "INSERT INTO match_participant (match_id, participant_id) VALUES ($1, $2) \
-         ON CONFLICT DO NOTHING",
+        "INSERT INTO match_participant (match_id, participant_id, slot) \
+         VALUES ($1, $2, $3::int4::smallint) ON CONFLICT DO NOTHING",
     )
     .bind(match_id)
     .bind(participant_id)
+    .bind(slot)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -534,7 +611,8 @@ async fn save_match_scores_in(
     for score in scores {
         sqlx::query(
             "UPDATE match_participant SET stats = $3::jsonb, points = $4::float8::numeric, \
-                 rank = $5, result = $6 \
+                 rank = $5, result = $6, games_won = $7, \
+                 slot = COALESCE($8::int4::smallint, slot) \
              WHERE match_id = $1 AND participant_id = $2",
         )
         .bind(match_id)
@@ -543,6 +621,8 @@ async fn save_match_scores_in(
         .bind(score.points)
         .bind(score.rank)
         .bind(score.result.map(|r| r.as_str()))
+        .bind(score.games_won)
+        .bind(score.slot)
         .execute(&mut **tx)
         .await?;
     }
@@ -2149,8 +2229,9 @@ impl AuthStore for PgStore {
         let definition = input.definition;
         sqlx::query_as::<_, StepRow>(&format!(
             "INSERT INTO step (tournament_id, position, format, match_type, group_count, \
-                 group_size, matches_per_group, advance_per_group, tiebreak) \
-             SELECT t.id, $2, $3, $4, $5, $6, $7, $8, $9::jsonb FROM tournaments t WHERE t.id = $1 \
+                 group_size, matches_per_group, advance_per_group, tiebreak, rules) \
+             SELECT t.id, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb \
+             FROM tournaments t WHERE t.id = $1 \
              RETURNING {}",
             step_columns()
         ))
@@ -2163,6 +2244,7 @@ impl AuthStore for PgStore {
         .bind(definition.matches_per_group)
         .bind(definition.advance_per_group)
         .bind(definition.tiebreak.to_string())
+        .bind(rules_json(&definition.rules))
         .fetch_optional(&self.pool)
         .await
         .map_err(step_conflict)?
@@ -2178,7 +2260,7 @@ impl AuthStore for PgStore {
         sqlx::query_as::<_, StepRow>(&format!(
             "UPDATE step SET position = $2, format = $3, match_type = $4, group_count = $5, \
                  group_size = $6, matches_per_group = $7, advance_per_group = $8, \
-                 tiebreak = $9::jsonb, updated_at = now() \
+                 tiebreak = $9::jsonb, rules = $10::jsonb, updated_at = now() \
              WHERE id = $1 RETURNING {}",
             step_columns()
         ))
@@ -2191,6 +2273,7 @@ impl AuthStore for PgStore {
         .bind(definition.matches_per_group)
         .bind(definition.advance_per_group)
         .bind(definition.tiebreak.to_string())
+        .bind(rules_json(&definition.rules))
         .fetch_optional(&self.pool)
         .await
         .map_err(step_conflict)?
@@ -2228,7 +2311,7 @@ impl AuthStore for PgStore {
     ) -> Result<Vec<StepParticipant>, StoreError> {
         sqlx::query_as::<_, StepParticipantRow>(
             "SELECT p.step_id, p.participant_id, p.group_id, p.points::float8, p.final_rank, \
-                 p.status \
+                 p.status, p.seed \
              FROM step_participant p JOIN step_group g ON g.id = p.group_id \
              WHERE p.step_id = $1 ORDER BY g.index, p.participant_id",
         )
@@ -2317,6 +2400,7 @@ impl AuthStore for PgStore {
              WHERE step_id = $1 AND ($2::uuid IS NULL OR group_id = $2) \
                  AND ($3::text IS NULL OR status = $3) \
              ORDER BY (SELECT index FROM step_group WHERE id = match.group_id), round, \
+                 CASE bracket WHEN 'losers' THEN 1 WHEN 'grand_final' THEN 2 ELSE 0 END, number, \
                  created_at, id",
             match_columns()
         ))
@@ -2378,7 +2462,7 @@ impl AuthStore for PgStore {
         .await?;
         let created = match_from(row)?;
         for participant_id in &input.participants {
-            insert_match_participant(&mut tx, created.id, *participant_id).await?;
+            insert_match_participant(&mut tx, created.id, *participant_id, None).await?;
         }
         tx.commit().await?;
         Ok(created)
@@ -2477,8 +2561,23 @@ impl AuthStore for PgStore {
             return Ok(None);
         };
         save_match_scores_in(&mut tx, finish.match_id, finish.scores).await?;
-        if let Some((next_id, participant_id)) = finish.advance {
-            insert_match_participant(&mut tx, next_id, participant_id).await?;
+        for placement in &finish.placements {
+            insert_match_participant(
+                &mut tx,
+                placement.match_id,
+                placement.participant_id,
+                placement.slot,
+            )
+            .await?;
+        }
+        if !finish.cancel.is_empty() {
+            sqlx::query(
+                "UPDATE match SET status = 'cancelled', ended_at = now(), updated_at = now() \
+                 WHERE id = ANY($1) AND status = 'scheduled'",
+            )
+            .bind(&finish.cancel)
+            .execute(&mut *tx)
+            .await?;
         }
         for (participant_id, points) in finish.step_points {
             sqlx::query(
@@ -2501,6 +2600,115 @@ impl AuthStore for PgStore {
         .await?;
         tx.commit().await?;
         Ok(Some(match_from(row)?))
+    }
+
+    async fn generate_matches(&self, generation: Generation) -> Result<Vec<Match>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        // Le verrou de l'étape sérialise les générations concurrentes.
+        let status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM step WHERE id = $1 FOR UPDATE")
+                .bind(generation.step_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if status.as_deref() != Some("ongoing") {
+            return Err(StoreError::StepState);
+        }
+        if generation.initial {
+            let any = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM match WHERE step_id = $1)",
+            )
+            .bind(generation.step_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if any {
+                return Err(StoreError::StepState);
+            }
+        }
+        let mut ids: Vec<Uuid> = Vec::with_capacity(generation.matches.len());
+        for planned in &generation.matches {
+            let bye = planned.bye_points.is_some();
+            let id = sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match (game_id, step_id, group_id, round, bracket, number, best_of, \
+                     status, started_at, ended_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, \
+                     CASE WHEN $8 THEN 'finished' ELSE 'scheduled' END, \
+                     CASE WHEN $8 THEN now() END, CASE WHEN $8 THEN now() END) \
+                 RETURNING id",
+            )
+            .bind(generation.game_id)
+            .bind(generation.step_id)
+            .bind(planned.group_id)
+            .bind(planned.round)
+            .bind(planned.bracket.map(|b| b.as_str()))
+            .bind(planned.number)
+            .bind(planned.best_of)
+            .bind(bye)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(generation_conflict)?;
+            ids.push(id);
+        }
+        for (planned, id) in generation.matches.iter().zip(&ids) {
+            let next = planned
+                .next
+                .and_then(|(n, slot)| ids.get(n).map(|m| (*m, slot)));
+            let loser = planned
+                .loser_next
+                .and_then(|(n, slot)| ids.get(n).map(|m| (*m, slot)));
+            if next.is_some() || loser.is_some() {
+                sqlx::query(
+                    "UPDATE match SET next_match_id = $2, next_slot = $3::int4::smallint, \
+                         loser_next_match_id = $4, loser_next_slot = $5::int4::smallint \
+                     WHERE id = $1",
+                )
+                .bind(id)
+                .bind(next.map(|(m, _)| m))
+                .bind(next.map(|(_, slot)| slot))
+                .bind(loser.map(|(m, _)| m))
+                .bind(loser.map(|(_, slot)| slot))
+                .execute(&mut *tx)
+                .await?;
+            }
+            for (participant_id, slot) in &planned.participants {
+                insert_match_participant(&mut tx, *id, *participant_id, *slot).await?;
+                if let Some(points) = planned.bye_points {
+                    sqlx::query(
+                        "UPDATE match_participant SET points = $3::float8::numeric, rank = 1, \
+                             result = 'win' WHERE match_id = $1 AND participant_id = $2",
+                    )
+                    .bind(id)
+                    .bind(participant_id)
+                    .bind(points)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+        }
+        for (participant_id, points) in &generation.step_points {
+            sqlx::query(
+                "UPDATE step_participant SET points = $3::float8::numeric \
+                 WHERE step_id = $1 AND participant_id = $2",
+            )
+            .bind(generation.step_id)
+            .bind(participant_id)
+            .bind(points)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let rows = sqlx::query_as::<_, MatchRow>(&format!(
+            "SELECT {} FROM match WHERE id = ANY($1)",
+            match_columns()
+        ))
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        let mut by_id: HashMap<Uuid, Match> = HashMap::new();
+        for row in rows {
+            let m = match_from(row)?;
+            by_id.insert(m.id, m);
+        }
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
     async fn replace_step_matches(
@@ -2526,9 +2734,10 @@ impl AuthStore for PgStore {
         for import in &matches {
             let id = sqlx::query_scalar::<_, Uuid>(
                 "INSERT INTO match (game_id, step_id, group_id, round, bracket, scheduled_at, \
-                     started_at, ended_at, status) \
+                     started_at, ended_at, status, number, next_slot, loser_next_slot, best_of) \
                  VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, \
-                     $8::timestamptz, $9) RETURNING id",
+                     $8::timestamptz, $9, $10, $11::int4::smallint, $12::int4::smallint, $13) \
+                 RETURNING id",
             )
             .bind(game_id)
             .bind(step_id)
@@ -2539,20 +2748,29 @@ impl AuthStore for PgStore {
             .bind(&import.started_at)
             .bind(&import.ended_at)
             .bind(import.status.as_str())
+            .bind(import.number)
+            .bind(import.next_slot)
+            .bind(import.loser_next_slot)
+            .bind(import.best_of)
             .fetch_one(&mut *tx)
             .await?;
             ids.push(id);
         }
         for (import, id) in matches.into_iter().zip(&ids) {
-            if let Some(next) = import.next.and_then(|next| ids.get(next)) {
-                sqlx::query("UPDATE match SET next_match_id = $2 WHERE id = $1")
-                    .bind(id)
-                    .bind(next)
-                    .execute(&mut *tx)
-                    .await?;
+            let next = import.next.and_then(|next| ids.get(next));
+            let loser_next = import.loser_next.and_then(|next| ids.get(next));
+            if next.is_some() || loser_next.is_some() {
+                sqlx::query(
+                    "UPDATE match SET next_match_id = $2, loser_next_match_id = $3 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(next)
+                .bind(loser_next)
+                .execute(&mut *tx)
+                .await?;
             }
             for score in import.participants {
-                insert_match_participant(&mut tx, *id, score.participant_id).await?;
+                insert_match_participant(&mut tx, *id, score.participant_id, score.slot).await?;
                 save_match_scores_in(&mut tx, *id, vec![score]).await?;
             }
         }
