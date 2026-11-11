@@ -27,6 +27,7 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::password_reset::routes)
         .configure(crate::verification::routes)
         .configure(crate::users::routes)
+        .configure(crate::settings::routes)
         .configure(crate::games::routes)
         .configure(crate::stats::routes)
         .configure(crate::teams::routes)

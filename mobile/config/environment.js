@@ -17,6 +17,12 @@ function loadRootEnvironment({
     ) {
       env.EXPO_PUBLIC_API_URL = values.EXPO_PUBLIC_API_URL;
     }
+    if (
+      env.EXPO_PUBLIC_EAS_PROJECT_ID === undefined &&
+      values.EXPO_PUBLIC_EAS_PROJECT_ID !== undefined
+    ) {
+      env.EXPO_PUBLIC_EAS_PROJECT_ID = values.EXPO_PUBLIC_EAS_PROJECT_ID;
+    }
     if (env.PUBLIC_URL === undefined && values.PUBLIC_URL !== undefined) {
       env.PUBLIC_URL = values.PUBLIC_URL;
     }

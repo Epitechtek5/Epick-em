@@ -30,7 +30,7 @@ const INITIAL_FORM: RegisterForm = {
 };
 
 export default function RegisterScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const [form, setForm] = useState<RegisterForm>(INITIAL_FORM);
   const [errors, setErrors] = useState<RegisterErrors>({});
@@ -60,6 +60,10 @@ export default function RegisterScreen() {
         username: normalizeUsername(form.username),
         password: form.password,
         email,
+        language:
+          i18n.language === 'fr' || i18n.language === 'es'
+            ? i18n.language
+            : 'en',
       });
 
       router.replace({

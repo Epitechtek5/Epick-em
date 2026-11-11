@@ -4,8 +4,9 @@ mod common;
 
 use actix_web::http::StatusCode;
 use api_public::config::AuthConfig;
-use api_public::mail::{MailConfig, Mailer, MemoryMailer, ResendMailer};
+use api_public::mail::{MailConfig, Mailer, MemoryMailer, NotificationMail, ResendMailer};
 use api_public::store::{AuthStore, MemoryStore};
+use api_public::store::{Category, Language};
 use common::{PUBLIC_URL, access, app_with_mailer, login, post, post_as};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -376,9 +377,26 @@ fn mail_config() -> MailConfig {
         api_key: "re_test_key".into(),
         from: "Epick'em <no-reply@epickem.test>".into(),
         public_url: PUBLIC_URL.into(),
-        password_reset_template: "password-reset".into(),
-        verification_template: "email-address-confirmation".into(),
-        welcome_template: "welcome-account".into(),
+        password_reset_template: [
+            "password-reset-fr".into(),
+            "password-reset-en".into(),
+            "password-reset-es".into(),
+        ],
+        verification_template: [
+            "email-address-confirmation-fr".into(),
+            "email-address-confirmation-en".into(),
+            "email-address-confirmation-es".into(),
+        ],
+        welcome_template: [
+            "welcome-account-fr".into(),
+            "welcome-account-en".into(),
+            "welcome-account-es".into(),
+        ],
+        notification_templates: [
+            "notification-fr".into(),
+            "notification-en".into(),
+            "notification-es".into(),
+        ],
     }
 }
 
@@ -387,7 +405,11 @@ async fn resend_mailer_posts_the_message_to_resend() {
     let (endpoint, server) = fake_resend(200).await;
     let mailer = ResendMailer::with_endpoint(&mail_config(), &endpoint).unwrap();
     mailer
-        .send_password_reset("alice@example.com", "https://x.test/r?token=abc")
+        .send_password_reset(
+            "alice@example.com",
+            "https://x.test/r?token=abc",
+            Language::Fr,
+        )
         .await
         .unwrap();
 
@@ -401,7 +423,7 @@ async fn resend_mailer_posts_the_message_to_resend() {
     let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(body["from"], "Epick'em <no-reply@epickem.test>");
     assert_eq!(body["to"], json!(["alice@example.com"]));
-    assert_eq!(body["template"]["id"], "password-reset");
+    assert_eq!(body["template"]["id"], "password-reset-fr");
     assert_eq!(
         body["template"]["variables"]["RESET_URL"],
         "https://x.test/r?token=abc"
@@ -411,15 +433,87 @@ async fn resend_mailer_posts_the_message_to_resend() {
 }
 
 #[tokio::test]
+async fn resend_notifications_use_the_template_of_the_language() {
+    for (language, template) in [
+        (Language::Fr, "notification-fr"),
+        (Language::En, "notification-en"),
+        (Language::Es, "notification-es"),
+    ] {
+        let (endpoint, server) = fake_resend(200).await;
+        let mailer = ResendMailer::with_endpoint(&mail_config(), &endpoint).unwrap();
+        mailer
+            .send_notification(
+                "alice@example.com",
+                &NotificationMail {
+                    language,
+                    category: Category::Teams,
+                    title: "Titre".into(),
+                    body: "Corps".into(),
+                    action_url: Some("https://x.test/tournaments/1".into()),
+                },
+            )
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["template"]["id"], template);
+        assert_eq!(body["subject"], "Titre");
+        assert_eq!(
+            body["template"]["variables"],
+            json!({
+                "TITLE": "Titre", "BODY": "Corps", "CATEGORY": "teams",
+                "LANGUAGE": language.as_str(),
+                "ACTION_URL": "https://x.test/tournaments/1",
+            })
+        );
+    }
+}
+
+#[tokio::test]
 async fn resend_mailer_reports_a_refusal() {
     let (endpoint, _server) = fake_resend(403).await;
     let mailer = ResendMailer::with_endpoint(&mail_config(), &endpoint).unwrap();
     let err = mailer
-        .send_password_reset("alice@example.com", "l")
+        .send_password_reset("alice@example.com", "l", Language::Fr)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("403"), "{err}");
     assert!(!err.to_string().contains("re_test_key"));
+}
+
+#[tokio::test]
+async fn account_templates_follow_the_recipient_language() {
+    for language in [Language::Fr, Language::En, Language::Es] {
+        for kind in [
+            "password-reset",
+            "email-address-confirmation",
+            "welcome-account",
+        ] {
+            let (endpoint, server) = fake_resend(200).await;
+            let mailer = ResendMailer::with_endpoint(&mail_config(), &endpoint).unwrap();
+            match kind {
+                "password-reset" => mailer
+                    .send_password_reset("alice@example.test", "link", language)
+                    .await
+                    .unwrap(),
+                "email-address-confirmation" => mailer
+                    .send_verification("alice@example.test", "link", language)
+                    .await
+                    .unwrap(),
+                _ => mailer
+                    .send_welcome("alice@example.test", "Alice", language)
+                    .await
+                    .unwrap(),
+            }
+            let request = server.await.unwrap();
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(
+                body["template"]["id"],
+                format!("{kind}-{}", language.as_str())
+            );
+        }
+    }
 }
 
 #[test]
@@ -437,17 +531,21 @@ async fn verification_and_welcome_use_distinct_hosted_templates() {
         let mailer = ResendMailer::with_endpoint(&mail_config(), &endpoint).unwrap();
         let (alias, variables) = if welcome {
             mailer
-                .send_welcome("alice@example.test", "Alice")
+                .send_welcome("alice@example.test", "Alice", Language::Fr)
                 .await
                 .unwrap();
-            ("welcome-account", json!({"USERNAME":"Alice"}))
+            ("welcome-account-fr", json!({"USERNAME":"Alice"}))
         } else {
             mailer
-                .send_verification("alice@example.test", "epickem://verify-email?token=fixture")
+                .send_verification(
+                    "alice@example.test",
+                    "epickem://verify-email?token=fixture",
+                    Language::Fr,
+                )
                 .await
                 .unwrap();
             (
-                "email-address-confirmation",
+                "email-address-confirmation-fr",
                 json!({"VERIFICATION_URL":"epickem://verify-email?token=fixture"}),
             )
         };

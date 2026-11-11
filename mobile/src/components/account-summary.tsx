@@ -1,7 +1,6 @@
 import { router } from 'expo-router';
 import { Button } from './ui/button';
 import { View } from 'react-native';
-import UserCircleIcon from '@hugeicons/core-free-icons/UserCircleIcon';
 import ShieldUserIcon from '@hugeicons/core-free-icons/ShieldUserIcon';
 import UserIcon from '@hugeicons/core-free-icons/UserIcon';
 import EyeIcon from '@hugeicons/core-free-icons/EyeIcon';
@@ -10,6 +9,7 @@ import { useTranslation } from '@/i18n';
 import { Card, CardContent } from './ui/card';
 import { Icon } from './ui/icon';
 import { Text } from './ui/text';
+import { UserAvatar } from './users/user-avatar';
 
 export function RoleBadge({ role }: { role: User['role'] }) {
   const { t } = useTranslation();
@@ -34,9 +34,7 @@ export function AccountSummary({ user }: { user: AccountUser }) {
     <Card className="gap-4 py-4">
       <CardContent className="gap-4 px-4">
         <View className="flex-row items-center gap-3">
-          <View className="h-12 w-12 items-center justify-center rounded-lg bg-muted">
-            <Icon icon={UserCircleIcon} size={28} tone="primary" />
-          </View>
+          <UserAvatar uri={user.picture_url} name={user.username} />
           <View className="flex-1 gap-2">
             <Text variant="large" role="heading" aria-level={2} selectable>
               {user.username}

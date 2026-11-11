@@ -11,9 +11,13 @@ use super::{
     TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
     UserRecord, UserUpdate,
 };
+use super::{
+    Channel, Language, MAX_PUSH_TOKENS, Platform, PushToken, SettingsUpdate, Theme, UserSettings,
+};
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
 use sqlx::PgPool;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
@@ -45,13 +49,14 @@ fn profile_key(id: Uuid) -> String {
     format!("user:{id}")
 }
 
-type ProfileRow = (Uuid, String, String);
+type ProfileRow = (Uuid, String, String, Option<String>);
 
 fn profile(row: ProfileRow) -> Result<UserProfile, StoreError> {
     Ok(UserProfile {
         id: row.0,
         username: row.1,
         role: row.2.parse::<Role>()?,
+        picture_url: row.3,
     })
 }
 
@@ -633,6 +638,7 @@ type UserRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 fn user(row: UserRow) -> Result<UserRecord, StoreError> {
@@ -644,6 +650,26 @@ fn user(row: UserRow) -> Result<UserRecord, StoreError> {
         email: row.4,
         pending_email: row.5,
         email_verified_at: row.6,
+        picture_url: row.7,
+    })
+}
+
+type SettingsRow = (String, String, String);
+
+fn settings(row: SettingsRow) -> Result<UserSettings, StoreError> {
+    let language = row.0.parse::<Language>().map_err(StoreError::Other)?;
+    let theme = row.1.parse::<Theme>().map_err(StoreError::Other)?;
+    let overrides: BTreeMap<String, bool> =
+        serde_json::from_str(&row.2).map_err(|err| StoreError::Other(err.to_string()))?;
+    Ok(UserSettings::from_overrides(language, theme, &overrides))
+}
+
+fn push_token(row: (Uuid, Uuid, String, String)) -> Result<PushToken, StoreError> {
+    Ok(PushToken {
+        id: row.0,
+        user_id: row.1,
+        token: row.2,
+        platform: row.3.parse::<Platform>().map_err(StoreError::Other)?,
     })
 }
 
@@ -659,7 +685,7 @@ impl AuthStore for PgStore {
         let mut tx = self.pool.begin().await?;
         let user=sqlx::query_as::<_, UserRow>(
             "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) \
-             RETURNING id, username, password_hash, role, email, pending_email, email_verified_at::text",
+             RETURNING id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url",
         )
         .bind(username)
         .bind(email)
@@ -872,7 +898,7 @@ impl AuthStore for PgStore {
         username: &str,
     ) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text FROM users \
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url FROM users \
              WHERE lower(username) = lower($1)",
         )
         .bind(username)
@@ -884,7 +910,21 @@ impl AuthStore for PgStore {
 
     async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text FROM users WHERE email = $1",
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url FROM users WHERE email = $1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(user)
+        .transpose()?)
+    }
+
+    async fn find_user_by_verification_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserRecord>, StoreError> {
+        Ok(sqlx::query_as::<_, UserRow>(
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url FROM users WHERE COALESCE(pending_email, email) = $1",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -895,7 +935,7 @@ impl AuthStore for PgStore {
 
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text FROM users WHERE id = $1",
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url FROM users WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -909,7 +949,7 @@ impl AuthStore for PgStore {
             .db
             .read_optional(&profile_key(id), PROFILE_TTL, |pool| async move {
                 sqlx::query_as::<_, ProfileRow>(
-                    "SELECT id, username, role FROM users WHERE id = $1",
+                    "SELECT id, username, role, picture_url FROM users WHERE id = $1",
                 )
                 .bind(id)
                 .fetch_optional(&pool)
@@ -922,7 +962,7 @@ impl AuthStore for PgStore {
 
     async fn list_profiles(&self, limit: i64, offset: i64) -> Result<Vec<UserProfile>, StoreError> {
         sqlx::query_as::<_, ProfileRow>(
-            "SELECT id, username, role FROM users ORDER BY created_at, id LIMIT $1 OFFSET $2",
+            "SELECT id, username, role, picture_url FROM users ORDER BY created_at, id LIMIT $1 OFFSET $2",
         )
         .bind(limit)
         .bind(offset)
@@ -948,14 +988,17 @@ impl AuthStore for PgStore {
                          username = COALESCE($2, username), \
                          password_hash = COALESCE($3, password_hash), \
                          role = COALESCE($4, role), \
-                         pending_email = CASE WHEN $5::text IS NULL THEN pending_email WHEN $5 = email THEN NULL ELSE $5 END \
-                     WHERE id = $1 RETURNING id, username, role",
+                         pending_email = CASE WHEN $5::text IS NULL THEN pending_email WHEN $5 = email THEN NULL ELSE $5 END, \
+                         picture_url = CASE WHEN $6 THEN $7 ELSE picture_url END \
+                     WHERE id = $1 RETURNING id, username, role, picture_url",
                 )
                 .bind(id)
                 .bind(update.username)
                 .bind(update.password_hash)
                 .bind(update.role.map(Role::as_str))
                 .bind(&update.email)
+                .bind(update.picture_url.is_some())
+                .bind(update.picture_url.flatten())
                 .fetch_optional(&mut *tx)
                 .await?;
                 if let Some(email) = update.email.as_deref() {
@@ -978,6 +1021,166 @@ impl AuthStore for PgStore {
             .map_err(username_taken)?
             .map(profile)
             .transpose()
+    }
+
+    async fn user_settings(&self, user_id: Uuid) -> Result<Option<UserSettings>, StoreError> {
+        sqlx::query_as::<_, SettingsRow>(
+            "SELECT COALESCE(s.language, 'fr'), COALESCE(s.theme, 'system'), \
+                    COALESCE(s.notifications, '{}'::jsonb)::text \
+             FROM users u LEFT JOIN user_settings s ON s.user_id = u.id WHERE u.id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(settings)
+        .transpose()
+    }
+
+    async fn update_user_settings(
+        &self,
+        user_id: Uuid,
+        update: SettingsUpdate,
+    ) -> Result<Option<UserSettings>, StoreError> {
+        let overrides = serde_json::to_string(&update.overrides())
+            .map_err(|err| StoreError::Other(err.to_string()))?;
+        let row = sqlx::query_as::<_, SettingsRow>(
+            "INSERT INTO user_settings (user_id, language, theme, notifications) \
+             VALUES ($1, COALESCE($2, 'fr'), COALESCE($3, 'system'), $4::jsonb) \
+             ON CONFLICT (user_id) DO UPDATE SET \
+                 language = COALESCE($2, user_settings.language), \
+                 theme = COALESCE($3, user_settings.theme), \
+                 notifications = user_settings.notifications || $4::jsonb, \
+                 updated_at = now() \
+             RETURNING language, theme, notifications::text",
+        )
+        .bind(user_id)
+        .bind(update.language.map(Language::as_str))
+        .bind(update.theme.map(Theme::as_str))
+        .bind(overrides)
+        .fetch_one(&self.pool)
+        .await;
+        match row {
+            Ok(row) => Ok(Some(settings(row)?)),
+            Err(sqlx::Error::Database(db))
+                if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn register_push_token(
+        &self,
+        user_id: Uuid,
+        token: &str,
+        platform: Platform,
+    ) -> Result<Option<PushToken>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+            "INSERT INTO push_tokens (user_id, token, platform) VALUES ($1, $2, $3) \
+             ON CONFLICT (token) DO UPDATE SET \
+                 user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, updated_at = now() \
+             RETURNING id, user_id, token, platform",
+        )
+        .bind(user_id)
+        .bind(token)
+        .bind(platform.as_str())
+        .fetch_one(&mut *tx)
+        .await;
+        let row = match row {
+            Ok(row) => row,
+            Err(sqlx::Error::Database(db))
+                if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION) =>
+            {
+                return Ok(None);
+            }
+            Err(err) => return Err(err.into()),
+        };
+        sqlx::query(
+            "DELETE FROM push_tokens WHERE user_id = $1 AND id NOT IN \
+             (SELECT id FROM push_tokens WHERE user_id = $1 ORDER BY updated_at DESC, id LIMIT $2)",
+        )
+        .bind(user_id)
+        .bind(MAX_PUSH_TOKENS)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        push_token(row).map(Some)
+    }
+
+    async fn list_push_tokens(&self, user_id: Uuid) -> Result<Vec<PushToken>, StoreError> {
+        sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+            "SELECT id, user_id, token, platform FROM push_tokens WHERE user_id = $1 \
+             ORDER BY updated_at DESC, id",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(push_token)
+        .collect()
+    }
+
+    async fn revoke_push_token(&self, user_id: Uuid, token: &str) -> Result<bool, StoreError> {
+        let result = sqlx::query("DELETE FROM push_tokens WHERE user_id = $1 AND token = $2")
+            .bind(user_id)
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn remove_push_token(&self, token: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM push_tokens WHERE token = $1")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn claim_notification(
+        &self,
+        event_key: &str,
+        user_id: Uuid,
+        channel: Channel,
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "INSERT INTO notification_log (event_key, user_id, channel) VALUES ($1, $2, $3) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(event_key)
+        .bind(user_id)
+        .bind(channel.as_str())
+        .execute(&self.pool)
+        .await;
+        match result {
+            Ok(result) => Ok(result.rows_affected() > 0),
+            // Compte supprimé entre-temps : rien à livrer.
+            Err(sqlx::Error::Database(db))
+                if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn release_notification(
+        &self,
+        event_key: &str,
+        user_id: Uuid,
+        channel: Channel,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "DELETE FROM notification_log WHERE event_key = $1 AND user_id = $2 AND channel = $3",
+        )
+        .bind(event_key)
+        .bind(user_id)
+        .bind(channel.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError> {

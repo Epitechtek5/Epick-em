@@ -7,6 +7,7 @@ export interface UpdateAccountRequest {
   username?: string;
   password?: string;
   email?: string;
+  picture_url?: string;
 }
 
 export interface UpdateUserRequest extends UpdateAccountRequest {

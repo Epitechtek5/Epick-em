@@ -581,7 +581,12 @@ async fn set_status(
             if let Some(problem) = participants_problem(&step, members.len()) {
                 return Err(ApiError::Validation(vec![("participants", problem)]));
             }
-            if target == MatchStatus::Ongoing {
+            let kind = if target == MatchStatus::Ongoing {
+                "match.started"
+            } else {
+                "match.finished"
+            };
+            let updated = if target == MatchStatus::Ongoing {
                 state
                     .store
                     .set_match_status(current.id, target)
@@ -592,7 +597,18 @@ async fn set_status(
                 let finished = finish(&state, &step, &current, &members).await?;
                 step_closed = close_if_complete(&state, &tournament, &step).await;
                 finished
-            }
+            };
+            crate::notifications::emit(
+                &state,
+                crate::notifications::match_event(
+                    kind,
+                    &tournament,
+                    step.id,
+                    current.id,
+                    members.iter().map(|m| m.participant_id).collect(),
+                ),
+            );
+            updated
         }
     };
     let step = match &step_closed {

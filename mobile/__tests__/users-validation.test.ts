@@ -3,6 +3,7 @@ import { validateUserForm } from '../src/features/users/validation';
 const base = {
   username: 'Player1',
   email: '',
+  pictureUrl: '',
   password: '',
   confirmPassword: '',
   role: 'user' as const,

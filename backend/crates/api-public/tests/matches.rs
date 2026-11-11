@@ -6,7 +6,7 @@ mod common;
 use actix_web::http::StatusCode;
 use actix_web::test::TestRequest;
 use api_public::store::{MemoryStore, Role};
-use common::{access, app_with, call, logged_in_as, login, request};
+use common::{access, app_with, call, eventually, logged_in_as, login, mailbox, request};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1134,5 +1134,71 @@ async fn matches_follow_their_tournament_at_every_level() {
             .unwrap()
             .iter()
             .all(|t| t["name"] == "Copie")
+    );
+}
+
+#[actix_web::test]
+async fn starting_and_finishing_a_match_notify_its_participants() {
+    let (app, s) = setup().await;
+    let (tid, step, group, ids) = running(&app, &s, "pool", "ffa").await;
+    let base = format!("/tournaments/{tid}/steps/{step}/matches");
+    let (_, created) = post(
+        &app,
+        &base,
+        &s.admin,
+        json!({ "group_id": group, "participant_ids": ids }),
+    )
+    .await;
+    let status_path = format!("{base}/{}/status", id(&created));
+    let titled = |title: &str| {
+        mailbox()
+            .notifications()
+            .iter()
+            .filter(|(_, mail)| mail.title == title)
+            .count()
+    };
+
+    // Un statut refusé n'envoie rien.
+    let (status, _) = post(
+        &app,
+        &status_path,
+        &s.players[0],
+        json!({ "status": "ongoing" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = post(&app, &status_path, &s.admin, json!({ "status": "ongoing" })).await;
+    assert_eq!(status, StatusCode::OK);
+    eventually(|| titled("Votre match commence") == 4).await;
+
+    let (status, _) = put(
+        &app,
+        &format!("{base}/{}/results", id(&created)),
+        &s.admin,
+        json!({ "results": ids.iter().enumerate().map(|(i, p)| json!({
+            "participant_id": p, "stats": { "kills": i, "placement": i + 1 },
+        })).collect::<Vec<_>>() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post(
+        &app,
+        &status_path,
+        &s.admin,
+        json!({ "status": "finished" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    eventually(|| titled("Match terminé") == 4).await;
+    let mail = mailbox()
+        .notifications()
+        .into_iter()
+        .find(|(_, mail)| mail.title == "Match terminé")
+        .unwrap()
+        .1;
+    assert!(
+        mail.action_url
+            .unwrap()
+            .contains(&format!("/tournaments/{tid}/steps/{step}"))
     );
 }

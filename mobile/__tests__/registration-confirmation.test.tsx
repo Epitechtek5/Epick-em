@@ -50,6 +50,7 @@ async function submitRegistration() {
     username: 'alice',
     password: 'Password1!',
     email: 'alice@example.com',
+    language: 'en',
   });
 }
 

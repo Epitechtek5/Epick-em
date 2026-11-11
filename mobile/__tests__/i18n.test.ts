@@ -1,5 +1,6 @@
 import en from '../src/i18n/locales/en.json';
 import fr from '../src/i18n/locales/fr.json';
+import es from '../src/i18n/locales/es.json';
 import i18n from '../src/i18n';
 import { getUserErrorMessage } from '../src/features/users/errors';
 import { ApiError } from '../src/lib/api';
@@ -15,13 +16,18 @@ function leaves(value: object, prefix = ''): Record<string, string> {
     }),
   );
 }
-it('has complete matching English and French keys and interpolation variables', () => {
+it('has complete matching translation keys and interpolation variables', () => {
   const english = leaves(en);
-  const french = leaves(fr);
-  expect(Object.keys(french).sort()).toEqual(Object.keys(english).sort());
-  for (const [key, value] of Object.entries(english)) {
-    expect(french[key].trim()).not.toBe('');
-    expect(french[key].match(/{{\w+}}/g)).toEqual(value.match(/{{\w+}}/g));
+  for (const translation of [leaves(fr), leaves(es)]) {
+    expect(Object.keys(translation).sort()).toEqual(
+      Object.keys(english).sort(),
+    );
+    for (const [key, value] of Object.entries(english)) {
+      expect(translation[key].trim()).not.toBe('');
+      expect(translation[key].match(/{{\w+}}/g)).toEqual(
+        value.match(/{{\w+}}/g),
+      );
+    }
   }
 });
 it.each([400, 401, 403, 404, 409, 500])(
