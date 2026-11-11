@@ -11,6 +11,7 @@
 use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
+use crate::invitations::{InvitationNotifier, InvitationTtl, NoopInvitationNotifier};
 use crate::mail::{Mailer, NoopMailer};
 use crate::match_io::InSteps;
 use crate::password_reset::{email_error, normalize_email};
@@ -63,6 +64,10 @@ pub struct AppState {
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
     pub(crate) public_url: Arc<str>,
+    /// Destinataire des événements d'invitation ; par défaut [`NoopInvitationNotifier`].
+    pub(crate) invitation_notifier: Arc<dyn InvitationNotifier>,
+    /// Validité par défaut et maximale des invitations.
+    pub(crate) invitation_ttl: InvitationTtl,
 }
 
 impl AppState {
@@ -82,6 +87,8 @@ impl AppState {
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
+            invitation_notifier: Arc::new(NoopInvitationNotifier),
+            invitation_ttl: InvitationTtl::default(),
         })
     }
 
@@ -112,6 +119,18 @@ impl AppState {
     /// Branche le sous-niveau qui importe et exporte les statistiques des jeux.
     pub fn with_stats(mut self, stats: Arc<dyn GameStats>) -> Self {
         self.stats = stats;
+        self
+    }
+
+    /// Branche le destinataire des événements d'invitation (moteur de notifications).
+    pub fn with_invitation_notifier(mut self, notifier: Arc<dyn InvitationNotifier>) -> Self {
+        self.invitation_notifier = notifier;
+        self
+    }
+
+    /// Règle la validité par défaut et maximale des invitations.
+    pub fn with_invitation_ttl(mut self, ttl: InvitationTtl) -> Self {
+        self.invitation_ttl = ttl;
         self
     }
 

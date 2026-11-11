@@ -1178,7 +1178,7 @@ pub(crate) async fn active_participants(
 }
 
 /// `true` pour un administrateur ; l'erreur n'est une erreur que si la lecture du compte échoue.
-async fn is_admin(state: &AppState, claims: &Claims) -> Result<bool, ApiError> {
+pub(crate) async fn is_admin(state: &AppState, claims: &Claims) -> Result<bool, ApiError> {
     match require_admin(state, claims).await {
         Ok(()) => Ok(true),
         Err(ApiError::Forbidden) => Ok(false),
