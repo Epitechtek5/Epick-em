@@ -1,0 +1,2 @@
+Epick'em {{ .Values.environment }} — images {{ .Values.image.repository }}/*:{{ .Values.image.tag }}
+Site : {{ .Values.publicUrl }}   API : {{ .Values.publicUrl }}/api/health

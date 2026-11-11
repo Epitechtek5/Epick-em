@@ -51,7 +51,10 @@ jobs:
               - '.github/workflows/ci.yml'
             deploy:
               - 'deploy/**'
+              - 'scripts/deploy/**'
               - '.github/workflows/deploy.yml'
+              - '.github/workflows/deploy-environment.yml'
+              - '.github/workflows/cd.yml'
 
   # Scan the entire history on every run to enforce ADR-007.
   gitleaks:

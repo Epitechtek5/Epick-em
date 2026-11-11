@@ -1,5 +1,14 @@
-# Point d'entrée : provisioning de la VM, installation de k3s, déploiement du chart.
-- name: Epick'em
-  hosts: all
+# Provisioning reproductible du serveur (ADR-005) : durcissement, k3s, cert-manager, puis un
+# namespace + un Secret par environnement. Le déploiement applicatif (helm upgrade) est fait par
+# le workflow GitHub `cd.yml` avec le SHA testé ; ce playbook peut le relancer à la main
+# (`-e epickem_deploy_tag=<sha>`), voir docs/exploitation/deploiement.md.
+#
+#   ansible-playbook -i inventories/production.ini site.yml --ask-vault-pass
+- name: Epick'em — serveur k3s
+  hosts: epickem
   become: true
-  tasks: []
+  roles:
+    - base
+    - k3s
+    - cert_manager
+    - environments
