@@ -35,7 +35,7 @@ const FIELD_IDS: Record<RegisterField, string> = {
 const FIELDS = Object.keys(FIELD_IDS) as RegisterField[]
 
 export default function RegisterPage() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   useDocumentTitle(t('auth.register.title'))
   const navigate = useNavigate()
   const form = useFormErrors<RegisterField>()
@@ -68,7 +68,12 @@ export default function RegisterPage() {
     form.clear()
     try {
       // L'adresse part telle que saisie : le serveur la normalise (trim, minuscules).
-      await register({ username: values.username, email: values.email, password: values.password })
+      await register({
+        username: values.username,
+        email: values.email,
+        password: values.password,
+        language: lang,
+      })
       const state: LoginLocationState = { registered: true, email: values.email.trim() }
       navigate('/login', { replace: true, state })
     } catch (error) {

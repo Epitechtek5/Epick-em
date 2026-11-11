@@ -1,6 +1,6 @@
 import '../../global.css';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import {
@@ -15,16 +15,26 @@ import { PortalHost } from '@rn-primitives/portal';
 import { useColorScheme, vars } from 'nativewind';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import { AuthProvider } from '@/features/auth/session';
+import { AuthProvider, useAuth } from '@/features/auth/session';
+import { PushNotificationsProvider } from '@/features/notifications/provider';
 import { colors } from '@/theme/colors';
 
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <PreferencesProvider>
-        <ThemedLayout />
-      </PreferencesProvider>
+      <AuthProvider>
+        <SessionPreferences>
+          <ThemedLayout />
+        </SessionPreferences>
+      </AuthProvider>
     </GestureHandlerRootView>
+  );
+}
+
+function SessionPreferences({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  return (
+    <PreferencesProvider accountId={user?.id}>{children}</PreferencesProvider>
   );
 }
 
@@ -66,14 +76,13 @@ function ThemedLayout() {
   );
 
   return (
-    <AuthProvider>
-      <ThemeProvider value={navigationTheme}>
-        <View className="flex-1 bg-background" style={variables}>
-          <StatusBar style={isDark ? 'light' : 'dark'} />
-          <Stack screenOptions={{ headerShown: false }} />
-          <PortalHost />
-        </View>
-      </ThemeProvider>
-    </AuthProvider>
+    <ThemeProvider value={navigationTheme}>
+      <View className="flex-1 bg-background" style={variables}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <Stack screenOptions={{ headerShown: false }} />
+        <PushNotificationsProvider />
+        <PortalHost />
+      </View>
+    </ThemeProvider>
   );
 }

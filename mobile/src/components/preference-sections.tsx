@@ -1,4 +1,4 @@
-import { View } from 'react-native';
+import { ActivityIndicator, Switch, View } from 'react-native';
 import type { IconSvgElement } from '@hugeicons/react-native';
 import ComputerIcon from '@hugeicons/core-free-icons/ComputerIcon';
 import Sun03Icon from '@hugeicons/core-free-icons/Sun03Icon';
@@ -11,6 +11,10 @@ import { FormMessage } from '@/components/ui/feedback';
 import { Icon } from '@/components/ui/icon';
 import { Text } from '@/components/ui/text';
 import { usePreferences } from '@/features/preferences/provider';
+import {
+  NOTIFICATION_CATEGORIES,
+  type NotificationChannel,
+} from '@/features/preferences/api';
 import { useTranslation } from '@/i18n';
 
 function PreferenceRow({
@@ -47,7 +51,16 @@ function PreferenceRow({
 
 export function PreferenceSections() {
   const { t } = useTranslation();
-  const { theme, language, setTheme, setLanguage, error } = usePreferences();
+  const {
+    theme,
+    language,
+    notifications,
+    setTheme,
+    setLanguage,
+    setNotification,
+    syncing,
+    error,
+  } = usePreferences();
   return (
     <>
       <View className="gap-3">
@@ -93,6 +106,7 @@ export function PreferenceSections() {
             [
               { value: 'en', label: 'settings.english' },
               { value: 'fr', label: 'settings.french' },
+              { value: 'es', label: 'settings.spanish' },
             ] as const
           ).map((option, index) => (
             <View key={option.value}>
@@ -105,6 +119,55 @@ export function PreferenceSections() {
                 selected={language === option.value}
                 onPress={() => setLanguage(option.value)}
               />
+            </View>
+          ))}
+        </Card>
+      </View>
+      <View className="gap-3">
+        <View className="flex-row items-center justify-between gap-3">
+          <Text variant="small" role="heading" aria-level={2}>
+            {t('settings.notifications')}
+          </Text>
+          {syncing ? (
+            <ActivityIndicator
+              size="small"
+              accessibilityLabel={t('settings.syncing')}
+            />
+          ) : null}
+        </View>
+        <Card className="gap-0 overflow-hidden py-0">
+          {NOTIFICATION_CATEGORIES.map((category, index) => (
+            <View key={category}>
+              {index > 0 ? (
+                <View className="mx-4 border-t border-border" />
+              ) : null}
+              <View className="gap-3 px-4 py-4">
+                <Text className="font-medium">
+                  {t(`settings.categories.${category}`)}
+                </Text>
+                <View className="flex-row flex-wrap gap-6">
+                  {(['email', 'push'] as NotificationChannel[]).map(
+                    (channel) => {
+                      const label = t(`settings.channels.${channel}`);
+                      return (
+                        <View
+                          key={channel}
+                          className="min-h-11 flex-1 flex-row items-center justify-between gap-3"
+                        >
+                          <Text variant="muted">{label}</Text>
+                          <Switch
+                            accessibilityLabel={`${t(`settings.categories.${category}`)} · ${label}`}
+                            value={notifications[category][channel]}
+                            onValueChange={(enabled) =>
+                              setNotification(category, channel, enabled)
+                            }
+                          />
+                        </View>
+                      );
+                    },
+                  )}
+                </View>
+              </View>
             </View>
           ))}
         </Card>

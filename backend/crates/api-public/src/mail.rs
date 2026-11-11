@@ -12,7 +12,6 @@ use std::time::Duration;
 
 const RESEND_ENDPOINT: &str = "https://api.resend.com/emails";
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_PASSWORD_RESET_TEMPLATE: &str = "password-reset";
 
 #[derive(Debug)]
 pub struct MailError(String);
@@ -41,10 +40,25 @@ pub trait Mailer: Send + Sync {
     fn available(&self) -> bool {
         true
     }
-    async fn send_verification(&self, to: &str, link: &str) -> Result<(), MailError>;
-    async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError>;
+    async fn send_verification(
+        &self,
+        to: &str,
+        link: &str,
+        language: Language,
+    ) -> Result<(), MailError>;
+    async fn send_welcome(
+        &self,
+        to: &str,
+        username: &str,
+        language: Language,
+    ) -> Result<(), MailError>;
     /// Envoie à `to` le message qui contient `link`, le lien de réinitialisation du mot de passe.
-    async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError>;
+    async fn send_password_reset(
+        &self,
+        to: &str,
+        link: &str,
+        language: Language,
+    ) -> Result<(), MailError>;
     /// Envoie une notification du moteur (`notifications`) ; jamais utilisée pour les e-mails
     /// de sécurité ci-dessus.
     async fn send_notification(&self, to: &str, mail: &NotificationMail) -> Result<(), MailError>;
@@ -60,9 +74,9 @@ pub struct MailConfig {
     /// e-mails en sont déduits.
     pub public_url: String,
     /// Published Resend template ID or alias.
-    pub password_reset_template: String,
-    pub verification_template: String,
-    pub welcome_template: String,
+    pub password_reset_template: [String; 3],
+    pub verification_template: [String; 3],
+    pub welcome_template: [String; 3],
     /// Modèles Resend des notifications, un par langue : `fr`, `en`, `es`.
     pub notification_templates: [String; 3],
 }
@@ -92,18 +106,36 @@ impl MailConfig {
             api_key: get("RESEND_API_KEY")?,
             from: get("MAIL_FROM").unwrap_or_else(|| "Epick'em <onboarding@resend.dev>".into()),
             public_url: get("PUBLIC_URL").unwrap_or_else(|| "http://localhost:3000".into()),
-            verification_template: get("RESEND_EMAIL_VERIFICATION_TEMPLATE")
-                .unwrap_or_else(|| "email-address-confirmation".into()),
-            welcome_template: get("RESEND_WELCOME_TEMPLATE")
-                .unwrap_or_else(|| "welcome-account".into()),
-            notification_templates: [
-                get("RESEND_NOTIFICATION_TEMPLATE_FR").unwrap_or_else(|| "notification-fr".into()),
-                get("RESEND_NOTIFICATION_TEMPLATE_EN").unwrap_or_else(|| "notification-en".into()),
-                get("RESEND_NOTIFICATION_TEMPLATE_ES").unwrap_or_else(|| "notification-es".into()),
-            ],
-            password_reset_template: get("RESEND_PASSWORD_RESET_TEMPLATE")
-                .unwrap_or_else(|| DEFAULT_PASSWORD_RESET_TEMPLATE.into()),
+            verification_template: templates(
+                &get,
+                "RESEND_EMAIL_VERIFICATION_TEMPLATE",
+                "email-address-confirmation",
+            ),
+            welcome_template: templates(&get, "RESEND_WELCOME_TEMPLATE", "welcome-account"),
+            password_reset_template: templates(
+                &get,
+                "RESEND_PASSWORD_RESET_TEMPLATE",
+                "password-reset",
+            ),
+            notification_templates: templates(&get, "RESEND_NOTIFICATION_TEMPLATE", "notification"),
         })
+    }
+}
+
+// Explicit language aliases take precedence over the legacy shared alias.
+fn templates(get: &impl Fn(&str) -> Option<String>, key: &str, alias: &str) -> [String; 3] {
+    ["fr", "en", "es"].map(|language| {
+        get(&format!("{key}_{}", language.to_uppercase()))
+            .or_else(|| get(key))
+            .unwrap_or_else(|| format!("{alias}-{language}"))
+    })
+}
+
+fn language_index(language: Language) -> usize {
+    match language {
+        Language::Fr => 0,
+        Language::En => 1,
+        Language::Es => 2,
     }
 }
 
@@ -123,9 +155,9 @@ pub struct ResendMailer {
     client: reqwest::Client,
     api_key: String,
     from: String,
-    template: String,
-    verification_template: String,
-    welcome_template: String,
+    template: [String; 3],
+    verification_template: [String; 3],
+    welcome_template: [String; 3],
     notification_templates: [String; 3],
     endpoint: String,
 }
@@ -201,28 +233,47 @@ impl ResendMailer {
 
 #[async_trait]
 impl Mailer for ResendMailer {
-    async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError> {
-        self.send_template(to, &self.template, json!({"RESET_URL":link}))
-            .await
-    }
-    async fn send_verification(&self, to: &str, link: &str) -> Result<(), MailError> {
+    async fn send_password_reset(
+        &self,
+        to: &str,
+        link: &str,
+        language: Language,
+    ) -> Result<(), MailError> {
         self.send_template(
             to,
-            &self.verification_template,
+            &self.template[language_index(language)],
+            json!({"RESET_URL":link}),
+        )
+        .await
+    }
+    async fn send_verification(
+        &self,
+        to: &str,
+        link: &str,
+        language: Language,
+    ) -> Result<(), MailError> {
+        self.send_template(
+            to,
+            &self.verification_template[language_index(language)],
             json!({"VERIFICATION_URL":link}),
         )
         .await
     }
-    async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError> {
-        self.send_template(to, &self.welcome_template, json!({"USERNAME":username}))
-            .await
+    async fn send_welcome(
+        &self,
+        to: &str,
+        username: &str,
+        language: Language,
+    ) -> Result<(), MailError> {
+        self.send_template(
+            to,
+            &self.welcome_template[language_index(language)],
+            json!({"USERNAME":username}),
+        )
+        .await
     }
     async fn send_notification(&self, to: &str, mail: &NotificationMail) -> Result<(), MailError> {
-        let template = &self.notification_templates[match mail.language {
-            Language::Fr => 0,
-            Language::En => 1,
-            Language::Es => 2,
-        }];
+        let template = &self.notification_templates[language_index(mail.language)];
         self.send_message(
             to,
             template,
@@ -241,7 +292,6 @@ pub fn notification_variables(mail: &NotificationMail) -> serde_json::Value {
         "CATEGORY": mail.category.as_str(),
         "LANGUAGE": mail.language.as_str(),
         "ACTION_URL": mail.action_url.as_deref().unwrap_or_default(),
-        "HAS_ACTION": mail.action_url.is_some(),
     })
 }
 
@@ -253,13 +303,28 @@ impl Mailer for NoopMailer {
     fn available(&self) -> bool {
         false
     }
-    async fn send_verification(&self, _to: &str, _link: &str) -> Result<(), MailError> {
+    async fn send_verification(
+        &self,
+        _to: &str,
+        _link: &str,
+        _language: Language,
+    ) -> Result<(), MailError> {
         Err(MailError("Mailer unavailable".into()))
     }
-    async fn send_welcome(&self, _to: &str, _username: &str) -> Result<(), MailError> {
+    async fn send_welcome(
+        &self,
+        _to: &str,
+        _username: &str,
+        _language: Language,
+    ) -> Result<(), MailError> {
         Err(MailError("Mailer unavailable".into()))
     }
-    async fn send_password_reset(&self, _to: &str, _link: &str) -> Result<(), MailError> {
+    async fn send_password_reset(
+        &self,
+        _to: &str,
+        _link: &str,
+        _language: Language,
+    ) -> Result<(), MailError> {
         eprintln!("api-public : RESEND_API_KEY absente, e-mail de réinitialisation non envoyé");
         Ok(())
     }
@@ -275,6 +340,7 @@ impl Mailer for NoopMailer {
 /// Garde les messages envoyés, pour les tests.
 #[derive(Default)]
 pub struct MemoryMailer {
+    pub languages: Mutex<Vec<(&'static str, Language)>>,
     pub verification: Mutex<Vec<(String, String)>>,
     pub welcome: Mutex<Vec<(String, String)>>,
     sent: Mutex<Vec<(String, String)>>,
@@ -304,21 +370,45 @@ impl MemoryMailer {
 
 #[async_trait]
 impl Mailer for MemoryMailer {
-    async fn send_verification(&self, to: &str, link: &str) -> Result<(), MailError> {
+    async fn send_verification(
+        &self,
+        to: &str,
+        link: &str,
+        language: Language,
+    ) -> Result<(), MailError> {
+        self.languages
+            .lock()
+            .unwrap()
+            .push(("verification", language));
         self.verification
             .lock()
             .unwrap()
             .push((to.into(), link.into()));
         Ok(())
     }
-    async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError> {
+    async fn send_welcome(
+        &self,
+        to: &str,
+        username: &str,
+        language: Language,
+    ) -> Result<(), MailError> {
+        self.languages.lock().unwrap().push(("welcome", language));
         self.welcome
             .lock()
             .unwrap()
             .push((to.into(), username.into()));
         Ok(())
     }
-    async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError> {
+    async fn send_password_reset(
+        &self,
+        to: &str,
+        link: &str,
+        language: Language,
+    ) -> Result<(), MailError> {
+        self.languages
+            .lock()
+            .unwrap()
+            .push(("password_reset", language));
         self.sent
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -368,7 +458,14 @@ mod tests {
         let config = config(&[("RESEND_API_KEY", "re_secret")]).unwrap();
         assert!(config.from.contains("resend.dev"));
         assert_eq!(config.public_url, "http://localhost:3000");
-        assert_eq!(config.password_reset_template, "password-reset");
+        assert_eq!(
+            config.password_reset_template,
+            [
+                "password-reset-fr",
+                "password-reset-en",
+                "password-reset-es"
+            ]
+        );
         assert!(!format!("{config:?}").contains("re_secret"));
         let config = self::config(&[
             ("RESEND_API_KEY", "k"),
@@ -383,7 +480,7 @@ mod tests {
             ("RESEND_PASSWORD_RESET_TEMPLATE", "custom-reset"),
         ])
         .unwrap();
-        assert_eq!(custom.password_reset_template, "custom-reset");
+        assert_eq!(custom.password_reset_template, ["custom-reset"; 3]);
     }
 
     #[test]
@@ -395,6 +492,20 @@ mod tests {
         assert_eq!(
             reset_link("https://x.fr/", "abc"),
             "https://x.fr/reset-password?token=abc"
+        );
+    }
+
+    #[test]
+    fn language_alias_overrides_legacy_alias() {
+        let config = config(&[
+            ("RESEND_API_KEY", "fixture"),
+            ("RESEND_PASSWORD_RESET_TEMPLATE", "legacy"),
+            ("RESEND_PASSWORD_RESET_TEMPLATE_ES", "custom-spanish"),
+        ])
+        .unwrap();
+        assert_eq!(
+            config.password_reset_template,
+            ["legacy", "legacy", "custom-spanish"]
         );
     }
 }

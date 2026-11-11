@@ -56,6 +56,23 @@
     "language": "Language",
     "english": "English",
     "french": "Français",
+    "spanish": "Español",
+    "notifications": "Notifications",
+    "syncing": "Synchronizing settings",
+    "syncFailed": "Unable to synchronize settings. Local changes were kept.",
+    "channels": {
+      "email": "Email",
+      "push": "Push"
+    },
+    "categories": {
+      "tournaments": "Tournaments",
+      "teams": "Teams",
+      "matches": "Matches",
+      "predictions": "Predictions",
+      "pickem": "Pick’em",
+      "rankings": "Rankings",
+      "account": "Account and security"
+    },
     "session": "Session",
     "logout": "Log out",
     "loggingOut": "Logging out",
@@ -77,7 +94,9 @@
     "identifier": "Account UUID",
     "recoveryEmail": "Recovery email",
     "recoveryEmailMissing": "No recovery email configured",
-    "recoveryEmailHint": "Use this address to sign in and recover your account."
+    "recoveryEmailHint": "Use this address to sign in and recover your account.",
+    "pictureUrl": "Profile picture URL",
+    "pictureUrlHint": "Enter an HTTP(S) image URL, or leave it empty to remove the picture."
   },
   "users": {
     "title": "Users",
@@ -116,7 +135,8 @@
     "passwordSpecial": "Password must contain at least one special character.",
     "match": "Passwords do not match.",
     "email": "Enter a valid email address.",
-    "emailRemovalUnsupported": "A recovery email cannot currently be removed."
+    "emailRemovalUnsupported": "A recovery email cannot currently be removed.",
+    "pictureUrl": "Enter an HTTP(S) URL of at most 2,048 bytes."
   },
   "form": {
     "noChanges": "No changes to save.",

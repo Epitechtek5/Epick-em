@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { AppState } from 'react-native';
 import { configureSessionRequest } from '@/lib/api';
+import { revokeCurrentPushToken } from '@/features/notifications/registration';
 import { SessionClient } from './client';
 import type { AccountUser, LoginRequest } from './types';
 
@@ -80,10 +81,16 @@ export function AuthProvider({ children }: PropsWithChildren) {
             throw error;
           }
         },
-        logout: () => client.logout(),
+        async logout() {
+          await revokeCurrentPushToken().catch(() => undefined);
+          await client.logout();
+        },
         refreshUser,
         updateCurrentUser: setUser,
-        clearSession: () => client.clear(),
+        async clearSession() {
+          await revokeCurrentPushToken().catch(() => undefined);
+          await client.clear();
+        },
       }}
     >
       {children}

@@ -326,6 +326,18 @@ impl AuthStore for MemoryStore {
             .cloned())
     }
 
+    async fn find_user_by_verification_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserRecord>, StoreError> {
+        Ok(self
+            .state()
+            .users
+            .iter()
+            .find(|user| user.pending_email.as_deref().or(user.email.as_deref()) == Some(email))
+            .cloned())
+    }
+
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError> {
         Ok(self
             .state()

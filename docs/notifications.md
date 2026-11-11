@@ -130,10 +130,14 @@ Chaque envoi passe l'objet `subject` (= titre) et ces variables, à déclarer da
 | `CATEGORY` | chaîne | catégorie (`tournaments`, `teams`, …) |
 | `LANGUAGE` | chaîne | `fr`, `en` ou `es` |
 | `ACTION_URL` | chaîne | lien absolu (`PUBLIC_URL` + page), vide s'il n'y en a pas |
-| `HAS_ACTION` | booléen | `true` si `ACTION_URL` est renseigné |
 
-Les modèles de sécurité existants (`password-reset`, `email-address-confirmation`,
-`welcome-account`) sont inchangés.
+Les e-mails de compte utilisent également trois modèles par famille :
+`RESEND_PASSWORD_RESET_TEMPLATE_FR/EN/ES`, `RESEND_EMAIL_VERIFICATION_TEMPLATE_FR/EN/ES`
+et `RESEND_WELCOME_TEMPLATE_FR/EN/ES`. Les valeurs exactes sont dans `.env.example`
+et `emails/README.md`. Les variables suffixées ont priorité sur les anciens alias
+globaux. La langue du compte détermine le modèle ; l'inscription accepte `language`
+(`fr`, `en`, `es`, français par défaut) et la persiste avant l'envoi des e-mails.
+Les préférences de notification ne désactivent pas ces e-mails de compte.
 
 ## Configuration
 

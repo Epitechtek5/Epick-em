@@ -100,10 +100,15 @@ async fn forgot_password(
         }
         let link = reset_link(&state.public_url, &token);
         let mailer = state.mailer.clone();
+        let store = state.store.clone();
         // En tâche de fond : la durée de la réponse ne dépend pas de l'existence du compte, et
         // une panne de Resend ne change pas la réponse (elle est seulement journalisée).
         actix_web::rt::spawn(async move {
-            if let Err(err) = mailer.send_password_reset(&email, &link).await {
+            let language = match store.user_settings(user.id).await {
+                Ok(Some(settings)) => settings.language,
+                _ => crate::store::Language::Fr,
+            };
+            if let Err(err) = mailer.send_password_reset(&email, &link, language).await {
                 eprintln!("api-public : envoi de l'e-mail de réinitialisation : {err}");
             }
         });

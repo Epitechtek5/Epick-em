@@ -56,6 +56,23 @@
     "language": "Langue",
     "english": "English",
     "french": "Français",
+    "spanish": "Español",
+    "notifications": "Notifications",
+    "syncing": "Synchronisation des paramètres",
+    "syncFailed": "Synchronisation impossible. Les modifications locales ont été conservées.",
+    "channels": {
+      "email": "E-mail",
+      "push": "Push"
+    },
+    "categories": {
+      "tournaments": "Tournois",
+      "teams": "Équipes",
+      "matches": "Matchs",
+      "predictions": "Pronostics",
+      "pickem": "Pick’em",
+      "rankings": "Classements",
+      "account": "Compte et sécurité"
+    },
     "session": "Session",
     "logout": "Se déconnecter",
     "loggingOut": "Déconnexion",
@@ -77,7 +94,9 @@
     "identifier": "UUID du compte",
     "recoveryEmail": "Adresse e-mail de récupération",
     "recoveryEmailMissing": "Aucune adresse de récupération configurée",
-    "recoveryEmailHint": "Cette adresse sert à vous connecter et à récupérer votre compte."
+    "recoveryEmailHint": "Cette adresse sert à vous connecter et à récupérer votre compte.",
+    "pictureUrl": "URL de la photo de profil",
+    "pictureUrlHint": "Saisissez une URL d’image HTTP(S), ou laissez le champ vide pour supprimer la photo."
   },
   "users": {
     "title": "Utilisateurs",
@@ -116,7 +135,8 @@
     "passwordSpecial": "Le mot de passe doit contenir au moins un caractère spécial.",
     "match": "Les mots de passe ne correspondent pas.",
     "email": "Saisissez une adresse e-mail valide.",
-    "emailRemovalUnsupported": "L’adresse e-mail de récupération ne peut pas encore être supprimée."
+    "emailRemovalUnsupported": "L’adresse e-mail de récupération ne peut pas encore être supprimée.",
+    "pictureUrl": "Saisissez une URL HTTP(S) de 2 048 octets au maximum."
   },
   "form": {
     "noChanges": "Aucune modification à enregistrer.",

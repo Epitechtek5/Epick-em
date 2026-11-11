@@ -243,6 +243,12 @@ pub trait AuthStore: Send + Sync {
     /// Cherche un compte par adresse e-mail (en minuscules).
     async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, StoreError>;
 
+    /// Find the account targeted by a verification email, including pending addresses.
+    async fn find_user_by_verification_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserRecord>, StoreError>;
+
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError>;
 
     /// Profil public d'un compte (sans empreinte de mot de passe), éventuellement mis en cache.

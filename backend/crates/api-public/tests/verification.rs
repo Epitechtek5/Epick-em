@@ -15,6 +15,139 @@ use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
 #[actix_web::test]
+async fn account_emails_use_persisted_language_including_pending_addresses() {
+    use api_public::store::{Language, SettingsUpdate};
+    for language in [Language::Fr, Language::En, Language::Es] {
+        let mailer = Arc::new(MemoryMailer::new());
+        let store = Arc::new(MemoryStore::new());
+        let app = common::app_with_mailer(store.clone(), mailer.clone()).await;
+        let (status, response) = post(
+            &app,
+            "/register",
+            json!({
+                "username": "alice", "password": "Password123!",
+                "email": "alice@example.test", "language": language.as_str()
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = Uuid::parse_str(response["id"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            store.user_settings(id).await.unwrap().unwrap().language,
+            language
+        );
+        for _ in 0..100 {
+            if mailer.languages.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            *mailer.languages.lock().unwrap(),
+            vec![("verification", language), ("welcome", language)]
+        );
+        // Password recovery reads current settings, not the language at registration.
+        let next = if language == Language::Es {
+            Language::En
+        } else {
+            Language::Es
+        };
+        store
+            .update_user_settings(
+                id,
+                SettingsUpdate {
+                    language: Some(next),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            post(
+                &app,
+                "/forgot-password",
+                json!({"email": "alice@example.test"})
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        for _ in 0..100 {
+            if mailer.languages.lock().unwrap().len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            mailer.languages.lock().unwrap().last(),
+            Some(&("password_reset", next))
+        );
+        // A separate account avoids the registration resend cooldown.
+        let pending_user = store
+            .create_user("pending", Some("old@example.test"), "fixture")
+            .await
+            .unwrap();
+        let id = pending_user.id;
+        store
+            .update_user_settings(
+                id,
+                SettingsUpdate {
+                    language: Some(next),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .update_user(
+                id,
+                UserUpdate {
+                    email: Some("pending@example.test".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .find_user_by_email("pending@example.test")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .find_user_by_verification_email("pending@example.test")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            id
+        );
+        assert_eq!(
+            post(
+                &app,
+                "/resend-verification-email",
+                json!({"email": "pending@example.test"})
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        for _ in 0..100 {
+            if mailer.languages.lock().unwrap().len() >= 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            mailer.languages.lock().unwrap().last(),
+            Some(&("verification", next))
+        );
+    }
+}
+
+#[actix_web::test]
 async fn registration_and_login_require_verification() {
     let mailer = Arc::new(MemoryMailer::new());
     let store = Arc::new(MemoryStore::new());
