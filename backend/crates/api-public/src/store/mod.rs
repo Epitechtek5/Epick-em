@@ -24,11 +24,11 @@ pub use self::steps::{
     MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
     StepParticipant, StepParticipantStatus, StepStart, StepStatus,
 };
-pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
     MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
     TournamentTeamInput, TournamentTeamMember,
 };
+pub(crate) use self::teams::{now_rfc3339, unix_to_rfc3339};
 pub use self::tournaments::{
     ParticipantImport, ParticipantInput, ParticipantStatus, ParticipantType, ScoringMode,
     ScoringRule, ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, TeamScoringMode,

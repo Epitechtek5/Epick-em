@@ -1,0 +1,48 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0017-external-sources
+      author: epickem
+      changes:
+        - sql:
+            sql: |
+              CREATE TABLE external_sources (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                provider varchar(32) NOT NULL,
+                external_id varchar(128) NOT NULL,
+                reference jsonb NOT NULL,
+                event_ids text[] NOT NULL DEFAULT '{}',
+                tournament_id uuid UNIQUE REFERENCES tournaments(id) ON DELETE SET NULL,
+                capabilities jsonb NOT NULL DEFAULT '{}',
+                snapshot jsonb,
+                cursor bigint,
+                last_attempt_at timestamptz,
+                last_success_at timestamptz,
+                last_error text,
+                consecutive_failures integer NOT NULL DEFAULT 0,
+                next_sync_at timestamptz NOT NULL DEFAULT now(),
+                lease_until timestamptz,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT external_sources_provider_external_id_key UNIQUE (provider, external_id)
+              );
+              COMMENT ON TABLE external_sources IS
+                'Tournois importés d''une source externe (start.gg…) : identité, dernier instantané, curseur et état de synchronisation';
+              CREATE INDEX external_sources_due ON external_sources(next_sync_at);
+
+              CREATE TABLE external_sync_events (
+                id bigserial PRIMARY KEY,
+                source_id uuid NOT NULL REFERENCES external_sources(id) ON DELETE CASCADE,
+                kind varchar(32) NOT NULL,
+                event_id varchar(128),
+                match_id varchar(128),
+                payload jsonb NOT NULL DEFAULT '{}',
+                created_at timestamptz NOT NULL DEFAULT now(),
+                processed_at timestamptz
+              );
+              COMMENT ON TABLE external_sync_events IS
+                'Boîte d''envoi des changements de résultats détectés chez la source, pour les recalculs en aval';
+              CREATE INDEX external_sync_events_pending ON external_sync_events(id) WHERE processed_at IS NULL;
+      rollback:
+        - sql:
+            sql: |
+              DROP TABLE external_sync_events;
+              DROP TABLE external_sources;

@@ -1,0 +1,29 @@
+{
+  "event": {
+    "entrants": {
+      "pageInfo": {
+        "totalPages": 2
+      },
+      "nodes": [
+        {
+          "id": 7003,
+          "name": "Charlie",
+          "initialSeedNum": null,
+          "participants": [
+            {
+              "id": 83,
+              "gamerTag": "Charlie",
+              "prefix": null
+            }
+          ]
+        },
+        {
+          "id": 7004,
+          "name": "Delta",
+          "initialSeedNum": 4,
+          "participants": []
+        }
+      ]
+    }
+  }
+}

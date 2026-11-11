@@ -1,0 +1,71 @@
+{
+  "provider": "jsonfile",
+  "external_id": "ligue-locale-2026",
+  "name": "Ligue locale 2026",
+  "starts_at": 1767225600,
+  "state": "active",
+  "events": [
+    {
+      "external_id": "principal",
+      "name": "Tableau principal",
+      "game": "Rocket League",
+      "state": "active",
+      "entrant_count": 2,
+      "phases": [
+        {
+          "external_id": "finale",
+          "name": "Finale",
+          "order": 1,
+          "format": "single_elimination",
+          "state": "active",
+          "groups": []
+        }
+      ],
+      "entrants": [
+        {
+          "external_id": "bleus",
+          "name": "Les Bleus",
+          "seed": 1,
+          "players": []
+        },
+        {
+          "external_id": "rouges",
+          "name": "Les Rouges",
+          "seed": 2,
+          "players": []
+        }
+      ],
+      "matches": [
+        {
+          "external_id": "m1",
+          "phase_id": "finale",
+          "round": 1,
+          "state": "completed",
+          "slots": [
+            {
+              "entrant_id": "bleus",
+              "score": 3
+            },
+            {
+              "entrant_id": "rouges",
+              "score": 1
+            }
+          ],
+          "winner_entrant_id": "bleus",
+          "forfeit": false,
+          "games": []
+        }
+      ],
+      "standings": [
+        {
+          "entrant_id": "bleus",
+          "placement": 1
+        },
+        {
+          "entrant_id": "rouges",
+          "placement": 2
+        }
+      ]
+    }
+  ]
+}

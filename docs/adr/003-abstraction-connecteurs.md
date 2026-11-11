@@ -3,7 +3,7 @@
 - **Statut :** Accepté
 - **Date :** 2026-10-19
 - **Décideurs :** équipe backend/devops
-- **Issue liée :** #…
+- **Issue liée :** #177 (implémentation : #178)
 
 ## Contexte
 
@@ -82,6 +82,8 @@ Le jeton start.gg est fourni par variable d'environnement, jamais dans le dépô
 
 - **Positives :** second connecteur possible sans toucher au cœur (bonus du sujet) ; tests hors ligne via `MockConnector` et fixtures JSON enregistrées ; plateforme résiliente aux pannes de start.gg.
 - **Négatives / coûts acceptés :** un modèle neutre à maintenir ; le mapping start.gg → modèle neutre demande du soin (formats de phases variés).
+- **Mise en œuvre (#178) :** crate `connectors` — trait `TournamentConnector` (avec `display_name` et `list_events`, `fetch` limité aux épreuves choisies), modèle canonique, `ResilientConnector` (seau à jetons à 60 requêtes/min, reprises avec backoff et jitter, `Retry-After`, disjoncteur, cache frais 5 min et cache de secours 7 jours), `StartGgConnector` (GraphQL, pagination qui réduit la page si la requête est trop complexe, incrémental par `updatedAfter`), `JsonFileConnector` (tutoriel), et `sync` (tables `external_sources` et `external_sync_events`, bail par source, backoff, boîte d'envoi des changements de résultats). Routes d'administration dans api-public, planificateur dans api-internal. Guide : `docs/connecteurs.md`.
+- **Écarts restants :** la projection de l'instantané dans les étapes et matchs locaux, et la consommation de `external_sync_events` par les recalculs, attendent le modèle d'import des étapes/matchs ; la limite de requêtes est par processus (pas encore partagée par Redis entre api-public et api-internal) ; les questions Pick'em filtrées par `capabilities` attendent le constructeur de Pick'em.
 - **Actions à mener :**
   - Implémenter `StartGgConnector` (API GraphQL publique).
   - Enregistrer des réponses réelles anonymisées en fixtures pour les tests.

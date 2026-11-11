@@ -207,6 +207,7 @@ dependencies = [
  "actix-web",
  "argon2",
  "async-trait",
+ "connectors",
  "csv",
  "domain",
  "infra",
@@ -431,7 +432,17 @@ dependencies = [
 name = "connectors"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "domain",
+ "infra",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]

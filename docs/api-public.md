@@ -96,6 +96,15 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `DELETE /tournaments/{id}/steps/{step_id}/matches/{match_id}` | JWT valide, **administrateur** | — | `204` ; `409` si le match est `finished` |
 | `PUT /tournaments/{id}/steps/{step_id}/matches/{match_id}/results` | JWT valide, **administrateur** | `{ results: [{ participant_id, stats, rank?, result? }] }` | `200` le match avec les points calculés ; `400` si une statistique est inconnue ou invalide ; `409` si le match est `finished` ou `cancelled` |
 | `POST /tournaments/{id}/steps/{step_id}/matches/{match_id}/status` | JWT valide, **administrateur** | `{ status }` (`ongoing`, `finished` ou `cancelled`) | `200` le match, et `step_closed` (`{ step, next_step }`) quand c'était le dernier de l'étape ; `400` si les participants ou les résultats ne conviennent pas ; `409` pour une transition impossible |
+| `GET /connectors` | JWT valide, **administrateur** | — | `200` `[{ id, display_name, capabilities }]` : sources configurées (start.gg si `STARTGG_TOKEN`, fichiers JSON si `EXTERNAL_JSON_DIR`) |
+| `GET /connectors/{provider}/tournaments` | JWT valide, **administrateur** | `?q=` (2 à 100 caractères) | `200` `[{ provider, external_id, slug, name, url, starts_at, ends_at }]` ; `404` source inconnue ; `503` source indisponible |
+| `POST /connectors/resolve` | JWT valide, **administrateur** | `{ url }` | `200` `{ tournament, events: [{ external_id, name, game, url, starts_at, state, entrant_count }], already_imported }` ; `400` URL non reconnue ; `404` tournoi introuvable chez la source ; `503` |
+| `POST /external-tournaments` | JWT valide, **administrateur** | `{ url, event_ids, game_id, name? }` | `201` le tournoi externe et son premier instantané ; `400` URL, épreuves ou jeu invalides ; `409` `already_imported` ou `tournament_name_taken` ; `503` (rien n'est créé) |
+| `GET /external-tournaments` | JWT valide, **administrateur** | — | `200` état de synchronisation de chaque tournoi externe (sans instantané) |
+| `GET /external-tournaments/{id}` | JWT valide, **administrateur** | — | `200` `{ id, provider, external_id, name, url, tournament_id, event_ids, state, capabilities, last_attempt_at, last_success_at, next_sync_at, last_error, consecutive_failures, stale, snapshot }` |
+| `POST /external-tournaments/{id}/sync` | JWT valide, **administrateur** | — | `200` l'état après synchronisation (`stale: true` et `last_error` si la source a échoué : l'instantané précédent reste servi) ; `409` `sync_in_progress` |
+| `DELETE /external-tournaments/{id}` | JWT valide, **administrateur** | — | `204` : la source, ses événements et le tournoi local |
+| `GET /tournaments/{id}/source` | JWT valide | — | `200` `{ provider, provider_name, url, last_success_at, stale }` : attribution à afficher avec les données ; `404` si le tournoi est local |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -204,6 +213,14 @@ Un fichier exporté se réimporte sans perte (hors horodatages de création et d
 
 Les quatre exports (`/games`, `/stats`, `/teams` et `/tournaments`, en JSON et en CSV) sont gardés **une heure** dans le cache (Redis en production), un fichier par ressource et par format (`export:<ressource>:<json|csv>`) : l'export suivant est servi sans relire la base. Toute requête qui écrit (ni `GET`, `HEAD` ni `OPTIONS`) et qui ne finit pas en erreur du client (`4xx`) vide **tous** les exports : création, modification, suppression, import, changement de statut, résultat de match… Un export dépend de plusieurs tables et une suppression emporte ses dépendances (supprimer un jeu supprime ses équipes), alors invalider ressource par ressource laisserait des fichiers périmés. Les routes `/register`, `/login`, `/refresh` et `/logout` ne vident rien. Le cache n'est qu'une optimisation : s'il est indisponible, l'export est calculé depuis la base. Un export commencé juste avant une écriture peut remettre en cache un fichier périmé jusqu'à la prochaine écriture ou l'expiration de l'heure.
 
+### Tournois externes
+
+Un administrateur importe un tournoi d'une source externe (start.gg, voir ADR-003 et `docs/connecteurs.md`) : `POST /connectors/resolve` reconnaît l'URL et liste les épreuves, puis `POST /external-tournaments` crée un tournoi local (`draft`, solo, dates et capacité reprises de la source, lien vers l'original dans la description) lié à la source, et prend un premier instantané. Le même tournoi externe n'est importé qu'une fois. Seuls les hôtes des sources configurées sont acceptés et l'URL fournie n'est jamais appelée : la requête part vers l'API fixe de la source.
+
+- **Lecture seule :** toute écriture sur un tournoi importé (`/tournaments/{id}/…`, ses équipes `/tournament-teams/{id}/…`, l'import de fichier qui le viserait) renvoie `409 externally_managed` ; il se supprime avec `DELETE /external-tournaments/{id}`.
+- **Synchronisation :** api-internal resynchronise les sources dues (toutes les 2 min pendant le tournoi, 30 min avant, 6 h après), en incrémental quand la source le permet. Si la source ne répond pas, le dernier instantané reste servi avec `stale: true`, l'erreur et la prochaine tentative (backoff de 1 min doublé jusqu'à 1 h) ; la reprise est automatique.
+- **Changements de résultats :** chaque match terminé, corrigé ou rouvert chez la source est enregistré dans `external_sync_events`, en même temps que l'instantané, pour les recalculs en aval.
+
 ### Erreurs
 
 Format `{ "error", "message", "errors"? }` :
@@ -232,6 +249,10 @@ Format `{ "error", "message", "errors"? }` :
 | `409` | `step_position_taken` | une étape occupe déjà cette position dans le tournoi |
 | `409` | `registration_closed` | tournoi hors `registration` ou hors de la fenêtre d'inscription |
 | `409` | `invalid_status_transition` | changement de statut impossible depuis le statut actuel |
+| `409` | `externally_managed` | tournoi importé d'une source externe : il se modifie chez la source |
+| `409` | `already_imported` | ce tournoi externe est déjà importé |
+| `409` | `sync_in_progress` | une synchronisation de ce tournoi externe est déjà en cours |
+| `503` | `external_unavailable` | la source externe ne répond pas, refuse la requête ou limite le débit (détail journalisé) |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
 ## Configuration
@@ -243,6 +264,8 @@ Format `{ "error", "message", "errors"? }` :
 | `REFRESH_TOKEN_TTL_SECS` | `2592000` | durée du jeton de rafraîchissement |
 | `RESEND_API_KEY` | — (facultative) | clé d'API [Resend](https://resend.com) ; sans elle, aucun e-mail n'est envoyé (un avertissement est journalisé au démarrage) |
 | `MAIL_FROM` | `Epick'em <onboarding@resend.dev>` | expéditeur, sur un domaine vérifié chez Resend en production |
+| `STARTGG_TOKEN` | — (facultative) | jeton d'API start.gg ; sans lui, la source start.gg n'est pas proposée. Lu aussi par api-internal |
+| `EXTERNAL_JSON_DIR` | — (facultative) | répertoire de la source de démonstration « fichiers JSON » (`jsonfile://<nom>`) |
 | `PUBLIC_URL` | `http://localhost:3000` | origine publique du site, sans chemin ; la route `/reset-password` est fixe (page web, ou app mobile via les liens universels) |
 
 ## Rôles

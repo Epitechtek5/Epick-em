@@ -5,6 +5,7 @@ use api_public::config::AuthConfig;
 use api_public::mail::{MailConfig, ResendMailer};
 use api_public::store::PgStore;
 use api_public::{AppState, app};
+use connectors::sync::{PgSyncStore, SyncPolicy, SyncService};
 use std::error::Error;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -27,10 +28,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let db = infra::connect(&config).await?;
 
     let cache = db.cache().clone();
+    let registry = connectors::registry_from_env(Some(cache.clone()))?;
+    let sync = Arc::new(SyncService::new(
+        registry,
+        Arc::new(PgSyncStore::new(db.pool().clone())),
+        SyncPolicy::default(),
+    ));
     let store = Arc::new(PgStore::new(db));
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
-        .with_cache(cache);
+        .with_cache(cache)
+        .with_sync(sync);
     let state = match MailConfig::from_env() {
         Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
         None => {

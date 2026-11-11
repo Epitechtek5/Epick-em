@@ -68,6 +68,14 @@ pub enum ApiError {
     InvalidResetToken,
     EmailUnverified,
     VerificationLimited,
+    /// Le tournoi est géré par une source externe : il ne se modifie pas par l'API.
+    ExternallyManaged,
+    /// Ce tournoi externe est déjà importé.
+    AlreadyImported,
+    /// Une synchronisation de ce tournoi externe est déjà en cours.
+    SyncInProgress,
+    /// La source externe ne répond pas, refuse la requête ou limite le débit.
+    ExternalUnavailable,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -190,6 +198,26 @@ impl ApiError {
                 StatusCode::BAD_REQUEST,
                 "invalid_reset_token",
                 "Lien de réinitialisation invalide ou expiré",
+            ),
+            ApiError::ExternallyManaged => (
+                StatusCode::CONFLICT,
+                "externally_managed",
+                "Ce tournoi est géré par une source externe : il se modifie chez la source",
+            ),
+            ApiError::AlreadyImported => (
+                StatusCode::CONFLICT,
+                "already_imported",
+                "Ce tournoi externe est déjà importé",
+            ),
+            ApiError::SyncInProgress => (
+                StatusCode::CONFLICT,
+                "sync_in_progress",
+                "Une synchronisation de ce tournoi est déjà en cours",
+            ),
+            ApiError::ExternalUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "external_unavailable",
+                "La source externe est momentanément indisponible",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

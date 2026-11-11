@@ -9,7 +9,7 @@ publish.workspace = true
 domain.workspace = true
 connectors.workspace = true
 infra.workspace = true
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 
 [lints]
 workspace = true
