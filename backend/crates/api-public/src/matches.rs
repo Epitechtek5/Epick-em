@@ -642,40 +642,12 @@ async fn finish(
         }
     };
 
-    // Total de l'étape : les matchs déjà terminés plus celui-ci.
-    let finished_ids: HashSet<Uuid> = state
-        .store
-        .list_matches(step.id, None, Some(MatchStatus::Finished))
-        .await
-        .map_err(ApiError::internal)?
-        .into_iter()
-        .map(|m| m.id)
-        .collect();
-    let earlier = participants_in(state, step)
-        .await?
-        .into_iter()
-        .filter(|p| finished_ids.contains(&p.match_id));
-    let mut totals: HashMap<Uuid, f64> = HashMap::new();
-    for p in earlier {
-        *totals.entry(p.participant_id).or_default() += p.points;
-    }
-    let step_points = scores
-        .iter()
-        .map(|s| {
-            (
-                s.participant_id,
-                totals.get(&s.participant_id).copied().unwrap_or(0.0) + s.points,
-            )
-        })
-        .collect();
-
     state
         .store
         .finish_match(MatchFinish {
             match_id: current.id,
             scores,
             advance,
-            step_points,
         })
         .await
         .map_err(match_error)?

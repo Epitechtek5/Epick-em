@@ -2473,23 +2473,25 @@ impl AuthStore for PgStore {
 
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError> {
         let mut tx = self.pool.begin().await?;
+        // Les fins de match d'une même étape passent l'une après l'autre (verrou de l'étape,
+        // pris avant celui du match) : chacune voit les précédentes et le total de l'étape,
+        // recalculé ci-dessous, n'en perd aucune.
+        let locked = sqlx::query_scalar::<_, Uuid>(
+            "SELECT s.id FROM step s JOIN match m ON m.step_id = s.id WHERE m.id = $1 \
+             FOR UPDATE OF s",
+        )
+        .bind(finish.match_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if locked.is_none() {
+            return Ok(None);
+        }
         let Some(step_id) = lock_open_match(&mut tx, finish.match_id).await? else {
             return Ok(None);
         };
         save_match_scores_in(&mut tx, finish.match_id, finish.scores).await?;
         if let Some((next_id, participant_id)) = finish.advance {
             insert_match_participant(&mut tx, next_id, participant_id).await?;
-        }
-        for (participant_id, points) in finish.step_points {
-            sqlx::query(
-                "UPDATE step_participant SET points = $3::float8::numeric \
-                 WHERE step_id = $1 AND participant_id = $2",
-            )
-            .bind(step_id)
-            .bind(participant_id)
-            .bind(points)
-            .execute(&mut *tx)
-            .await?;
         }
         let row = sqlx::query_as::<_, MatchRow>(&format!(
             "UPDATE match SET status = 'finished', started_at = COALESCE(started_at, now()), \
@@ -2498,6 +2500,19 @@ impl AuthStore for PgStore {
         ))
         .bind(finish.match_id)
         .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE step_participant sp SET points = COALESCE(( \
+                 SELECT SUM(mp.points) FROM match_participant mp \
+                 JOIN match m ON m.id = mp.match_id \
+                 WHERE m.step_id = sp.step_id AND m.status = 'finished' \
+                   AND mp.participant_id = sp.participant_id), 0) \
+             WHERE sp.step_id = $1 AND sp.participant_id IN \
+                 (SELECT participant_id FROM match_participant WHERE match_id = $2)",
+        )
+        .bind(step_id)
+        .bind(finish.match_id)
+        .execute(&mut *tx)
         .await?;
         tx.commit().await?;
         Ok(Some(match_from(row)?))
