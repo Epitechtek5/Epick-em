@@ -7,14 +7,22 @@
 //!
 //! - JSON : `{ "version": 1, "tournaments": [{ "game", "name", "description", "start_date",
 //!   "end_date", "registration_open_at", "registration_close_at", "participant_type",
-//!   "team_size", "max_participants", "team_scoring_mode", "team_scoring_n", "status",
+//!   "team_size" (ancien format), "max_participants", "team_scoring_mode", "team_scoring_n",
+//!   "status", "settings": { "mode", "location", "visibility", "rules", "team_min_starters",
+//!   "team_max_starters", "team_max_substitutes", "registration_policy",
+//!   "waiting_list_enabled", "registration_fields", "check_in_open_at", "check_in_close_at" },
 //!   "scoring_rules": [{ "stat", "mode", "coefficient", "points_table" }],
-//!   "participants": [{ "user", "team", "status", "registered_at" }],
+//!   "participants": [{ "user", "team", "status", "registered_at", "responses" }],
 //!   "teams": [], "steps": [], "matches": [] }] }` ;
 //! - CSV : en-tête `game,name,description,start_date,end_date,registration_open_at,
 //!   registration_close_at,participant_type,team_size,max_participants,team_scoring_mode,
-//!   team_scoring_n,status,scoring_rules,participants,teams,steps,matches` ; les cinq dernières
-//!   colonnes contiennent le tableau JSON correspondant.
+//!   team_scoring_n,status,scoring_rules,participants,teams,steps,matches,settings` ; les cinq
+//!   colonnes avant `settings` contiennent le tableau JSON correspondant, `settings` l'objet JSON
+//!   de configuration. L'ancien en-tête sans `settings` (18 colonnes) reste accepté, de même que
+//!   les fichiers JSON sans `settings` : `team_size` fixe alors les titulaires.
+//!
+//! Les modèles (`is_template`) ne sont pas exportés. Un import ne touche jamais au propriétaire
+//! d'un tournoi existant ; un tournoi créé par import appartient à l'administrateur qui importe.
 //!
 //! Règle de composition : les équipes de tournoi, les étapes et les matchs sont des valeurs
 //! opaques pour ce niveau. Il ne connaît ni leur contenu ni leur structure : leur validation,
@@ -30,11 +38,13 @@ use crate::error::{ApiError, ErrorResponse};
 use crate::export_cache;
 use crate::game_io::{Format, FormatQuery};
 use crate::store::{
-    AuthStore, ParticipantImport, ParticipantStatus, ParticipantType, ScoringMode,
-    ScoringRuleImport, StoreError, TeamScoringMode, Tournament, TournamentImport, TournamentInput,
-    TournamentStatus,
+    AuthStore, ParticipantImport, ParticipantStatus, ParticipantType, RegistrationField,
+    RegistrationPolicy, ScoringMode, ScoringRuleImport, StoreError, TeamScoringMode, Tournament,
+    TournamentImport, TournamentInput, TournamentMode, TournamentSettings, TournamentStatus,
+    Visibility,
 };
 use crate::team_io::normalize_timestamp;
+use crate::tournament_settings::{SettingsRequest, legacy_team_size_errors, validate_responses};
 use crate::tournaments::{check as check_fields, definition_checked};
 use crate::users::require_admin;
 use actix_web::{HttpResponse, get, post, web};
@@ -49,7 +59,7 @@ use uuid::Uuid;
 const FORMAT_VERSION: u32 = 1;
 /// Nombre maximal de problèmes détaillés dans une réponse `400`.
 const MAX_REPORTED_ERRORS: usize = 10;
-const CSV_HEADER: [&str; 18] = [
+const CSV_HEADER: [&str; 19] = [
     "game",
     "name",
     "description",
@@ -68,7 +78,10 @@ const CSV_HEADER: [&str; 18] = [
     "teams",
     "steps",
     "matches",
+    "settings",
 ];
+/// Colonnes de l'ancien format, sans `settings`.
+const LEGACY_CSV_COLUMNS: usize = 18;
 
 /// Import et export d'un niveau inférieur d'un tournoi (équipes de tournoi, étapes, matchs).
 #[async_trait]
@@ -172,7 +185,9 @@ struct ExportedTournament {
     #[serde(default)]
     registration_close_at: Option<String>,
     participant_type: ParticipantType,
-    #[serde(default)]
+    /// Ancien format : titulaires par équipe (équivaut à `team_min_starters` et
+    /// `team_max_starters`). Jamais écrit à l'export.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     team_size: Option<i32>,
     max_participants: i32,
     /// `none` s'il est absent.
@@ -183,6 +198,9 @@ struct ExportedTournament {
     /// `draft` s'il est absent.
     #[serde(default)]
     status: Option<TournamentStatus>,
+    /// Configuration ; les valeurs par défaut s'appliquent si elle est absente.
+    #[serde(default)]
+    settings: ExportedSettings,
     #[serde(default)]
     scoring_rules: Vec<ExportedRule>,
     #[serde(default)]
@@ -199,6 +217,95 @@ struct ExportedTournament {
     #[serde(default)]
     #[schema(value_type = Vec<Object>)]
     matches: Vec<Value>,
+}
+
+/// Configuration d'un tournoi dans un fichier.
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct ExportedSettings {
+    #[serde(default)]
+    mode: Option<TournamentMode>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    visibility: Option<Visibility>,
+    #[serde(default)]
+    rules: Option<String>,
+    #[serde(default)]
+    team_min_starters: Option<i32>,
+    #[serde(default)]
+    team_max_starters: Option<i32>,
+    #[serde(default)]
+    team_max_substitutes: Option<i32>,
+    #[serde(default)]
+    registration_policy: Option<RegistrationPolicy>,
+    #[serde(default)]
+    waiting_list_enabled: Option<bool>,
+    #[serde(default)]
+    registration_fields: Option<Vec<RegistrationField>>,
+    #[serde(default)]
+    check_in_open_at: Option<String>,
+    #[serde(default)]
+    check_in_close_at: Option<String>,
+}
+
+impl ExportedSettings {
+    fn clone_settings(&self) -> ExportedSettings {
+        ExportedSettings {
+            mode: self.mode,
+            location: self.location.clone(),
+            visibility: self.visibility,
+            rules: self.rules.clone(),
+            team_min_starters: self.team_min_starters,
+            team_max_starters: self.team_max_starters,
+            team_max_substitutes: self.team_max_substitutes,
+            registration_policy: self.registration_policy,
+            waiting_list_enabled: self.waiting_list_enabled,
+            registration_fields: self.registration_fields.clone(),
+            check_in_open_at: self.check_in_open_at.clone(),
+            check_in_close_at: self.check_in_close_at.clone(),
+        }
+    }
+
+    fn from_settings(settings: TournamentSettings) -> Self {
+        ExportedSettings {
+            mode: Some(settings.mode),
+            location: settings.location,
+            visibility: Some(settings.visibility),
+            rules: settings.rules,
+            team_min_starters: settings.team_min_starters,
+            team_max_starters: settings.team_max_starters,
+            team_max_substitutes: settings.team_max_substitutes,
+            registration_policy: Some(settings.registration_policy),
+            waiting_list_enabled: Some(settings.waiting_list_enabled),
+            registration_fields: Some(settings.registration_fields),
+            check_in_open_at: settings.check_in_open_at,
+            check_in_close_at: settings.check_in_close_at,
+        }
+    }
+
+    fn into_settings(
+        self,
+        participant_type: ParticipantType,
+        team_size: Option<i32>,
+    ) -> TournamentSettings {
+        SettingsRequest {
+            mode: self.mode,
+            location: self.location,
+            visibility: self.visibility,
+            rules: self.rules,
+            team_min_starters: self.team_min_starters,
+            team_max_starters: self.team_max_starters,
+            team_max_substitutes: self.team_max_substitutes,
+            team_size,
+            registration_policy: self.registration_policy,
+            waiting_list_enabled: self.waiting_list_enabled,
+            registration_fields: self.registration_fields,
+            check_in_open_at: self.check_in_open_at,
+            check_in_close_at: self.check_in_close_at,
+        }
+        .into_settings(participant_type)
+    }
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -229,6 +336,10 @@ struct ExportedParticipant {
     /// Horodatage RFC 3339 en UTC ; l'instant de l'import s'il est absent.
     #[serde(default)]
     registered_at: Option<String>,
+    /// Réponses aux champs d'inscription du tournoi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    responses: Option<Value>,
 }
 
 /// Résultat d'un import.
@@ -281,7 +392,7 @@ pub(crate) async fn export_tournaments(
     let mut usernames: HashMap<Uuid, String> = HashMap::new();
     let mut exported = Vec::new();
     for tournament in store
-        .list_tournaments(None, None, i64::MAX, 0)
+        .list_tournaments(None, None, false, i64::MAX, 0)
         .await
         .map_err(ApiError::internal)?
     {
@@ -320,6 +431,8 @@ pub(crate) async fn export_tournaments(
                     .and_then(|id| teams.iter().position(|(team_id, _)| *team_id == id)),
                 status: Some(participant.status),
                 registered_at: Some(participant.registered_at),
+                responses: Some(participant.responses)
+                    .filter(|r| r.as_object().is_some_and(|o| !o.is_empty())),
             });
         }
         // Ordre indépendant des identifiants : deux exports du même contenu sont identiques.
@@ -347,11 +460,12 @@ pub(crate) async fn export_tournaments(
             registration_open_at: tournament.registration_open_at,
             registration_close_at: tournament.registration_close_at,
             participant_type: tournament.participant_type,
-            team_size: tournament.team_size,
+            team_size: None,
             max_participants: tournament.max_participants,
             team_scoring_mode: Some(tournament.team_scoring_mode),
             team_scoring_n: tournament.team_scoring_n,
             status: Some(tournament.status),
+            settings: ExportedSettings::from_settings(tournament.settings),
             scoring_rules,
             participants,
             teams: values(teams),
@@ -416,7 +530,7 @@ pub(crate) async fn import_tournaments(
     let format = query.format.unwrap_or_default();
     let tournaments = decode(format, &body).map_err(file_error)?;
     let lookups = Lookups::load(&state, &tournaments).await?;
-    let prepared = match prepare(&state, &lookups, tournaments).await? {
+    let prepared = match prepare(&state, &lookups, tournaments, claims.sub).await? {
         Ok(prepared) => prepared,
         Err(problems) => return Err(file_error(problems)),
     };
@@ -449,6 +563,7 @@ pub(crate) async fn import_tournaments(
                 tournament_team_id: p.team.and_then(|rank| team_ids.get(rank).copied()),
                 status: p.status,
                 registered_at: p.registered_at,
+                responses: p.responses,
             })
             .collect();
         // Les inscrits d'abord : les étapes et les matchs les désignent.
@@ -526,12 +641,14 @@ impl Lookups {
             {
                 links.insert((stat.id, game_id));
             }
-            for tournament in store
-                .list_tournaments(Some(game_id), None, i64::MAX, 0)
-                .await
-                .map_err(ApiError::internal)?
-            {
-                existing.insert((game_id, tournament.name.to_lowercase()), tournament);
+            for templates in [false, true] {
+                for tournament in store
+                    .list_tournaments(Some(game_id), None, templates, i64::MAX, 0)
+                    .await
+                    .map_err(ApiError::internal)?
+                {
+                    existing.insert((game_id, tournament.name.to_lowercase()), tournament);
+                }
             }
         }
         let mut users: HashMap<String, Option<Uuid>> = HashMap::new();
@@ -565,6 +682,7 @@ struct PreparedParticipant {
     team: Option<usize>,
     status: ParticipantStatus,
     registered_at: Option<String>,
+    responses: Value,
 }
 
 struct Prepared {
@@ -581,6 +699,7 @@ async fn prepare(
     state: &AppState,
     lookups: &Lookups,
     tournaments: Vec<ExportedTournament>,
+    importer: Uuid,
 ) -> Result<Result<Vec<Prepared>, Vec<String>>, ApiError> {
     let mut problems = Vec::new();
     let mut prepared = Vec::new();
@@ -599,17 +718,24 @@ async fn prepare(
             registration_open_at: tournament.registration_open_at.clone(),
             registration_close_at: tournament.registration_close_at.clone(),
             participant_type: tournament.participant_type,
-            team_size: tournament.team_size,
             max_participants: tournament.max_participants,
             team_scoring_mode: tournament
                 .team_scoring_mode
                 .unwrap_or(TeamScoringMode::None),
             team_scoring_n: tournament.team_scoring_n,
+            settings: tournament
+                .settings
+                .clone_settings()
+                .into_settings(tournament.participant_type, tournament.team_size),
+            owner_id: Some(importer),
+            is_template: false,
         };
-        let mut reasons: Vec<String> = check_fields(&mut input)
-            .into_iter()
-            .map(|(field, message)| format!("{field} : {message}"))
-            .collect();
+        let mut reasons: Vec<String> =
+            legacy_team_size_errors(tournament.team_size, tournament.participant_type)
+                .into_iter()
+                .chain(check_fields(&mut input))
+                .map(|(field, message)| format!("{field} : {message}"))
+                .collect();
         match game_id {
             None => reasons.push(format!("game : jeu inconnu « {} ».", tournament.game)),
             Some(game_id) => {
@@ -618,6 +744,11 @@ async fn prepare(
                         .push("name : ce tournoi apparaît plusieurs fois dans le fichier.".into());
                 }
                 if let Some(current) = lookups.existing.get(&(game_id, input.name.to_lowercase()))
+                    && current.is_template
+                {
+                    reasons.push("name : ce nom est déjà pris par un modèle.".into());
+                } else if let Some(current) =
+                    lookups.existing.get(&(game_id, input.name.to_lowercase()))
                     && matches!(
                         current.status,
                         TournamentStatus::Ongoing | TournamentStatus::Finished
@@ -631,7 +762,7 @@ async fn prepare(
             }
         }
         let rules = check_rules(lookups, game_id, &tournament.scoring_rules, &mut reasons);
-        let participants = check_participants(lookups, &tournament, &mut reasons);
+        let participants = check_participants(lookups, &tournament, &input, &mut reasons);
         let scope = FileScope {
             users: tournament
                 .participants
@@ -734,8 +865,21 @@ fn check_rules(
 fn check_participants(
     lookups: &Lookups,
     tournament: &ExportedTournament,
+    input: &TournamentInput,
     reasons: &mut Vec<String>,
 ) -> Vec<PreparedParticipant> {
+    // Les réponses sont typées contre les champs du tournoi, sans exiger les champs obligatoires :
+    // un fichier ancien ou un export partiel reste importable.
+    let lenient: Vec<RegistrationField> = input
+        .settings
+        .registration_fields
+        .iter()
+        .cloned()
+        .map(|mut field| {
+            field.required = false;
+            field
+        })
+        .collect();
     let mut out = Vec::with_capacity(tournament.participants.len());
     let mut users = HashSet::new();
     let mut teams = HashSet::new();
@@ -798,17 +942,26 @@ fn check_participants(
             }
             None => None,
         };
+        let responses = match validate_responses(&lenient, participant.responses.clone()) {
+            Ok(responses) => responses,
+            Err(errors) => {
+                reasons.extend(
+                    errors
+                        .into_iter()
+                        .map(|(field, message)| format!("participants : {field} : {message}")),
+                );
+                continue;
+            }
+        };
         out.push(PreparedParticipant {
             user_id,
             team: participant.team,
             status: participant.status.unwrap_or(ParticipantStatus::Registered),
             registered_at,
+            responses,
         });
     }
-    let active = out
-        .iter()
-        .filter(|p| p.status != ParticipantStatus::Withdrawn)
-        .count();
+    let active = out.iter().filter(|p| p.status.holds_a_seat()).count();
     if i64::try_from(active).unwrap_or(i64::MAX) > i64::from(tournament.max_participants) {
         reasons.push(format!(
             "participants : {active} inscrits pour {} places.",
@@ -844,7 +997,7 @@ fn encode(format: Format, tournaments: Vec<ExportedTournament>) -> Result<Vec<u8
                         optional(&t.registration_open_at),
                         optional(&t.registration_close_at),
                         t.participant_type.as_str().to_string(),
-                        number(t.team_size),
+                        number(None),
                         t.max_participants.to_string(),
                         t.team_scoring_mode
                             .map(|m| m.as_str().to_string())
@@ -856,6 +1009,7 @@ fn encode(format: Format, tournaments: Vec<ExportedTournament>) -> Result<Vec<u8
                         text(Ok(Value::Array(t.teams.clone())))?,
                         text(Ok(Value::Array(t.steps.clone())))?,
                         text(Ok(Value::Array(t.matches.clone())))?,
+                        text(serde_json::to_value(&t.settings))?,
                     ])
                     .map_err(|e| e.to_string())?;
             }
@@ -901,7 +1055,11 @@ fn decode_csv(text: &str) -> Result<Vec<ExportedTournament>, Vec<String>> {
     let mut reader = csv::Reader::from_reader(text.as_bytes());
     let header_ok = reader
         .headers()
-        .map(|h| h.iter().eq(CSV_HEADER))
+        .map(|h| {
+            h.iter().eq(CSV_HEADER)
+                || h.iter()
+                    .eq(CSV_HEADER[..LEGACY_CSV_COLUMNS].iter().copied())
+        })
         .unwrap_or(false);
     if !header_ok {
         return Err(vec![format!(
@@ -953,6 +1111,11 @@ fn decode_csv(text: &str) -> Result<Vec<ExportedTournament>, Vec<String>> {
             team_scoring_mode: parse_word(line, "team_scoring_mode", word("team_scoring_mode"))?,
             team_scoring_n: number("team_scoring_n")?,
             status: parse_word(line, "status", word("status"))?,
+            settings: match cell("settings") {
+                "" => ExportedSettings::default(),
+                value => serde_json::from_str(value)
+                    .map_err(|e| vec![format!("Ligne {line} : settings invalide ({e}).")])?,
+            },
             scoring_rules: serde_json::from_value(Value::Array(json("scoring_rules")?))
                 .map_err(|e| vec![format!("Ligne {line} : scoring_rules invalide ({e}).")])?,
             participants: serde_json::from_value(Value::Array(json("participants")?))

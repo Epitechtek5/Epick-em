@@ -9,8 +9,8 @@ use api_public::store::{
     ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
     StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
     StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
-    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
-    UserUpdate,
+    TournamentImport, TournamentInput, TournamentSettings, TournamentStatus, TournamentTeamInput,
+    TournamentUpdate, UserUpdate, no_responses,
 };
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
@@ -593,8 +593,8 @@ async fn insert_tournament(game_id: Uuid) -> Uuid {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
     let pool = sqlx::PgPool::connect(&url).await.unwrap();
     sqlx::query_scalar(
-        "INSERT INTO tournaments (game_id, name, start_date, end_date, participant_type, team_size, max_participants) \
-         VALUES ($1, $2, now(), now() + interval '1 day', 'team', 5, 8) RETURNING id",
+        "INSERT INTO tournaments (game_id, name, start_date, end_date, participant_type, team_min_starters, team_max_starters, max_participants) \
+         VALUES ($1, $2, now(), now() + interval '1 day', 'team', 5, 5, 8) RETURNING id",
     )
     .bind(game_id)
     .bind(unique("Tournoi"))
@@ -1020,10 +1020,12 @@ fn tournament_input(game_id: Uuid) -> TournamentInput {
         registration_open_at: Some("2026-11-01T00:00:00.000000Z".into()),
         registration_close_at: None,
         participant_type: ParticipantType::Solo,
-        team_size: None,
         max_participants: 2,
         team_scoring_mode: TeamScoringMode::TopN,
         team_scoring_n: Some(2),
+        settings: TournamentSettings::solo(),
+        owner_id: None,
+        is_template: false,
     }
 }
 
@@ -1079,13 +1081,19 @@ async fn tournaments_round_trip_and_update_partially() {
         .unwrap();
     assert_eq!(started.status, TournamentStatus::Registration);
     let listed = store
-        .list_tournaments(Some(game_id), Some(TournamentStatus::Registration), 10, 0)
+        .list_tournaments(
+            Some(game_id),
+            Some(TournamentStatus::Registration),
+            false,
+            10,
+            0,
+        )
         .await
         .unwrap();
     assert_eq!(listed.len(), 1);
     assert!(
         store
-            .list_tournaments(Some(game_id), Some(TournamentStatus::Draft), 10, 0)
+            .list_tournaments(Some(game_id), Some(TournamentStatus::Draft), false, 10, 0)
             .await
             .unwrap()
             .is_empty()
@@ -1093,7 +1101,7 @@ async fn tournaments_round_trip_and_update_partially() {
 
     // Les contraintes de la base refusent un tournoi incohérent.
     let mut bad = tournament_input(game_id);
-    bad.team_size = Some(3);
+    bad.settings.team_max_starters = Some(3);
     assert!(store.create_tournament(bad).await.is_err());
 
     assert!(store.delete_tournament(created.id).await.unwrap());
@@ -1241,6 +1249,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
         tournament_id: tournament.id,
         user_id: Some(user_id),
         tournament_team_id: None,
+        responses: no_responses(),
     };
 
     let first = store.add_participant(solo(alice)).await.unwrap().unwrap();
@@ -1260,6 +1269,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
                 tournament_id: Uuid::new_v4(),
                 user_id: Some(carol),
                 tournament_team_id: None,
+                responses: no_responses(),
             })
             .await
             .unwrap()
@@ -1322,6 +1332,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
                 tournament_id: team_tournament.id,
                 user_id: Some(user_id),
                 tournament_team_id: Some(team.id),
+                responses: no_responses(),
             })
             .await
             .unwrap()
@@ -1334,6 +1345,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
                 tournament_id: tournament.id,
                 user_id: Some(carol),
                 tournament_team_id: Some(team.id),
+                responses: no_responses(),
             })
             .await
             .is_err()
@@ -1449,7 +1461,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
 
     // Un lot en échec n'écrit rien : la statistique n'est pas liée à l'autre jeu.
     let before = store
-        .list_tournaments(Some(game_id), None, 100, 0)
+        .list_tournaments(Some(game_id), None, false, 100, 0)
         .await
         .unwrap()
         .len();
@@ -1470,7 +1482,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
     assert!(stray.is_err());
     assert_eq!(
         store
-            .list_tournaments(Some(game_id), None, 100, 0)
+            .list_tournaments(Some(game_id), None, false, 100, 0)
             .await
             .unwrap()
             .len(),
@@ -1481,6 +1493,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
     let participant = |user_id: Uuid, status: ParticipantStatus| ParticipantImport {
         user_id: Some(user_id),
         tournament_team_id: None,
+        responses: no_responses(),
         status,
         registered_at: Some("2026-11-02T08:00:00.000000Z".into()),
     };
@@ -1489,6 +1502,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
             tournament_id: first.id,
             user_id: Some(alice),
             tournament_team_id: None,
+            responses: no_responses(),
         })
         .await
         .unwrap();
@@ -1561,6 +1575,7 @@ async fn step_tables_enforce_their_constraints() {
             tournament_id: first.id,
             user_id: Some(alice),
             tournament_team_id: None,
+            responses: no_responses(),
         })
         .await
         .unwrap()
@@ -1694,6 +1709,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
                 tournament_id: tournament.id,
                 user_id: Some(user_id),
                 tournament_team_id: None,
+                responses: no_responses(),
             })
             .await
             .unwrap();
@@ -1924,6 +1940,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
                     tournament_id: tournament,
                     user_id: Some(user_id),
                     tournament_team_id: None,
+                    responses: no_responses(),
                 })
                 .await
                 .unwrap()
@@ -2106,6 +2123,7 @@ async fn match_tables_enforce_their_constraints() {
             tournament_id: tournament.id,
             user_id: Some(alice),
             tournament_team_id: None,
+            responses: no_responses(),
         })
         .await
         .unwrap()
@@ -2303,6 +2321,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
                 tournament_id: tournament.id,
                 user_id: Some(user_id),
                 tournament_team_id: None,
+                responses: no_responses(),
             })
             .await
             .unwrap();
@@ -2693,4 +2712,109 @@ async fn expired_password_reset_tokens_are_refused() {
             .password_hash,
         "old"
     );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_registrations_never_exceed_the_capacity() {
+    let store = Arc::new(store().await);
+    let game = store
+        .create_game(GameInput {
+            name: unique("Cap"),
+            description: "d".into(),
+            images: vec![],
+        })
+        .await
+        .unwrap();
+    let mut input = tournament_input(game.id);
+    input.max_participants = 5;
+    input.settings.waiting_list_enabled = true;
+    let tournament = store.create_tournament(input).await.unwrap();
+    let mut tasks = Vec::new();
+    for n in 0..20 {
+        let store = store.clone();
+        tasks.push(tokio::spawn(async move {
+            let user = store
+                .create_user(&unique(&format!("race{n}")), None, "hash")
+                .await
+                .unwrap();
+            store
+                .add_participant(ParticipantInput {
+                    tournament_id: tournament.id,
+                    user_id: Some(user.id),
+                    tournament_team_id: None,
+                    responses: no_responses(),
+                })
+                .await
+                .unwrap();
+            store.promote_waitlist(tournament.id).await.unwrap();
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let all = store
+        .list_participants(tournament.id, i64::MAX, 0)
+        .await
+        .unwrap();
+    assert_eq!(all.iter().filter(|p| p.status.holds_a_seat()).count(), 5);
+    assert_eq!(
+        all.iter()
+            .filter(|p| p.status == ParticipantStatus::Waitlisted)
+            .count(),
+        15
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_ownership_transfers_leave_exactly_one_owner() {
+    let store = Arc::new(store().await);
+    let game = store
+        .create_game(GameInput {
+            name: unique("Own"),
+            description: "d".into(),
+            images: vec![],
+        })
+        .await
+        .unwrap();
+    let mut users = Vec::new();
+    for n in 0..5 {
+        users.push(
+            store
+                .create_user(&unique(&format!("own{n}")), None, "hash")
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    let mut input = tournament_input(game.id);
+    input.owner_id = Some(users[0]);
+    let tournament = store.create_tournament(input).await.unwrap();
+    let mut tasks = Vec::new();
+    for user in users.iter().skip(1).copied() {
+        let (store, from) = (store.clone(), users[0]);
+        tasks.push(tokio::spawn(async move {
+            store
+                .transfer_tournament_ownership(tournament.id, Some(from), user, from)
+                .await
+                .unwrap()
+        }));
+    }
+    let mut won = 0;
+    for task in tasks {
+        if task.await.unwrap() {
+            won += 1;
+        }
+    }
+    assert_eq!(won, 1);
+    let owner = store
+        .find_tournament(tournament.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .owner_id;
+    assert!(owner.is_some() && owner != Some(users[0]));
+    let audit = store.list_role_audit(tournament.id).await.unwrap();
+    assert_eq!(audit.len(), 1);
 }

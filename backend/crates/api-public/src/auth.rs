@@ -38,6 +38,8 @@ pub const USERNAME_MIN: usize = 3;
 pub const USERNAME_MAX: usize = 32;
 pub const PASSWORD_MIN: usize = 8;
 pub const PASSWORD_MAX: usize = 128;
+use crate::events::{EventSink, NoopEvents};
+
 const DEFAULT_PUBLIC_URL: &str = "http://localhost:3000";
 
 #[derive(Clone)]
@@ -63,6 +65,8 @@ pub struct AppState {
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
     pub(crate) public_url: Arc<str>,
+    /// Événements d'inscription et de pointage ; par défaut ignorés (voir [`crate::events`]).
+    pub(crate) events: Arc<dyn EventSink>,
 }
 
 impl AppState {
@@ -82,7 +86,14 @@ impl AppState {
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
+            events: Arc::new(NoopEvents),
         })
+    }
+
+    /// Branche la destination des événements d'inscription et de pointage.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.events = events;
+        self
     }
 
     /// Branche le sous-niveau qui importe et exporte les équipes des tournois.
