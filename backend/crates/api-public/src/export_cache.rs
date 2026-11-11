@@ -28,8 +28,15 @@ pub const TTL: Ttl = Ttl::from_hours(1);
 const RESOURCES: [&str; 4] = ["games", "stats", "teams", "tournaments"];
 const FORMATS: [Format; 2] = [Format::Json, Format::Csv];
 
-/// Routes d'écriture qui ne touchent à aucune donnée exportée.
-const NO_WRITE_PATHS: [&str; 4] = ["/login", "/refresh", "/logout", "/register"];
+/// Routes d'écriture qui ne touchent à aucune donnée exportée (l'aperçu d'un import ne modifie
+/// que le cache des aperçus).
+const NO_WRITE_PATHS: [&str; 5] = [
+    "/login",
+    "/refresh",
+    "/logout",
+    "/register",
+    "/tournaments/import/preview",
+];
 
 fn key(resource: &str, format: Format) -> String {
     format!("export:{resource}:{}", format.extension())
