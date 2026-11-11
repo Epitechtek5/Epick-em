@@ -102,7 +102,10 @@ async fn users_can_be_listed_and_read() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(one, json!({ "id": bob, "username": "bob", "role": "user" }));
+    assert_eq!(
+        one,
+        json!({ "id": bob, "username": "bob", "role": "user", "picture_url": null })
+    );
     assert_ne!(alice, bob);
 }
 
@@ -219,7 +222,7 @@ async fn an_admin_updates_another_account() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         updated,
-        json!({ "id": bob, "username": "robert", "role": "watcher" })
+        json!({ "id": bob, "username": "robert", "role": "watcher", "picture_url": null })
     );
 
     // Le nouveau mot de passe est celui qui fonctionne, et le rôle est dans le jeton.
@@ -438,7 +441,7 @@ async fn a_user_updates_their_own_account() {
     assert!(updated["email_verified_at"].is_string());
     assert_eq!(
         updated,
-        json!({ "id": alice, "username": "alicia", "role": "user", "email": "alice@example.com", "pending_email":null, "email_verified_at":updated["email_verified_at"] })
+        json!({ "id": alice, "username": "alicia", "role": "user", "email": "alice@example.com", "pending_email":null, "email_verified_at":updated["email_verified_at"], "picture_url": null })
     );
     assert_eq!(
         login(&app, "alice", "nouveau-mdp-1").await.0,

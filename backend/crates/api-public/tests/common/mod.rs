@@ -7,6 +7,7 @@ use actix_web::http::StatusCode;
 use actix_web::test::{self, TestRequest};
 use api_public::config::AuthConfig;
 use api_public::mail::MemoryMailer;
+use api_public::push::MemoryPush;
 use api_public::store::MemoryStore;
 use api_public::{AppState, app};
 use serde_json::{Value, json};
@@ -217,4 +218,45 @@ pub async fn logged_in_as(
     let (status, body) = login(app, username, password).await;
     assert_eq!(status, StatusCode::OK);
     body
+}
+
+/// Le courrier de la dernière application créée sur ce thread.
+pub fn mailbox() -> Arc<MemoryMailer> {
+    MAILBOX.with_borrow(Arc::clone)
+}
+
+/// Comme [`app_with_mailer`], avec `push` branché et sans attente entre deux essais d'envoi.
+pub async fn app_with_services(
+    store: Arc<MemoryStore>,
+    mailer: Arc<MemoryMailer>,
+    push: Arc<MemoryPush>,
+) -> impl Service<
+    actix_http::Request,
+    Response = ServiceResponse<impl MessageBody>,
+    Error = actix_web::Error,
+> {
+    let config = AuthConfig {
+        jwt_secret: SECRET.into(),
+        access_token_ttl: Duration::from_secs(900),
+        refresh_token_ttl: Duration::from_secs(3600),
+    };
+    MAILBOX.set(mailer.clone());
+    let state = AppState::new(store, config)
+        .unwrap()
+        .with_mailer(mailer, PUBLIC_URL)
+        .with_push(push)
+        .with_retry_delay(Duration::ZERO);
+    test::init_service(app(state)).await
+}
+
+/// Attend (2 s au plus) que `condition` soit vraie : les notifications partent dans une tâche
+/// à part, après la réponse.
+pub async fn eventually(condition: impl Fn() -> bool) {
+    for _ in 0..200 {
+        if condition() {
+            return;
+        }
+        actix_web::rt::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(condition(), "condition jamais remplie");
 }
