@@ -359,7 +359,10 @@ async fn creation_is_validated() {
             "registration_close_at",
         ),
         (bad(json!({ "max_participants": 0 })), "max_participants"),
-        (bad(json!({ "participant_type": "team" })), "team_size"),
+        (
+            bad(json!({ "participant_type": "team" })),
+            "team_min_starters",
+        ),
         (bad(json!({ "team_size": 3 })), "team_size"),
         (
             bad(json!({ "team_scoring_mode": "top_n" })),
@@ -1205,7 +1208,8 @@ async fn team_tournaments_rank_their_teams() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    // Au passage en `ongoing`, la composition est revérifiée : Dave rejoint Alpha après coup.
+    // La composition est aussi tenue pendant la constitution des équipes : Dave ne peut pas
+    // devenir un second titulaire d'Alpha (1 titulaire maximum), mais peut être remplaçant.
     let dave = account(&app, "dave").await;
     let alpha = teams
         .as_array()
@@ -1215,11 +1219,25 @@ async fn team_tournaments_rank_their_teams() {
         .unwrap()["tournament_team_id"]
         .as_str()
         .unwrap();
-    let (status, _) = post(
+    let (status, error) = post(
         &app,
         &format!("/tournament-teams/{alpha}/members"),
         &s.alice.token,
         json!({ "user_id": dave.id, "role": "member" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["errors"]["role"]
+            .as_str()
+            .unwrap()
+            .contains("titulaires")
+    );
+    let (status, _) = post(
+        &app,
+        &format!("/tournament-teams/{alpha}/members"),
+        &s.alice.token,
+        json!({ "user_id": dave.id, "role": "substitute" }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -1230,13 +1248,7 @@ async fn team_tournaments_rank_their_teams() {
         json!({ "status": "ongoing" }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
-    assert!(
-        error["errors"]["status"]
-            .as_str()
-            .unwrap()
-            .contains("titulaires")
-    );
+    assert_eq!(status, StatusCode::OK, "{error}");
 }
 
 #[actix_web::test]
@@ -1635,7 +1647,7 @@ async fn invalid_files_are_refused_without_any_write() {
         (
             "team_size",
             valid(json!({ "participant_type": "team" })),
-            "team_size",
+            "team_min_starters",
         ),
         (
             "statistique inconnue",
@@ -1946,7 +1958,7 @@ async fn tournament_files_in_json_and_csv_give_the_same_tournaments() {
     let as_json = export(&app, &s.admin, "json").await.1;
     let as_csv = export(&app, &s.admin, "csv").await.1;
     let header = as_csv.lines().next().unwrap().to_string();
-    assert_eq!(header.split(',').count(), 18, "{header}");
+    assert_eq!(header.split(',').count(), 19, "{header}");
     assert!(as_csv.lines().count() > 3, "{as_csv}");
 
     // Chaque fichier, importé après avoir tout supprimé, redonne les deux exports d'origine.

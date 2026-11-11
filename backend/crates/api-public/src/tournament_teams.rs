@@ -18,6 +18,7 @@ use crate::teams::{
     AddMemberRequest, Pagination, UpdateMemberRequest, owner_is_fixed, require_assignable,
     require_owner, team_update_parts, validate,
 };
+use crate::tournament_access::require_visible;
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -85,12 +86,14 @@ struct UpdateTournamentTeamRequest {
 #[get("/tournaments/{tournament_id}/teams")]
 async fn list_tournament_teams(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     tournament_id: web::Path<Uuid>,
     page: web::Query<Pagination>,
 ) -> Result<HttpResponse, ApiError> {
     let (limit, offset) = page.bounds();
     let tournament_id = tournament_id.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_visible(&state, &claims, &tournament).await?;
     let teams = state
         .store
         .list_tournament_teams(tournament_id, limit, offset)
@@ -129,6 +132,7 @@ async fn create_tournament_team(
     body: web::Json<CreateTournamentTeamRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let tournament = find_tournament(&state, tournament_id.into_inner()).await?;
+    require_visible(&state, &claims, &tournament).await?;
     if !matches!(
         tournament.status,
         TournamentStatus::Draft | TournamentStatus::Registration
@@ -206,9 +210,12 @@ async fn create_tournament_team(
 #[get("/tournament-teams/{id}")]
 async fn get_tournament_team(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(find(&state, id.into_inner()).await?))
+    let team = find(&state, id.into_inner()).await?;
+    require_team_visible(&state, &claims, &team).await?;
+    Ok(HttpResponse::Ok().json(team))
 }
 
 /// Modifie une équipe de tournoi (propriétaire). N'a aucun effet sur l'équipe globale d'origine.
@@ -302,11 +309,14 @@ async fn delete_tournament_team(
 #[get("/tournament-teams/{id}/members")]
 async fn list_members(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
+    let team = find(&state, id.into_inner()).await?;
+    require_team_visible(&state, &claims, &team).await?;
     let members = state
         .store
-        .list_tournament_team_members(id.into_inner())
+        .list_tournament_team_members(team.id)
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
@@ -341,6 +351,7 @@ async fn add_member(
     require_owner(&claims, team.owner_id)?;
     let AddMemberRequest { user_id, role } = body.into_inner();
     require_assignable(role)?;
+    require_room(&state, &team, role, None).await?;
     let member = state
         .store
         .add_tournament_team_member(team.id, user_id, role)
@@ -383,6 +394,7 @@ async fn update_member(
     if user_id == team.owner_id {
         return Err(owner_is_fixed());
     }
+    require_room(&state, &team, body.role, Some(user_id)).await?;
     let member = state
         .store
         .set_tournament_team_member_role(team.id, user_id, body.role)
@@ -433,6 +445,55 @@ async fn remove_member(
     } else {
         Err(ApiError::NotFound)
     }
+}
+
+/// L'équipe n'est lisible que si son tournoi l'est (un tournoi privé reste introuvable).
+async fn require_team_visible(
+    state: &AppState,
+    claims: &Claims,
+    team: &TournamentTeam,
+) -> Result<(), ApiError> {
+    let tournament = find_tournament(state, team.tournament_id).await?;
+    require_visible(state, claims, &tournament).await?;
+    Ok(())
+}
+
+/// Les limites de composition du tournoi (`team_max_starters`, `team_max_substitutes`) valent
+/// aussi pour les équipes en cours de constitution : on n'ajoute pas un titulaire ou un
+/// remplaçant de trop. `moving` est le membre dont le rôle change : il ne compte pas dans son
+/// ancien rôle.
+async fn require_room(
+    state: &AppState,
+    team: &TournamentTeam,
+    role: TeamRole,
+    moving: Option<Uuid>,
+) -> Result<(), ApiError> {
+    let tournament = find_tournament(state, team.tournament_id).await?;
+    let settings = &tournament.settings;
+    let members = state
+        .store
+        .list_tournament_team_members(team.id)
+        .await
+        .map_err(ApiError::internal)?
+        .unwrap_or_default();
+    let others = members.iter().filter(|m| Some(m.user_id) != moving);
+    let (limit, kind) = if role == TeamRole::Substitute {
+        (settings.team_max_substitutes, "remplaçants")
+    } else {
+        (settings.team_max_starters, "titulaires")
+    };
+    let count = others
+        .filter(|m| (m.role == TeamRole::Substitute) == (role == TeamRole::Substitute))
+        .count();
+    if let Some(limit) = limit
+        && i64::try_from(count).unwrap_or(i64::MAX) >= i64::from(limit)
+    {
+        return Err(ApiError::Validation(vec![(
+            "role",
+            format!("Ce tournoi limite les équipes à {limit} {kind}."),
+        )]));
+    }
+    Ok(())
 }
 
 async fn find(state: &AppState, id: Uuid) -> Result<TournamentTeam, ApiError> {

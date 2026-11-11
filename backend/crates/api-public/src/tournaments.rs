@@ -1,23 +1,33 @@
 //! Tournois : CRUD (administrateur), barème, inscriptions solo / équipe, check-in, changements
 //! de statut et classements.
 //!
-//! Toutes ces routes exigent un jeton d'accès (`guard::route_policy`). La consultation est
-//! ouverte à tout compte ; la création, la modification, la suppression, le barème et les
-//! changements de statut sont réservés aux administrateurs. Un joueur s'inscrit, se désinscrit
+//! Toutes ces routes exigent un jeton d'accès (`guard::route_policy`) ; la consultation sans jeton
+//! passe par `/public/...` ([`crate::public_api`]). La consultation est ouverte à tout compte,
+//! sauf pour un tournoi `invitation_only`, introuvable pour qui n'y a aucun lien. La création est
+//! réservée aux administrateurs globaux ; la modification, le barème et les changements de
+//! statut le sont au propriétaire et aux administrateurs du tournoi
+//! ([`tournament_access`](crate::tournament_access)). Un joueur s'inscrit, se désinscrit
 //! et pointe lui-même (le propriétaire de l'équipe le fait pour une équipe).
 //!
 //! Le barème et les paramètres de capacité sont verrouillés dès que le tournoi est `ongoing`.
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::events::{EventKind, TournamentEvent};
 use crate::ranking::{rank, team_points};
 use crate::store::{
     ParticipantInput, ParticipantStatus, ParticipantType, ScoringMode, ScoringRule,
     ScoringRuleDefinition, ScoringRuleInput, StoreError, TeamRole, TeamScoringMode, Tournament,
-    TournamentInput, TournamentParticipant, TournamentStatus, TournamentUpdate, now_rfc3339,
+    TournamentInput, TournamentParticipant, TournamentSettings, TournamentStatus, TournamentUpdate,
+    now_rfc3339,
 };
 use crate::team_io::normalize_timestamp;
 use crate::teams::Pagination;
+use crate::tournament_access::{access_of, require_manage, require_owner, require_visible};
+use crate::tournament_settings::{
+    SettingsRequest, UpdateSettingsRequest, check_settings, legacy_team_size_errors,
+    validate_responses,
+};
 use crate::users::require_admin;
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -30,7 +40,7 @@ use uuid::Uuid;
 const NAME_MAX: usize = 128;
 const DESCRIPTION_MAX: usize = 4000;
 const MAX_PARTICIPANTS_LIMIT: i32 = 10_000;
-const TEAM_SIZE_LIMIT: i32 = 100;
+const TEAM_SCORING_LIMIT: i32 = 100;
 
 /// Routes des tournois, avec leur documentation OpenAPI.
 pub fn routes(cfg: &mut ServiceConfig) {
@@ -43,6 +53,10 @@ pub fn routes(cfg: &mut ServiceConfig) {
         .service(update_tournament)
         .service(delete_tournament)
         .service(set_status)
+        .service(approve_participant)
+        .service(reject_participant)
+        .service(promote_waiting_list)
+        .service(close_check_in)
         .service(list_scoring_rules)
         .service(create_scoring_rule)
         .service(update_scoring_rule)
@@ -80,8 +94,6 @@ struct CreateTournamentRequest {
     registration_open_at: Option<String>,
     registration_close_at: Option<String>,
     participant_type: ParticipantType,
-    /// Joueurs par équipe : obligatoire avec `team`, interdit avec `solo`.
-    team_size: Option<i32>,
     /// Nombre maximum d'inscrits (joueurs en `solo`, équipes en `team`).
     #[schema(minimum = 1, maximum = 10000, example = 32)]
     max_participants: i32,
@@ -89,6 +101,10 @@ struct CreateTournamentRequest {
     team_scoring_mode: Option<TeamScoringMode>,
     /// Nombre de meilleurs scores retenus : obligatoire avec `top_n`, interdit sinon.
     team_scoring_n: Option<i32>,
+    /// Configuration : mode, lieu, visibilité, règles, titulaires et remplaçants par équipe,
+    /// inscriptions, pointage.
+    #[serde(flatten)]
+    settings: SettingsRequest,
 }
 
 /// Champs modifiables, tous facultatifs ; `null` efface une valeur facultative. Le type de
@@ -108,14 +124,15 @@ struct UpdateTournamentRequest {
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<String>)]
     registration_close_at: Option<Option<String>>,
-    #[serde(default, deserialize_with = "nullable")]
-    #[schema(value_type = Option<i32>)]
-    team_size: Option<Option<i32>>,
     max_participants: Option<i32>,
     team_scoring_mode: Option<TeamScoringMode>,
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<i32>)]
     team_scoring_n: Option<Option<i32>>,
+    /// Configuration (voir la création). La composition des équipes et le pointage se
+    /// verrouillent dès `ongoing`.
+    #[serde(flatten)]
+    settings: UpdateSettingsRequest,
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -164,6 +181,9 @@ struct RegisterRequest {
     user_id: Option<Uuid>,
     /// Équipe du tournoi : obligatoire pour un tournoi par équipes, facultative en solo.
     tournament_team_id: Option<Uuid>,
+    /// Réponses aux champs d'inscription du tournoi (`registration_fields`), par clé.
+    #[schema(value_type = Option<Object>, example = json!({"ingame_name": "Faker"}))]
+    responses: Option<Value>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -173,22 +193,22 @@ struct ParticipantStatusRequest {
 
 /// Rang d'un joueur ; les ex æquo partagent le même rang.
 #[derive(Serialize, ToSchema)]
-struct PlayerRank {
-    rank: u32,
-    participant_id: Uuid,
-    user_id: Uuid,
+pub(crate) struct PlayerRank {
+    pub(crate) rank: u32,
+    pub(crate) participant_id: Uuid,
+    pub(crate) user_id: Uuid,
     /// Équipe pour laquelle le joueur marque, le cas échéant.
-    tournament_team_id: Option<Uuid>,
-    points: f64,
+    pub(crate) tournament_team_id: Option<Uuid>,
+    pub(crate) points: f64,
 }
 
 /// Rang d'une équipe ; les ex æquo partagent le même rang.
 #[derive(Serialize, ToSchema)]
-struct TeamRank {
-    rank: u32,
-    tournament_team_id: Uuid,
-    name: String,
-    points: f64,
+pub(crate) struct TeamRank {
+    pub(crate) rank: u32,
+    pub(crate) tournament_team_id: Uuid,
+    pub(crate) name: String,
+    pub(crate) points: f64,
 }
 
 /// Liste des tournois.
@@ -206,14 +226,28 @@ struct TeamRank {
 #[get("/tournaments")]
 async fn list_tournaments(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     query: web::Query<TournamentsQuery>,
 ) -> Result<HttpResponse, ApiError> {
     let (limit, offset) = Pagination::new(query.limit, query.offset).bounds();
-    let tournaments = state
+    // Les tournois privés auxquels l'appelant n'a aucun lien n'apparaissent pas : on filtre
+    // avant de paginer pour que les pages restent pleines.
+    let all = state
         .store
-        .list_tournaments(query.game_id, query.status, limit, offset)
+        .list_tournaments(query.game_id, query.status, false, i64::MAX, 0)
         .await
         .map_err(ApiError::internal)?;
+    let mut tournaments = Vec::new();
+    for tournament in all {
+        if require_visible(&state, &claims, &tournament).await.is_ok() {
+            tournaments.push(tournament);
+        }
+    }
+    let tournaments: Vec<Tournament> = tournaments
+        .into_iter()
+        .skip(usize::try_from(offset).unwrap_or(0))
+        .take(usize::try_from(limit).unwrap_or(0))
+        .collect();
     Ok(HttpResponse::Ok().json(tournaments))
 }
 
@@ -233,9 +267,11 @@ async fn list_tournaments(
 #[get("/tournaments/{id}")]
 async fn get_tournament(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(find_tournament(&state, id.into_inner()).await?))
+    let tournament = visible_tournament(&state, &claims, id.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(settle_if_due(&state, tournament).await?))
 }
 
 /// Crée un tournoi au statut `draft` (administrateur).
@@ -261,6 +297,7 @@ async fn create_tournament(
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let request = body.into_inner();
+    let request_team_size = request.settings.team_size;
     let mut input = TournamentInput {
         game_id: request.game_id,
         name: request.name,
@@ -270,12 +307,16 @@ async fn create_tournament(
         registration_open_at: request.registration_open_at,
         registration_close_at: request.registration_close_at,
         participant_type: request.participant_type,
-        team_size: request.team_size,
         max_participants: request.max_participants,
         team_scoring_mode: request.team_scoring_mode.unwrap_or(TeamScoringMode::None),
         team_scoring_n: request.team_scoring_n,
+        settings: request.settings.into_settings(request.participant_type),
+        // Le créateur devient l'unique propriétaire.
+        owner_id: Some(claims.sub),
+        is_template: false,
     };
-    let errors = check(&mut input);
+    let mut errors = legacy_team_size_errors(request_team_size, input.participant_type);
+    errors.extend(check(&mut input));
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
@@ -324,21 +365,26 @@ async fn update_tournament(
     id: web::Path<Uuid>,
     body: web::Json<UpdateTournamentRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let current = find_tournament(&state, id.into_inner()).await?;
+    require_manage(&state, &claims, &current).await?;
     let request = body.into_inner();
-    let touches_capacity = request.team_size.is_some()
-        || request.max_participants.is_some()
+    let locked = matches!(
+        current.status,
+        TournamentStatus::Ongoing | TournamentStatus::Finished
+    );
+    let touches_capacity = request.max_participants.is_some()
         || request.team_scoring_mode.is_some()
-        || request.team_scoring_n.is_some();
-    if touches_capacity
-        && matches!(
-            current.status,
-            TournamentStatus::Ongoing | TournamentStatus::Finished
-        )
-    {
+        || request.team_scoring_n.is_some()
+        || request.settings.touches_team_composition();
+    if locked && touches_capacity {
         return Err(ApiError::TournamentLocked);
     }
+    if request.settings.touches_check_in() && (locked || current.check_in_settled_at.is_some()) {
+        return Err(ApiError::TournamentLocked);
+    }
+    let team_size_given = request.settings.team_size;
+    let settings_given = !request.settings.is_empty();
+    let merged_settings = request.settings.merge(current.settings.clone());
     let mut merged = TournamentInput {
         game_id: current.game_id,
         name: request.name.clone().unwrap_or(current.name),
@@ -354,14 +400,17 @@ async fn update_tournament(
             .clone()
             .unwrap_or(current.registration_close_at),
         participant_type: current.participant_type,
-        team_size: request.team_size.unwrap_or(current.team_size),
         max_participants: request.max_participants.unwrap_or(current.max_participants),
         team_scoring_mode: request
             .team_scoring_mode
             .unwrap_or(current.team_scoring_mode),
         team_scoring_n: request.team_scoring_n.unwrap_or(current.team_scoring_n),
+        settings: merged_settings,
+        owner_id: current.owner_id,
+        is_template: current.is_template,
     };
-    let mut errors = check(&mut merged);
+    let mut errors = legacy_team_size_errors(team_size_given, current.participant_type);
+    errors.extend(check(&mut merged));
     if errors.is_empty() && request.max_participants.is_some() {
         let registered = active_participants(&state, current.id).await?.len();
         if usize::try_from(merged.max_participants).unwrap_or(0) < registered {
@@ -370,6 +419,9 @@ async fn update_tournament(
                 format!("{registered} participants sont déjà inscrits."),
             ));
         }
+    }
+    if errors.is_empty() && settings_given {
+        errors.extend(check_team_fit(&state, &current.id, &merged).await?);
     }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
@@ -385,10 +437,10 @@ async fn update_tournament(
         registration_close_at: request
             .registration_close_at
             .map(|_| merged.registration_close_at.clone()),
-        team_size: request.team_size.map(|_| merged.team_size),
         max_participants: request.max_participants.map(|_| merged.max_participants),
         team_scoring_mode: request.team_scoring_mode.map(|_| merged.team_scoring_mode),
         team_scoring_n: request.team_scoring_n.map(|_| merged.team_scoring_n),
+        settings: settings_given.then(|| merged.settings.clone()),
     };
     let tournament = state
         .store
@@ -421,8 +473,8 @@ async fn delete_tournament(
     claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let tournament = find_tournament(&state, id.into_inner()).await?;
+    require_owner(&state, &claims, &tournament).await?;
     if tournament.status == TournamentStatus::Ongoing {
         return Err(ApiError::TournamentLocked);
     }
@@ -443,7 +495,9 @@ async fn delete_tournament(
 /// Transitions : `draft` → `registration`, `registration` → `ongoing`, `ongoing` →
 /// `finished`, et `draft`, `registration` ou `ongoing` → `cancelled`. Le passage en `ongoing`
 /// exige au moins deux inscrits actifs (ni `withdrawn` ni `disqualified`) et, pour un tournoi
-/// par équipes, `team_size` titulaires (ni remplaçants) dans chaque équipe inscrite. Le
+/// par équipes, un nombre de titulaires entre `team_min_starters` et `team_max_starters` (et pas
+/// plus de `team_max_substitutes` remplaçants) dans chaque équipe inscrite. La clôture du
+/// pointage est alors traitée (absents marqués, liste d'attente promue). Le
 /// chaînage des étapes, s'il y en a, doit être valide (voir `POST /tournaments/{id}/steps`).
 #[utoipa::path(
     post,
@@ -468,12 +522,14 @@ async fn set_status(
     id: web::Path<Uuid>,
     body: web::Json<StatusRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let tournament = find_tournament(&state, id.into_inner()).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let target = body.status;
-    if !transition_allowed(tournament.status, target) {
+    if tournament.is_template || !transition_allowed(tournament.status, target) {
         return Err(ApiError::InvalidTransition);
     }
+    // Les absents du pointage sont marqués avant de compter les inscrits.
+    let tournament = settle_if_due(&state, tournament).await?;
     if target == TournamentStatus::Ongoing {
         let problems = start_problems(&state, &tournament).await?;
         if !problems.is_empty() {
@@ -505,9 +561,10 @@ async fn set_status(
 #[get("/tournaments/{id}/scoring-rules")]
 async fn list_scoring_rules(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    let tournament = find_tournament(&state, id.into_inner()).await?;
+    let tournament = visible_tournament(&state, &claims, id.into_inner()).await?;
     let rules = state
         .store
         .list_scoring_rules(tournament.id)
@@ -540,8 +597,8 @@ async fn create_scoring_rule(
     id: web::Path<Uuid>,
     body: web::Json<CreateScoringRuleRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let tournament = find_tournament(&state, id.into_inner()).await?;
+    require_manage(&state, &claims, &tournament).await?;
     require_scoring_editable(&tournament)?;
     let CreateScoringRuleRequest {
         stat_id,
@@ -595,9 +652,9 @@ async fn update_scoring_rule(
     path: web::Path<(Uuid, Uuid)>,
     body: web::Json<UpdateScoringRuleRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, rule_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let rule = find_rule(&state, tournament.id, rule_id).await?;
     require_scoring_editable(&tournament)?;
     let UpdateScoringRuleRequest {
@@ -638,9 +695,9 @@ async fn delete_scoring_rule(
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, rule_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let rule = find_rule(&state, tournament.id, rule_id).await?;
     require_scoring_editable(&tournament)?;
     if state
@@ -671,16 +728,28 @@ async fn delete_scoring_rule(
 #[get("/tournaments/{id}/participants")]
 async fn list_participants(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
     page: web::Query<Pagination>,
 ) -> Result<HttpResponse, ApiError> {
-    let tournament = find_tournament(&state, id.into_inner()).await?;
+    let tournament = visible_tournament(&state, &claims, id.into_inner()).await?;
+    let access = access_of(&state, &claims, &tournament).await?;
+    let tournament = settle_if_due(&state, tournament).await?;
     let (limit, offset) = page.bounds();
-    let participants = state
+    let mut participants = state
         .store
         .list_participants(tournament.id, limit, offset)
         .await
         .map_err(ApiError::internal)?;
+    // Les réponses aux champs d'inscription ne sont lisibles que par l'équipe organisatrice
+    // et par l'inscrit lui-même.
+    if !access.can_referee() {
+        for participant in &mut participants {
+            if participant.user_id != Some(claims.sub) {
+                participant.responses = crate::store::no_responses();
+            }
+        }
+    }
     Ok(HttpResponse::Ok().json(participants))
 }
 
@@ -688,8 +757,15 @@ async fn list_participants(
 ///
 /// Le tournoi doit être au statut `registration`, dans sa fenêtre d'inscription. En solo, le
 /// joueur s'inscrit seul, ou pour une équipe du tournoi dont il est membre. Dans un tournoi
-/// par équipes, le propriétaire inscrit son équipe, qui doit compter exactement `team_size`
-/// titulaires (les remplaçants ne comptent pas).
+/// par équipes, le propriétaire inscrit son équipe, dont le nombre de titulaires doit être
+/// compris entre `team_min_starters` et `team_max_starters` et le nombre de remplaçants ne pas
+/// dépasser `team_max_substitutes`.
+///
+/// Le statut initial vaut `pending` si les inscriptions sont soumises à approbation
+/// (`registration_policy` = `approval_required`), `registered` sinon, ou `waitlisted` quand la
+/// capacité est atteinte et que la liste d'attente est activée ; sans liste d'attente, une
+/// inscription au-delà de la capacité est refusée (409). Les `responses` sont validées contre
+/// les `registration_fields` du tournoi.
 #[utoipa::path(
     post,
     path = "/tournaments/{id}/participants",
@@ -713,12 +789,16 @@ async fn register(
     id: web::Path<Uuid>,
     body: web::Json<RegisterRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    let tournament = find_tournament(&state, id.into_inner()).await?;
+    let tournament = visible_tournament(&state, &claims, id.into_inner()).await?;
     let RegisterRequest {
         user_id,
         tournament_team_id,
+        responses,
     } = body.into_inner();
-    let admin = is_admin(&state, &claims).await?;
+    let responses = validate_responses(&tournament.settings.registration_fields, responses)
+        .map_err(ApiError::Validation)?;
+    // Un organisateur inscrit n'importe qui ; les autres ne s'inscrivent que pour eux.
+    let admin = access_of(&state, &claims, &tournament).await?.can_manage();
     let input = match tournament.participant_type {
         ParticipantType::Solo => {
             let user_id = user_id.unwrap_or(claims.sub);
@@ -756,6 +836,7 @@ async fn register(
                 tournament_id: tournament.id,
                 user_id: Some(user_id),
                 tournament_team_id,
+                responses,
             }
         }
         ParticipantType::Team => {
@@ -775,18 +856,18 @@ async fn register(
             if team.owner_id != claims.sub && !admin {
                 return Err(ApiError::Forbidden);
             }
-            let starters = starters(&state, team.id).await?;
-            let expected = tournament.team_size.unwrap_or(0);
-            if i64::try_from(starters).unwrap_or(i64::MAX) != i64::from(expected) {
+            let problems = team_composition_problems(&state, &tournament, team.id).await?;
+            if !problems.is_empty() {
                 return Err(ApiError::Validation(vec![(
                     "tournament_team_id",
-                    format!("L'équipe compte {starters} titulaires, {expected} sont attendus."),
+                    problems.join(" "),
                 )]));
             }
             ParticipantInput {
                 tournament_id: tournament.id,
                 user_id: None,
                 tournament_team_id: Some(team.id),
+                responses,
             }
         }
     };
@@ -797,6 +878,12 @@ async fn register(
         .await
         .map_err(tournament_error)?
         .ok_or(ApiError::NotFound)?;
+    let kind = match participant.status {
+        ParticipantStatus::Pending => EventKind::PendingApproval,
+        ParticipantStatus::Waitlisted => EventKind::Waitlisted,
+        _ => EventKind::Registered,
+    };
+    emit(&state, kind, &participant);
     Ok(HttpResponse::Created().json(participant))
 }
 
@@ -829,10 +916,10 @@ async fn update_participant(
     body: web::Json<ParticipantStatusRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, participant_id) = path.into_inner();
-    let tournament = find_tournament(&state, tournament_id).await?;
+    let tournament = visible_tournament(&state, &claims, tournament_id).await?;
     let participant = find_participant(&state, tournament.id, participant_id).await?;
     let status = body.status;
-    if !is_admin(&state, &claims).await? {
+    if !access_of(&state, &claims, &tournament).await?.can_manage() {
         if status != ParticipantStatus::Withdrawn {
             return Err(ApiError::Forbidden);
         }
@@ -844,6 +931,7 @@ async fn update_participant(
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
+    release_seat(&state, &tournament, &participant).await?;
     Ok(HttpResponse::Ok().json(participant))
 }
 
@@ -874,9 +962,9 @@ async fn remove_participant(
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, participant_id) = path.into_inner();
-    let tournament = find_tournament(&state, tournament_id).await?;
+    let tournament = visible_tournament(&state, &claims, tournament_id).await?;
     let participant = find_participant(&state, tournament.id, participant_id).await?;
-    if !is_admin(&state, &claims).await? {
+    if !access_of(&state, &claims, &tournament).await?.can_manage() {
         require_actor(&state, &claims, &participant).await?;
     }
     if !matches!(
@@ -891,14 +979,17 @@ async fn remove_participant(
         .await
         .map_err(ApiError::internal)?
     {
+        release_seat(&state, &tournament, &participant).await?;
         Ok(HttpResponse::NoContent().finish())
     } else {
         Err(ApiError::NotFound)
     }
 }
 
-/// Pointe un inscrit (l'inscrit, le propriétaire de son équipe ou un administrateur), tant que
-/// le tournoi est au statut `registration`. Sans effet s'il est déjà pointé.
+/// Pointe un inscrit (l'inscrit, le propriétaire de son équipe, un arbitre ou un administrateur),
+/// tant que le tournoi est au statut `registration` et dans la fenêtre de pointage
+/// (`check_in_open_at` / `check_in_close_at`, appliquée côté serveur). Sans effet s'il est déjà
+/// pointé ; seuls les inscrits au statut `registered` peuvent pointer.
 #[utoipa::path(
     post,
     path = "/tournaments/{id}/participants/{participant_id}/check-in",
@@ -923,20 +1014,21 @@ async fn check_in(
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, participant_id) = path.into_inner();
-    let tournament = find_tournament(&state, tournament_id).await?;
+    let tournament = visible_tournament(&state, &claims, tournament_id).await?;
+    let tournament = settle_if_due(&state, tournament).await?;
     let participant = find_participant(&state, tournament.id, participant_id).await?;
-    if !is_admin(&state, &claims).await? {
+    let access = access_of(&state, &claims, &tournament).await?;
+    if !access.can_referee() {
         require_actor(&state, &claims, &participant).await?;
     }
     if tournament.status != TournamentStatus::Registration {
         return Err(ApiError::RegistrationClosed);
     }
+    require_check_in_window(&tournament)?;
     match participant.status {
         ParticipantStatus::CheckedIn => return Ok(HttpResponse::Ok().json(participant)),
         ParticipantStatus::Registered => {}
-        ParticipantStatus::Disqualified | ParticipantStatus::Withdrawn => {
-            return Err(ApiError::InvalidTransition);
-        }
+        _ => return Err(ApiError::InvalidTransition),
     }
     let participant = state
         .store
@@ -944,6 +1036,7 @@ async fn check_in(
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
+    emit(&state, EventKind::CheckedIn, &participant);
     Ok(HttpResponse::Ok().json(participant))
 }
 
@@ -966,18 +1059,27 @@ async fn check_in(
 #[get("/tournaments/{id}/ranking")]
 async fn player_ranking(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    let tournament = find_tournament(&state, id.into_inner()).await?;
+    let tournament = visible_tournament(&state, &claims, id.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(player_ranks(&state, &tournament).await?))
+}
+
+/// Classement des joueurs d'un tournoi solo (route publique comprise).
+pub(crate) async fn player_ranks(
+    state: &AppState,
+    tournament: &Tournament,
+) -> Result<Vec<PlayerRank>, ApiError> {
     if tournament.participant_type != ParticipantType::Solo {
-        return Ok(HttpResponse::Ok().json(Vec::<PlayerRank>::new()));
+        return Ok(Vec::new());
     }
     let points = state
         .store
         .participant_points(tournament.id)
         .await
         .map_err(ApiError::internal)?;
-    let entries = active_participants(&state, tournament.id)
+    let entries = active_participants(state, tournament.id)
         .await?
         .into_iter()
         .filter_map(|p| {
@@ -998,7 +1100,7 @@ async fn player_ranking(
             },
         )
         .collect();
-    Ok(HttpResponse::Ok().json(ranking))
+    Ok(ranking)
 }
 
 /// Classement des équipes, par points décroissants. Le gagnant est le premier rang.
@@ -1021,15 +1123,24 @@ async fn player_ranking(
 #[get("/tournaments/{id}/team-ranking")]
 async fn team_ranking(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    let tournament = find_tournament(&state, id.into_inner()).await?;
+    let tournament = visible_tournament(&state, &claims, id.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(team_ranks(&state, &tournament).await?))
+}
+
+/// Classement des équipes d'un tournoi (route publique comprise).
+pub(crate) async fn team_ranks(
+    state: &AppState,
+    tournament: &Tournament,
+) -> Result<Vec<TeamRank>, ApiError> {
     let points = state
         .store
         .participant_points(tournament.id)
         .await
         .map_err(ApiError::internal)?;
-    let participants = active_participants(&state, tournament.id).await?;
+    let participants = active_participants(state, tournament.id).await?;
     let mut by_team: Vec<(Uuid, f64)> = Vec::new();
     match tournament.participant_type {
         ParticipantType::Team => {
@@ -1084,7 +1195,180 @@ async fn team_ranking(
             points,
         })
         .collect();
-    Ok(HttpResponse::Ok().json(ranking))
+    Ok(ranking)
+}
+
+/// Approuve une inscription `pending` (organisateur). L'inscrit devient `registered`, ou
+/// `waitlisted` si le tournoi est complet et que la liste d'attente est activée ; sans liste
+/// d'attente, le tournoi complet refuse l'approbation (409).
+#[utoipa::path(
+    post,
+    path = "/tournaments/{id}/participants/{participant_id}/approve",
+    tag = "tournaments",
+    security(("bearer" = [])),
+    params(
+        ("id" = Uuid, Path, description = "Identifiant du tournoi"),
+        ("participant_id" = Uuid, Path, description = "Identifiant de l'inscription"),
+    ),
+    responses(
+        (status = 200, description = "Inscription approuvée", body = TournamentParticipant),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 403, description = "Réservé aux organisateurs du tournoi", body = ErrorResponse),
+        (status = 404, description = "Tournoi ou inscription introuvable", body = ErrorResponse),
+        (status = 409, description = "Inscription non `pending`, ou tournoi complet", body = ErrorResponse),
+    ),
+)]
+#[post("/tournaments/{id}/participants/{participant_id}/approve")]
+async fn approve_participant(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, ApiError> {
+    let (tournament_id, participant_id) = path.into_inner();
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
+    let participant = find_participant(&state, tournament.id, participant_id).await?;
+    require_registration_phase(&tournament)?;
+    let participant = state
+        .store
+        .approve_participant(participant.id)
+        .await
+        .map_err(participant_error)?
+        .ok_or(ApiError::NotFound)?;
+    let kind = if participant.status == ParticipantStatus::Waitlisted {
+        EventKind::Waitlisted
+    } else {
+        EventKind::Approved
+    };
+    emit(&state, kind, &participant);
+    Ok(HttpResponse::Ok().json(participant))
+}
+
+/// Refuse une inscription `pending` ou `waitlisted` (organisateur).
+#[utoipa::path(
+    post,
+    path = "/tournaments/{id}/participants/{participant_id}/reject",
+    tag = "tournaments",
+    security(("bearer" = [])),
+    params(
+        ("id" = Uuid, Path, description = "Identifiant du tournoi"),
+        ("participant_id" = Uuid, Path, description = "Identifiant de l'inscription"),
+    ),
+    responses(
+        (status = 200, description = "Inscription refusée", body = TournamentParticipant),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 403, description = "Réservé aux organisateurs du tournoi", body = ErrorResponse),
+        (status = 404, description = "Tournoi ou inscription introuvable", body = ErrorResponse),
+        (status = 409, description = "Inscription ni `pending` ni `waitlisted`", body = ErrorResponse),
+    ),
+)]
+#[post("/tournaments/{id}/participants/{participant_id}/reject")]
+async fn reject_participant(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, ApiError> {
+    let (tournament_id, participant_id) = path.into_inner();
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
+    let participant = find_participant(&state, tournament.id, participant_id).await?;
+    require_registration_phase(&tournament)?;
+    let participant = state
+        .store
+        .reject_participant(participant.id)
+        .await
+        .map_err(participant_error)?
+        .ok_or(ApiError::NotFound)?;
+    emit(&state, EventKind::Rejected, &participant);
+    Ok(HttpResponse::Ok().json(participant))
+}
+
+/// Promeut la liste d'attente (organisateur) : les inscrits `waitlisted` passent `registered`,
+/// dans l'ordre d'inscription, tant qu'il reste des places. Renvoie les inscrits promus.
+#[utoipa::path(
+    post,
+    path = "/tournaments/{id}/waiting-list/promote",
+    tag = "tournaments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Identifiant du tournoi")),
+    responses(
+        (status = 200, description = "Inscrits promus, dans l'ordre", body = Vec<TournamentParticipant>),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 403, description = "Réservé aux organisateurs du tournoi", body = ErrorResponse),
+        (status = 404, description = "Tournoi introuvable", body = ErrorResponse),
+        (status = 409, description = "Le tournoi n'est pas en phase d'inscription", body = ErrorResponse),
+    ),
+)]
+#[post("/tournaments/{id}/waiting-list/promote")]
+async fn promote_waiting_list(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    id: web::Path<Uuid>,
+) -> Result<HttpResponse, ApiError> {
+    let tournament = find_tournament(&state, id.into_inner()).await?;
+    require_manage(&state, &claims, &tournament).await?;
+    require_registration_phase(&tournament)?;
+    Ok(HttpResponse::Ok().json(promote_and_emit(&state, tournament.id).await?))
+}
+
+/// Clôture le pointage maintenant (organisateur), sans attendre `check_in_close_at` : les
+/// inscrits `registered` qui n'ont pas pointé deviennent `absent`, puis la liste d'attente est
+/// promue dans la limite de la capacité. Sans effet si la clôture a déjà été traitée. Renvoie le
+/// tournoi.
+#[utoipa::path(
+    post,
+    path = "/tournaments/{id}/check-in/close",
+    tag = "tournaments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Identifiant du tournoi")),
+    responses(
+        (status = 200, description = "Tournoi, pointage clôturé", body = Tournament),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 403, description = "Réservé aux organisateurs du tournoi", body = ErrorResponse),
+        (status = 404, description = "Tournoi introuvable", body = ErrorResponse),
+        (status = 409, description = "Le tournoi n'est pas en phase d'inscription", body = ErrorResponse),
+    ),
+)]
+#[post("/tournaments/{id}/check-in/close")]
+async fn close_check_in(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    id: web::Path<Uuid>,
+) -> Result<HttpResponse, ApiError> {
+    let tournament = find_tournament(&state, id.into_inner()).await?;
+    require_manage(&state, &claims, &tournament).await?;
+    require_registration_phase(&tournament)?;
+    if tournament.check_in_settled_at.is_none()
+        && let Some(settlement) = state
+            .store
+            .settle_check_in(tournament.id)
+            .await
+            .map_err(ApiError::internal)?
+    {
+        for participant in &settlement.absent {
+            emit(&state, EventKind::Absent, participant);
+        }
+        for participant in &settlement.promoted {
+            emit(&state, EventKind::Promoted, participant);
+        }
+    }
+    Ok(HttpResponse::Ok().json(find_tournament(&state, tournament.id).await?))
+}
+
+fn require_registration_phase(tournament: &Tournament) -> Result<(), ApiError> {
+    if tournament.status == TournamentStatus::Registration {
+        Ok(())
+    } else {
+        Err(ApiError::RegistrationClosed)
+    }
+}
+
+fn participant_error(err: StoreError) -> ApiError {
+    match err {
+        StoreError::ParticipantState => ApiError::InvalidParticipantState,
+        StoreError::TournamentFull => ApiError::TournamentFull,
+        other => ApiError::internal(other),
+    }
 }
 
 pub(crate) async fn find_tournament(state: &AppState, id: Uuid) -> Result<Tournament, ApiError> {
@@ -1144,20 +1428,87 @@ async fn find_team_of(
         })
 }
 
-/// Titulaires (propriétaire et membres, hors remplaçants) d'une équipe de tournoi.
-async fn starters(state: &AppState, team_id: Uuid) -> Result<usize, ApiError> {
-    Ok(state
+/// Titulaires (propriétaire et membres) et remplaçants d'une équipe de tournoi.
+async fn team_counts(state: &AppState, team_id: Uuid) -> Result<(usize, usize), ApiError> {
+    let members = state
         .store
         .list_tournament_team_members(team_id)
         .await
         .map_err(ApiError::internal)?
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let substitutes = members
         .iter()
-        .filter(|member| member.role != TeamRole::Substitute)
-        .count())
+        .filter(|member| member.role == TeamRole::Substitute)
+        .count();
+    Ok((members.len() - substitutes, substitutes))
 }
 
-/// Inscrits ni retirés ni disqualifiés.
+/// Ce qui empêche l'équipe de s'inscrire : titulaires hors de la fourchette, trop de
+/// remplaçants.
+pub(crate) async fn team_composition_problems(
+    state: &AppState,
+    tournament: &Tournament,
+    team_id: Uuid,
+) -> Result<Vec<String>, ApiError> {
+    composition_problems(state, &tournament.settings, team_id).await
+}
+
+async fn composition_problems(
+    state: &AppState,
+    settings: &TournamentSettings,
+    team_id: Uuid,
+) -> Result<Vec<String>, ApiError> {
+    let (starters, substitutes) = team_counts(state, team_id).await?;
+    let mut problems = Vec::new();
+    let (min, max) = (
+        settings.team_min_starters.unwrap_or(0),
+        settings.team_max_starters.unwrap_or(0),
+    );
+    let count = i64::try_from(starters).unwrap_or(i64::MAX);
+    if count < i64::from(min) || count > i64::from(max) {
+        problems.push(if min == max {
+            format!("L'équipe compte {starters} titulaires, {min} sont attendus.")
+        } else {
+            format!("L'équipe compte {starters} titulaires, entre {min} et {max} sont attendus.")
+        });
+    }
+    if let Some(limit) = settings.team_max_substitutes
+        && i64::try_from(substitutes).unwrap_or(i64::MAX) > i64::from(limit)
+    {
+        problems.push(format!(
+            "L'équipe compte {substitutes} remplaçants, {limit} au plus sont permis."
+        ));
+    }
+    Ok(problems)
+}
+
+/// Les équipes déjà inscrites doivent respecter la nouvelle composition.
+async fn check_team_fit(
+    state: &AppState,
+    tournament_id: &Uuid,
+    merged: &TournamentInput,
+) -> Result<Vec<(&'static str, String)>, ApiError> {
+    if merged.participant_type != ParticipantType::Team {
+        return Ok(Vec::new());
+    }
+    let mut errors = Vec::new();
+    for team_id in active_participants(state, *tournament_id)
+        .await?
+        .iter()
+        .filter_map(|p| p.tournament_team_id)
+    {
+        for problem in composition_problems(state, &merged.settings, team_id).await? {
+            errors.push((
+                "team_min_starters",
+                format!("L'équipe {team_id} inscrite ne respecte plus la composition : {problem}"),
+            ));
+        }
+    }
+    Ok(errors)
+}
+
+/// Inscrits en lice : `registered` ou `checked_in` (ni en attente, ni refusés, ni sur liste
+/// d'attente, ni absents, retirés ou disqualifiés).
 pub(crate) async fn active_participants(
     state: &AppState,
     tournament_id: Uuid,
@@ -1169,21 +1520,12 @@ pub(crate) async fn active_participants(
         .map_err(ApiError::internal)?
         .into_iter()
         .filter(|p| {
-            !matches!(
+            matches!(
                 p.status,
-                ParticipantStatus::Withdrawn | ParticipantStatus::Disqualified
+                ParticipantStatus::Registered | ParticipantStatus::CheckedIn
             )
         })
         .collect())
-}
-
-/// `true` pour un administrateur ; l'erreur n'est une erreur que si la lecture du compte échoue.
-async fn is_admin(state: &AppState, claims: &Claims) -> Result<bool, ApiError> {
-    match require_admin(state, claims).await {
-        Ok(()) => Ok(true),
-        Err(ApiError::Forbidden) => Ok(false),
-        Err(err) => Err(err),
-    }
 }
 
 /// L'inscrit lui-même, ou le propriétaire de l'équipe inscrite.
@@ -1243,6 +1585,122 @@ fn require_registration_open(tournament: &Tournament) -> Result<(), ApiError> {
     }
 }
 
+/// Le tournoi, à condition que le compte du jeton puisse le voir (sinon `404`).
+pub(crate) async fn visible_tournament(
+    state: &AppState,
+    claims: &Claims,
+    id: Uuid,
+) -> Result<Tournament, ApiError> {
+    let tournament = find_tournament(state, id).await?;
+    require_visible(state, claims, &tournament).await?;
+    Ok(tournament)
+}
+
+/// Publie l'événement vers le moteur de notifications.
+pub(crate) fn emit(state: &AppState, kind: EventKind, participant: &TournamentParticipant) {
+    state.events.publish(TournamentEvent {
+        kind,
+        tournament_id: participant.tournament_id,
+        participant_id: participant.id,
+        user_id: participant.user_id,
+        tournament_team_id: participant.tournament_team_id,
+    });
+}
+
+/// La fenêtre de pointage, si elle est définie, doit être ouverte. Les horodatages sont
+/// normalisés : ils se comparent comme des chaînes.
+fn require_check_in_window(tournament: &Tournament) -> Result<(), ApiError> {
+    let now = now_rfc3339();
+    let settings = &tournament.settings;
+    let before = settings
+        .check_in_open_at
+        .as_ref()
+        .is_some_and(|open| now < *open);
+    let after = settings
+        .check_in_close_at
+        .as_ref()
+        .is_some_and(|close| now > *close);
+    if before || after {
+        Err(ApiError::CheckInClosed)
+    } else {
+        Ok(())
+    }
+}
+
+/// `true` quand la fenêtre de pointage est close et n'a pas encore été traitée.
+fn check_in_due(tournament: &Tournament) -> bool {
+    tournament.check_in_settled_at.is_none()
+        && matches!(
+            tournament.status,
+            TournamentStatus::Registration | TournamentStatus::Ongoing
+        )
+        && tournament
+            .settings
+            .check_in_close_at
+            .as_ref()
+            .is_some_and(|close| now_rfc3339() > *close)
+}
+
+/// Traite la clôture du pointage si elle est échue : les inscrits qui n'ont pas pointé
+/// deviennent `absent` et la liste d'attente est promue dans la limite de la capacité. Le
+/// traitement est paresseux (déclenché par les lectures et actions du tournoi) et exécuté une
+/// seule fois par le store ; renvoie le tournoi à jour.
+pub(crate) async fn settle_if_due(
+    state: &AppState,
+    tournament: Tournament,
+) -> Result<Tournament, ApiError> {
+    if !check_in_due(&tournament) {
+        return Ok(tournament);
+    }
+    if let Some(settlement) = state
+        .store
+        .settle_check_in(tournament.id)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        for participant in &settlement.absent {
+            emit(state, EventKind::Absent, participant);
+        }
+        for participant in &settlement.promoted {
+            emit(state, EventKind::Promoted, participant);
+        }
+    }
+    find_tournament(state, tournament.id).await
+}
+
+/// Une place libérée (retrait, suppression, disqualification) profite à la liste d'attente ;
+/// la promotion est bornée par la capacité, elle ne fait rien s'il n'y a pas de place.
+async fn release_seat(
+    state: &AppState,
+    tournament: &Tournament,
+    _participant: &TournamentParticipant,
+) -> Result<(), ApiError> {
+    if tournament.settings.waiting_list_enabled
+        && matches!(
+            tournament.status,
+            TournamentStatus::Registration | TournamentStatus::Draft
+        )
+    {
+        promote_and_emit(state, tournament.id).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn promote_and_emit(
+    state: &AppState,
+    tournament_id: Uuid,
+) -> Result<Vec<TournamentParticipant>, ApiError> {
+    let promoted = state
+        .store
+        .promote_waitlist(tournament_id)
+        .await
+        .map_err(ApiError::internal)?;
+    for participant in &promoted {
+        emit(state, EventKind::Promoted, participant);
+    }
+    Ok(promoted)
+}
+
 fn transition_allowed(from: TournamentStatus, to: TournamentStatus) -> bool {
     use TournamentStatus::*;
     matches!(
@@ -1272,13 +1730,9 @@ async fn start_problems(
         ));
     }
     if tournament.participant_type == ParticipantType::Team {
-        let expected = tournament.team_size.unwrap_or(0);
         for team_id in participants.iter().filter_map(|p| p.tournament_team_id) {
-            let starters = starters(state, team_id).await?;
-            if i64::try_from(starters).unwrap_or(i64::MAX) != i64::from(expected) {
-                problems.push(format!(
-                    "L'équipe {team_id} compte {starters} titulaires, {expected} sont attendus."
-                ));
+            for problem in team_composition_problems(state, tournament, team_id).await? {
+                problems.push(format!("Équipe {team_id} : {problem}"));
             }
         }
     }
@@ -1417,26 +1871,13 @@ pub(crate) fn check(input: &mut TournamentInput) -> Vec<(&'static str, String)> 
             format!("Le maximum doit être compris entre 1 et {MAX_PARTICIPANTS_LIMIT}."),
         ));
     }
-    match (input.participant_type, input.team_size) {
-        (ParticipantType::Team, Some(size)) if (1..=TEAM_SIZE_LIMIT).contains(&size) => {}
-        (ParticipantType::Team, _) => errors.push((
-            "team_size",
-            format!(
-                "`team_size` est obligatoire (1 à {TEAM_SIZE_LIMIT}) pour un tournoi par équipes."
-            ),
-        )),
-        (ParticipantType::Solo, Some(_)) => errors.push((
-            "team_size",
-            "`team_size` n'a de sens que pour un tournoi par équipes.".to_string(),
-        )),
-        (ParticipantType::Solo, None) => {}
-    }
+    errors.extend(check_settings(&mut input.settings, input.participant_type));
     match (input.team_scoring_mode, input.team_scoring_n) {
-        (TeamScoringMode::TopN, Some(n)) if (1..=TEAM_SIZE_LIMIT).contains(&n) => {}
+        (TeamScoringMode::TopN, Some(n)) if (1..=TEAM_SCORING_LIMIT).contains(&n) => {}
         (TeamScoringMode::TopN, _) => errors.push((
             "team_scoring_n",
             format!(
-                "`team_scoring_n` est obligatoire (1 à {TEAM_SIZE_LIMIT}) avec le mode `top_n`."
+                "`team_scoring_n` est obligatoire (1 à {TEAM_SCORING_LIMIT}) avec le mode `top_n`."
             ),
         )),
         (_, Some(_)) => errors.push((

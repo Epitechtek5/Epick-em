@@ -17,8 +17,10 @@ use crate::store::{
     StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Tournament,
     TournamentParticipant, TournamentStatus,
 };
-use crate::tournaments::{active_participants, find_tournament, require_scoring_editable};
-use crate::users::require_admin;
+use crate::tournament_access::require_manage;
+use crate::tournaments::{
+    active_participants, find_tournament, require_scoring_editable, visible_tournament,
+};
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -85,7 +87,7 @@ struct UpdateStepRequest {
 
 /// Participant d'un groupe, avec son rang.
 #[derive(Serialize, ToSchema)]
-struct RankedParticipant {
+pub(crate) struct RankedParticipant {
     /// Inscrit au tournoi (`tournament_participant.id`).
     participant_id: Uuid,
     points: f64,
@@ -97,7 +99,7 @@ struct RankedParticipant {
 
 /// Classement d'un groupe.
 #[derive(Serialize, ToSchema)]
-struct GroupRanking {
+pub(crate) struct GroupRanking {
     group_id: Uuid,
     /// Rang du groupe dans l'étape, à partir de 1.
     index: i32,
@@ -129,9 +131,10 @@ pub(crate) struct CloseResponse {
 #[get("/tournaments/{id}/steps")]
 async fn list_steps(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    let tournament = find_tournament(&state, id.into_inner()).await?;
+    let tournament = visible_tournament(&state, &claims, id.into_inner()).await?;
     Ok(HttpResponse::Ok().json(steps_of(&state, tournament.id).await?))
 }
 
@@ -154,9 +157,11 @@ async fn list_steps(
 #[get("/tournaments/{id}/steps/{step_id}")]
 async fn get_step(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id) = path.into_inner();
+    visible_tournament(&state, &claims, tournament_id).await?;
     Ok(HttpResponse::Ok().json(find_step(&state, tournament_id, step_id).await?))
 }
 
@@ -186,8 +191,8 @@ async fn create_step(
     id: web::Path<Uuid>,
     body: web::Json<CreateStepRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let tournament = find_tournament(&state, id.into_inner()).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let request = body.into_inner();
     let definition = StepDefinition {
         position: request.position,
@@ -243,9 +248,9 @@ async fn update_step(
     path: web::Path<(Uuid, Uuid)>,
     body: web::Json<UpdateStepRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let current = find_step(&state, tournament_id, step_id).await?;
     let request = body.into_inner();
     let definition = StepDefinition {
@@ -301,9 +306,9 @@ async fn delete_step(
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     require_scoring_editable(&tournament)?;
     if state
@@ -337,10 +342,20 @@ async fn delete_step(
 #[get("/tournaments/{id}/steps/{step_id}/ranking")]
 async fn step_ranking(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id) = path.into_inner();
+    visible_tournament(&state, &claims, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
+    Ok(HttpResponse::Ok().json(group_rankings(&state, &step).await?))
+}
+
+/// Classement de chaque groupe de l'étape (route publique comprise).
+pub(crate) async fn group_rankings(
+    state: &AppState,
+    step: &Step,
+) -> Result<Vec<GroupRanking>, ApiError> {
     let groups = state
         .store
         .list_step_groups(step.id)
@@ -363,7 +378,7 @@ async fn step_ranking(
             }
         })
         .collect();
-    Ok(HttpResponse::Ok().json(ranking))
+    Ok(ranking)
 }
 
 /// Lance l'étape (administrateur) : tire au sort les groupes parmi les participants `in` puis
@@ -398,9 +413,9 @@ async fn start_step(
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     if tournament.status != TournamentStatus::Ongoing || step.status != StepStatus::Pending {
         return Err(ApiError::InvalidTransition);
@@ -461,9 +476,9 @@ async fn close_step(
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     Ok(HttpResponse::Ok().json(close_step_of(&state, &tournament, &step).await?))
 }
@@ -871,11 +886,14 @@ mod tests {
             registration_open_at: None,
             registration_close_at: None,
             participant_type: ParticipantType::Solo,
-            team_size: None,
             max_participants,
             team_scoring_mode: TeamScoringMode::None,
             team_scoring_n: None,
+            settings: crate::store::TournamentSettings::solo(),
             status: TournamentStatus::Draft,
+            owner_id: None,
+            is_template: false,
+            check_in_settled_at: None,
             created_at: String::new(),
             updated_at: String::new(),
         }

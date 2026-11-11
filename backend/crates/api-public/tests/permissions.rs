@@ -6,7 +6,10 @@ mod common;
 
 use actix_web::http::StatusCode;
 use actix_web::test::TestRequest;
-use api_public::store::{MemoryStore, Role};
+use api_public::store::{
+    AuthStore, MemoryStore, ParticipantType, Role, TeamScoringMode, TournamentInput,
+    TournamentSettings,
+};
 use common::{access, app_with, call, logged_in_as, login, request};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -76,7 +79,28 @@ async fn every_admin_route_refuses_an_ordinary_account() {
     let user = access(&logged_in_as(&app, "alice", "secret123").await).to_string();
 
     let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let steps = format!("/tournaments/{a}/steps");
+    // Les droits sur un tournoi se lisent sur le tournoi : il doit exister (sinon 404).
+    let t = store
+        .create_tournament(TournamentInput {
+            game_id: Uuid::new_v4(),
+            name: "Open".into(),
+            description: None,
+            start_date: "2026-11-14T18:00:00.000000Z".into(),
+            end_date: "2026-11-15T18:00:00.000000Z".into(),
+            registration_open_at: None,
+            registration_close_at: None,
+            participant_type: ParticipantType::Solo,
+            max_participants: 4,
+            team_scoring_mode: TeamScoringMode::None,
+            team_scoring_n: None,
+            settings: TournamentSettings::solo(),
+            owner_id: None,
+            is_template: false,
+        })
+        .await
+        .unwrap()
+        .id;
+    let steps = format!("/tournaments/{t}/steps");
     let matches = format!("{steps}/{b}/matches");
     let routes: Vec<Route> = vec![
         ("PATCH", format!("/user/{a}/update"), Some(json!({}))),
@@ -108,26 +132,25 @@ async fn every_admin_route_refuses_an_ordinary_account() {
                 "max_participants": 4,
             })),
         ),
-        ("PATCH", format!("/tournaments/{a}"), Some(json!({}))),
-        ("DELETE", format!("/tournaments/{a}"), None),
+        ("PATCH", format!("/tournaments/{t}"), Some(json!({}))),
         (
             "POST",
-            format!("/tournaments/{a}/status"),
+            format!("/tournaments/{t}/status"),
             Some(json!({ "status": "registration" })),
         ),
         (
             "POST",
-            format!("/tournaments/{a}/scoring-rules"),
+            format!("/tournaments/{t}/scoring-rules"),
             Some(json!({ "stat_id": b, "mode": "linear", "coefficient": 1 })),
         ),
         (
             "PATCH",
-            format!("/tournaments/{a}/scoring-rules/{b}"),
+            format!("/tournaments/{t}/scoring-rules/{b}"),
             Some(json!({ "mode": "linear", "coefficient": 1 })),
         ),
         (
             "DELETE",
-            format!("/tournaments/{a}/scoring-rules/{b}"),
+            format!("/tournaments/{t}/scoring-rules/{b}"),
             None,
         ),
         ("GET", "/tournaments/export".into(), None),
@@ -157,10 +180,12 @@ async fn every_admin_route_refuses_an_ordinary_account() {
             format!("{matches}/{c}/status"),
             Some(json!({ "status": "ongoing" })),
         ),
+        // En dernier : l'administrateur supprime vraiment le tournoi.
+        ("DELETE", format!("/tournaments/{t}"), None),
     ];
     for (verb, path, body) in routes {
-        let (status, _) = send(&app, method(verb), &path, &user, body.clone()).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{verb} {path}");
+        let (status, reply) = send(&app, method(verb), &path, &user, body.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{verb} {path} {reply}");
         // L'administrateur passe le contrôle des droits (la ressource n'existe pas : pas de 403).
         let (status, _) = send(&app, method(verb), &path, &admin, body).await;
         assert_ne!(status, StatusCode::FORBIDDEN, "admin {verb} {path}");
