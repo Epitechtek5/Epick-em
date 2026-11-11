@@ -1,7 +1,7 @@
 //! Point d'entrée de api-public : se connecte à PostgreSQL et Redis, puis sert l'API HTTP.
 
 use actix_web::HttpServer;
-use api_public::config::AuthConfig;
+use api_public::config::{AuthConfig, SecurityConfig};
 use api_public::mail::{MailConfig, ResendMailer};
 use api_public::store::PgStore;
 use api_public::{AppState, app};
@@ -24,6 +24,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let port = std::env::var("API_PUBLIC_PORT").unwrap_or_else(|_| "8080".into());
     let config = infra::Config::from_env()?;
     let auth_config = AuthConfig::from_env()?;
+    let security_config = SecurityConfig::from_env()?;
     let db = infra::connect(&config).await?;
 
     let cache = db.cache().clone();
@@ -31,6 +32,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
         .with_cache(cache);
+    if security_config.google.is_none() {
+        eprintln!("api-public : GOOGLE_CLIENT_ID absente, la connexion Google est désactivée");
+    }
+    if security_config.totp_key.is_none() {
+        eprintln!(
+            "api-public : TOTP_ENCRYPTION_KEY absente, la double authentification est désactivée"
+        );
+    }
+    let state = state.with_security(security_config)?;
     let state = match MailConfig::from_env() {
         Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
         None => {

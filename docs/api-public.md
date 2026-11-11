@@ -18,6 +18,17 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /logout` | JWT valide | `{ refresh_token }` | `204` |
 | `POST /forgot-password` | aucune | `{ email }` | `204` (toujours, voir ci-dessous) |
 | `POST /reset-password` | aucune | `{ token, password }` | `204` |
+| `POST /login/2fa` | aucune | `{ mfa_token, code }` (TOTP ou code de récupération) | `200` jetons |
+| `POST /auth/google/authorize` | aucune | — | `200` `{ authorization_url, state }` |
+| `POST /auth/google/callback` | aucune | `{ code, state }` | `200` jetons ou défi de second facteur |
+| `GET /account/security` | JWT valide | — | `200` `{ password_set, google_linked, two_factor_enabled, recovery_codes_remaining, google_available, two_factor_available }` |
+| `POST /account/google/authorize` | JWT valide, **récent** | — | `200` `{ authorization_url, state }` |
+| `POST /account/google/link` | JWT valide, **récent** | `{ code, state, second_factor? }` | `204` |
+| `POST /account/google/unlink` | JWT valide, **récent** | `{ code? }` (second facteur) | `204` |
+| `POST /2fa/setup` | JWT valide, **récent** | — | `200` `{ secret, otpauth_uri }` |
+| `POST /2fa/enable` | JWT valide, **récent** | `{ code }` | `200` `{ recovery_codes }` |
+| `POST /2fa/disable` | JWT valide, **récent** | `{ code }` | `204` |
+| `POST /2fa/recovery-codes` | JWT valide, **récent** | `{ code }` | `200` `{ recovery_codes }` |
 | `GET /users` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, username, role }]` |
 | `GET /user/{id}` | JWT valide | — | `200` `{ id, username, role }` |
 | `GET /me` | JWT valide | — | `200` `{ id, username, role, email }` (compte courant uniquement) |
@@ -111,7 +122,25 @@ L'authentification se fait par `Authorization: Bearer <access_token>`.
 }
 ```
 
-Le jeton d'accès est un JWT HS256 dont les claims sont `sub` (id du compte), `username`, `role` (`user`, `admin` ou `watcher`), `iat` et `exp`.
+Le jeton d'accès est un JWT HS256 dont les claims sont `sub` (id du compte), `username`, `role` (`user`, `admin` ou `watcher`), `iat`, `exp` et `auth_time` (instant de la dernière authentification complète, conservé par `/refresh`).
+
+Si la double authentification est active, `/login` et `/auth/google/callback` répondent à la place :
+
+```json
+{ "mfa_required": true, "mfa_token": "<64 caractères hexadécimaux>", "expires_in": 300 }
+```
+
+et les jetons s'obtiennent avec `POST /login/2fa`.
+
+### Connexion Google et double authentification
+
+Décisions : [ADR-011](adr/011-connexion-google-et-double-authentification.md).
+
+- **Google :** le front appelle `/auth/google/authorize`, redirige vers `authorization_url`, puis renvoie `code` et `state` reçus sur `GOOGLE_REDIRECT_URI` à `/auth/google/callback`. Le `state` est valable 10 minutes et une seule fois. Une identité Google inconnue crée un compte (adresse vérifiée par Google, nom d'utilisateur déduit de l'adresse, mot de passe aléatoire inutilisable : `/forgot-password` permet d'en choisir un). Si l'adresse appartient déjà à un compte, la réponse est `409 account_exists` : rien n'est fusionné, l'utilisateur se connecte puis lie Google avec `/account/google/authorize` et `/account/google/link`.
+- **Authentification récente** (« récent » ci-dessus) : connexion de moins de 10 minutes (`auth_time`), sinon `403 reauthentication_required`. Si la double authentification est active, lier, délier, désactiver ou régénérer les codes exige aussi un code (`second_factor` ou `code`).
+- **Déliaison :** refusée (`409 last_login_method`) si le compte n'a pas de mot de passe choisi ; révoque les jetons de rafraîchissement.
+- **TOTP :** `/2fa/setup` renvoie un secret (base32) et une URI `otpauth://` à afficher en QR code ; la double authentification n'est active qu'après `/2fa/enable` avec un code valide, qui renvoie dix codes de récupération (affichés une seule fois, usage unique). `/2fa/disable` révoque les jetons de rafraîchissement.
+- **Limites :** défi de 5 minutes et 5 essais ; 10 codes par compte et 30 demandes Google par adresse IP par quart d'heure (`429 too_many_attempts`) ; un code TOTP ne sert qu'une fois.
 
 ### Règles
 
@@ -202,7 +231,7 @@ Un fichier exporté se réimporte sans perte (hors horodatages de création et d
 
 ### Cache des exports
 
-Les quatre exports (`/games`, `/stats`, `/teams` et `/tournaments`, en JSON et en CSV) sont gardés **une heure** dans le cache (Redis en production), un fichier par ressource et par format (`export:<ressource>:<json|csv>`) : l'export suivant est servi sans relire la base. Toute requête qui écrit (ni `GET`, `HEAD` ni `OPTIONS`) et qui ne finit pas en erreur du client (`4xx`) vide **tous** les exports : création, modification, suppression, import, changement de statut, résultat de match… Un export dépend de plusieurs tables et une suppression emporte ses dépendances (supprimer un jeu supprime ses équipes), alors invalider ressource par ressource laisserait des fichiers périmés. Les routes `/register`, `/login`, `/refresh` et `/logout` ne vident rien. Le cache n'est qu'une optimisation : s'il est indisponible, l'export est calculé depuis la base. Un export commencé juste avant une écriture peut remettre en cache un fichier périmé jusqu'à la prochaine écriture ou l'expiration de l'heure.
+Les quatre exports (`/games`, `/stats`, `/teams` et `/tournaments`, en JSON et en CSV) sont gardés **une heure** dans le cache (Redis en production), un fichier par ressource et par format (`export:<ressource>:<json|csv>`) : l'export suivant est servi sans relire la base. Toute requête qui écrit (ni `GET`, `HEAD` ni `OPTIONS`) et qui ne finit pas en erreur du client (`4xx`) vide **tous** les exports : création, modification, suppression, import, changement de statut, résultat de match… Un export dépend de plusieurs tables et une suppression emporte ses dépendances (supprimer un jeu supprime ses équipes), alors invalider ressource par ressource laisserait des fichiers périmés. Les routes `/register`, `/login`, `/login/2fa`, `/refresh`, `/logout`, `/auth/*`, `/account/*` et `/2fa/*` ne vident rien. Le cache n'est qu'une optimisation : s'il est indisponible, l'export est calculé depuis la base. Un export commencé juste avant une écriture peut remettre en cache un fichier périmé jusqu'à la prochaine écriture ou l'expiration de l'heure.
 
 ### Erreurs
 
@@ -232,6 +261,17 @@ Format `{ "error", "message", "errors"? }` :
 | `409` | `step_position_taken` | une étape occupe déjà cette position dans le tournoi |
 | `409` | `registration_closed` | tournoi hors `registration` ou hors de la fenêtre d'inscription |
 | `409` | `invalid_status_transition` | changement de statut impossible depuis le statut actuel |
+| `400` | `invalid_oauth_state` | `state` Google inconnu, expiré, déjà utilisé ou d'un autre usage |
+| `401` | `invalid_second_factor` | code TOTP ou de récupération refusé (ou absent alors que la double authentification est active) |
+| `403` | `reauthentication_required` | action sensible avec une authentification de plus de 10 minutes |
+| `403` | `provider_email_unverified` | le compte Google n'a pas d'adresse vérifiée |
+| `409` | `account_exists` | l'adresse du compte Google appartient déjà à un compte : se connecter puis lier Google |
+| `409` | `identity_taken` | compte Google déjà lié à un compte, ou compte déjà lié à Google |
+| `409` | `last_login_method` | délier Google retirerait la dernière méthode de connexion |
+| `409` | `two_factor_enabled` / `two_factor_not_enabled` / `two_factor_not_pending` | état de la double authentification incompatible |
+| `429` | `too_many_attempts` | trop de demandes Google ou de codes |
+| `502` | `provider_unavailable` | Google injoignable ou échange du code refusé |
+| `503` | `not_configured` | connexion Google ou double authentification non configurée |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
 ## Configuration
@@ -243,6 +283,8 @@ Format `{ "error", "message", "errors"? }` :
 | `REFRESH_TOKEN_TTL_SECS` | `2592000` | durée du jeton de rafraîchissement |
 | `RESEND_API_KEY` | — (facultative) | clé d'API [Resend](https://resend.com) ; sans elle, aucun e-mail n'est envoyé (un avertissement est journalisé au démarrage) |
 | `MAIL_FROM` | `Epick'em <onboarding@resend.dev>` | expéditeur, sur un domaine vérifié chez Resend en production |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | — (facultatives, toutes ou aucune) | connexion Google ; l'URL de retour (HTTPS, ou HTTP vers `localhost`) est la page du front enregistrée dans la console Google |
+| `TOTP_ENCRYPTION_KEY` | — (facultative) | 64 caractères hexadécimaux (`openssl rand -hex 32`) chiffrant les secrets TOTP ; sans elle, la double authentification est indisponible. Secret critique : la perdre bloque les comptes protégés |
 | `PUBLIC_URL` | `http://localhost:3000` | origine publique du site, sans chemin ; la route `/reset-password` est fixe (page web, ou app mobile via les liens universels) |
 
 ## Rôles

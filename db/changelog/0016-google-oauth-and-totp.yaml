@@ -1,0 +1,77 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0016-google-oauth-and-totp
+      author: epickem
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE users ADD COLUMN password_set boolean NOT NULL DEFAULT true;
+              COMMENT ON COLUMN users.password_set IS
+                'false tant que le compte n''a que le mot de passe aléatoire créé à l''inscription Google';
+
+              CREATE TABLE oauth_accounts (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider varchar(32) NOT NULL,
+                subject varchar(255) NOT NULL,
+                email varchar(254),
+                created_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT oauth_accounts_provider_subject_key UNIQUE (provider, subject),
+                CONSTRAINT oauth_accounts_user_provider_key UNIQUE (user_id, provider)
+              );
+              COMMENT ON TABLE oauth_accounts IS
+                'Identités externes (claim sub stable du fournisseur) liées à un compte';
+
+              CREATE TABLE oauth_states (
+                state_hash char(64) PRIMARY KEY,
+                purpose varchar(8) NOT NULL CHECK (purpose IN ('login', 'link')),
+                user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+                code_verifier varchar(128) NOT NULL,
+                nonce varchar(128) NOT NULL,
+                expires_at timestamptz NOT NULL
+              );
+              CREATE INDEX oauth_states_expiry ON oauth_states(expires_at);
+
+              CREATE TABLE user_totp (
+                user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                secret_ciphertext bytea NOT NULL,
+                enabled_at timestamptz,
+                last_used_step bigint NOT NULL DEFAULT 0,
+                created_at timestamptz NOT NULL DEFAULT now()
+              );
+              COMMENT ON COLUMN user_totp.secret_ciphertext IS
+                'Secret TOTP chiffré (AES-256-GCM, nonce en tête, TOTP_ENCRYPTION_KEY)';
+
+              CREATE TABLE totp_recovery_codes (
+                code_hash char(64) PRIMARY KEY,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                used_at timestamptz,
+                created_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX totp_recovery_codes_user ON totp_recovery_codes(user_id);
+
+              CREATE TABLE mfa_challenges (
+                token_hash char(64) PRIMARY KEY,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                attempts integer NOT NULL DEFAULT 0,
+                expires_at timestamptz NOT NULL,
+                consumed_at timestamptz
+              );
+              CREATE INDEX mfa_challenges_expiry ON mfa_challenges(expires_at);
+
+              CREATE TABLE auth_attempt_limits (
+                key_hash char(64) PRIMARY KEY,
+                window_start timestamptz NOT NULL DEFAULT now(),
+                attempts integer NOT NULL DEFAULT 1
+              );
+              CREATE INDEX auth_attempt_limits_window ON auth_attempt_limits(window_start);
+      rollback:
+        - sql:
+            sql: |
+              DROP TABLE auth_attempt_limits;
+              DROP TABLE mfa_challenges;
+              DROP TABLE totp_recovery_codes;
+              DROP TABLE user_totp;
+              DROP TABLE oauth_states;
+              DROP TABLE oauth_accounts;
+              ALTER TABLE users DROP COLUMN password_set;
