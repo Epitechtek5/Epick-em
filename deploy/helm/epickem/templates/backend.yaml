@@ -1,0 +1,67 @@
+{{- range $component, $spec := dict "api-public" .Values.apiPublic "api-internal" .Values.apiInternal }}
+{{- $c := dict "root" $ "component" $component }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "epickem.host" $c }}
+  labels: {{- include "epickem.labels" $ | nindent 4 }}
+spec:
+  selector: {{- include "epickem.selector" $c | nindent 4 }}
+  ports:
+    - { name: http, port: {{ $spec.port }}, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "epickem.host" $c }}
+  labels: {{- include "epickem.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  replicas: {{ $spec.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: {{- include "epickem.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "epickem.selector" $c | nindent 8 }}
+    spec:
+      {{- include "epickem.podSecurity" $ | nindent 6 }}
+      # Démarre une fois PostgreSQL prêt (sinon le pool expire et le pod redémarre).
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ $.Values.postgres.image }}
+          command: [sh, -c, 'until pg_isready -h {{ $.Release.Name }}-postgres -U {{ $.Values.postgres.user }}; do sleep 2; done']
+          # Image PostgreSQL : root par défaut, utilisateur `postgres` (70) ici.
+          securityContext:
+            runAsUser: 70
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+      containers:
+        - name: {{ $component }}
+          image: {{ include "epickem.image" $c }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- include "epickem.containerSecurity" $ | nindent 10 }}
+          env:
+            {{- include "epickem.backendEnv" $ | nindent 12 }}
+            - name: {{ $component | replace "-" "_" | upper }}_PORT
+              value: {{ $spec.port | quote }}
+            {{- range $key, $value := $spec.env }}
+            - { name: {{ $key }}, value: {{ $value | quote }} }
+            {{- end }}
+          ports:
+            - { name: http, containerPort: {{ $spec.port }} }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{- toYaml $spec.resources | nindent 12 }}
+{{- end }}

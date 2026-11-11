@@ -1,0 +1,48 @@
+{{- $c := dict "root" . "component" "web" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "epickem.host" $c }}
+  labels: {{- include "epickem.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "epickem.selector" $c | nindent 4 }}
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "epickem.host" $c }}
+  labels: {{- include "epickem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: {{- include "epickem.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "epickem.selector" $c | nindent 8 }}
+    spec:
+      {{- include "epickem.podSecurity" . | nindent 6 }}
+      containers:
+        - name: web
+          image: {{ include "epickem.image" $c }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # nginx résout l'API à chaque requête, sans domaine de recherche : nom complet.
+            - name: API_UPSTREAM
+              value: {{ printf "%s-api-public.%s.svc.cluster.local:%v" .Release.Name .Release.Namespace .Values.apiPublic.port | quote }}
+            - { name: NGINX_RESOLVER, value: {{ .Values.web.resolver | quote }} }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources: {{- toYaml .Values.web.resources | nindent 12 }}

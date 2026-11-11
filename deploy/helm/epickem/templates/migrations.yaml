@@ -1,0 +1,38 @@
+{{- $c := dict "root" . "component" "migrations" }}
+# Migrations Liquibase (ADR-006) : après la première installation (la base fait partie de la
+# release), puis avant chaque mise à jour — le nouveau code ne démarre que sur un schéma à jour.
+# Liquibase pose un verrou en base : deux Jobs ne migrent jamais en même temps. Un échec fait
+# échouer `helm upgrade --atomic`, qui revient à la révision précédente.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-migrations" .Release.Name }}
+  labels: {{- include "epickem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels: {{- include "epickem.selector" $c | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.postgres.image }}
+          command: [sh, -c, 'until pg_isready -h {{ .Release.Name }}-postgres -U {{ .Values.postgres.user }}; do sleep 2; done']
+      containers:
+        - name: liquibase
+          image: {{ include "epickem.image" $c }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: LIQUIBASE_COMMAND_URL
+              value: {{ printf "jdbc:postgresql://%s-postgres:5432/%s" .Release.Name .Values.postgres.database | quote }}
+            - { name: LIQUIBASE_COMMAND_USERNAME, value: {{ .Values.postgres.user | quote }} }
+            - name: LIQUIBASE_COMMAND_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: POSTGRES_PASSWORD }

@@ -5,7 +5,15 @@ Uses real API authorization, Argon2 password hashing, registration, scoring and
 match lifecycle logic. Requires a backend containing Tournament, Step and Match.
 
 Run against a fresh local database with migration 0015 and RESEND_API_KEY unset.
-Example: python3 seed_demo.py --bootstrap-admin
+Example: python3 seed_demo.py --bootstrap-admin   (or simply: make demo)
+
+Re-running is safe: an already seeded database is detected and left untouched; a partially
+seeded one is reported (reset it with `make reset`).
+
+Account bootstrap (e-mail verification, admin role) runs SQL through a command prefix:
+`docker exec -i <container>` by default, or any prefix given with --exec, e.g.
+`--exec "kubectl exec -i -n epickem-demo statefulset/epickem-postgres --"` for an online demo.
+A non-localhost API is refused unless --demo-environment is given: never seed production.
 """
 from __future__ import annotations
 
@@ -15,6 +23,7 @@ import hashlib
 import json
 import os
 import secrets
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -107,7 +116,7 @@ class TournamentData:
     game_id: str
 
 
-def bootstrap_account(api: Api, container: str, user_id: str, email: str, admin: bool) -> None:
+def bootstrap_account(api: Api, exec_prefix: list[str], user_id: str, email: str, admin: bool) -> None:
     """Claim only the registration token of this newly created local fixture."""
     token = secrets.token_hex(32)
     digest = hashlib.sha256(token.encode("ascii")).hexdigest()
@@ -124,7 +133,7 @@ def bootstrap_account(api: Api, container: str, user_id: str, email: str, admin:
     """
     def run_sql(statement: str) -> None:
         result = subprocess.run(
-            ["docker", "exec", "-i", container, "sh", "-c",
+            [*exec_prefix, "sh", "-c",
              'exec psql -XqAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"',
              "psql", "-v", f"id={UUID(user_id)}", "-v", f"email={email}", "-v", f"digest={digest}"],
             input=statement, text=True, capture_output=True, check=False,
@@ -143,14 +152,14 @@ def iso(hours: int = 0) -> str:
     return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def create_users(api: Api, admin_name: str, container: str) -> dict[str, dict[str, str]]:
+def create_users(api: Api, admin_name: str, exec_prefix: list[str]) -> dict[str, dict[str, str]]:
     created: dict[str, dict[str, str]] = {}
     for username in [admin_name, *USERS]:
         email = f"{username.lower()}@example.test"
         data = api.request("POST", "/register", {
             "username": username, "email": email, "password": PASSWORD
         }, expected=(201,))
-        bootstrap_account(api, container, data["id"], email, admin=username == admin_name)
+        bootstrap_account(api, exec_prefix, data["id"], email, admin=username == admin_name)
         created[username] = {"id": data["id"], "email": email, "token": api.login(email)}
         print(f"  user: {username} ({email})")
     return created
@@ -461,6 +470,19 @@ def seed_completed_duel(api: Api, admin: str, users: dict[str, dict[str, str]],
     return TournamentData(tid, [step], registrations, game_id)
 
 
+def seed_state(api: Api, admin_name: str) -> str:
+    """`fresh`, `seeded` (admin and DEMO tournaments present) or `partial`."""
+    try:
+        token = api.login(f"{admin_name.lower()}@example.test")
+    except ApiFailure as exc:
+        # 401 : compte inconnu. Tout autre refus (compte non vérifié…) trahit un seed interrompu.
+        return "fresh" if "HTTP 401" in str(exc) else "partial"
+    tournaments = api.get("/tournaments?limit=100&offset=0", token)
+    if any(t.get("name", "").startswith("DEMO - ") for t in tournaments):
+        return "seeded"
+    return "partial"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=os.environ.get("API_URL", "http://127.0.0.1:8080"))
@@ -468,11 +490,17 @@ def main() -> int:
     parser.add_argument("--bootstrap-admin", action="store_true", required=True,
                         help="Allow local fixture email verification and admin promotion via docker exec")
     parser.add_argument("--postgres-container", default="epickem-postgres-1")
+    parser.add_argument("--exec", dest="exec_prefix",
+                        help="Command prefix that runs `sh -c` next to PostgreSQL (default: docker exec -i <container>)")
+    parser.add_argument("--demo-environment", action="store_true",
+                        help="Allow a non-localhost API: only for a designated demo environment, never production")
     parser.add_argument("--output", default="epickem-seed-manifest.json")
     args = parser.parse_args()
 
-    if urllib.parse.urlsplit(args.url).hostname not in ("localhost", "127.0.0.1", "::1"):
-        parser.error("This seed script is restricted to localhost development APIs")
+    local = urllib.parse.urlsplit(args.url).hostname in ("localhost", "127.0.0.1", "::1")
+    if not local and not args.demo_environment:
+        parser.error("Non-local API: pass --demo-environment, and only for a designated demo environment")
+    exec_prefix = shlex.split(args.exec_prefix) if args.exec_prefix else ["docker", "exec", "-i", args.postgres_container]
     api = Api(args.url)
     api.request("GET", "/health")
     spec = api.request("GET", "/openapi.json")
@@ -480,14 +508,19 @@ def main() -> int:
         if path not in spec.get("paths", {}):
             raise RuntimeError(f"Running backend is missing required route {path}")
 
-    # Refuse partial/duplicate runs. The script is intended for a fresh DB only.
-    # Games can be present from Liquibase's seed migration, so check tournament names.
-    existing = api.request("GET", "/tournaments", expected=(200, 401))
-    if isinstance(existing, list) and any(t.get("name", "").startswith("DEMO - ") for t in existing):
-        raise RuntimeError("DEMO tournaments already exist: reset the local DB before reseeding")
+    # Re-runs are safe: a seeded database is left as is; a partial seed is reported.
+    state = seed_state(api, args.admin)
+    if state == "seeded":
+        print("Demo data already present: nothing to do (reset with `make reset`).")
+        return 0
+    if state == "partial":
+        raise RuntimeError(
+            f"Account {args.admin} exists but the DEMO tournaments are missing: partial seed. "
+            "Reset the local database (`make reset`) and seed again."
+        )
 
     print("Creating accounts via /register (backend hashes passwords)...")
-    users = create_users(api, args.admin, args.postgres_container)
+    users = create_users(api, args.admin, exec_prefix)
     admin = users[args.admin]["token"]
 
     print("Creating games and statistics...")
@@ -546,6 +579,7 @@ def main() -> int:
             for key, value in created.items()
         },
     }
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as output:
         json.dump(manifest, output, indent=2, ensure_ascii=False)
         output.write("\n")

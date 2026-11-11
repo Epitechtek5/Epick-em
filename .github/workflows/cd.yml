@@ -1,0 +1,96 @@
+name: CD
+
+# Déploiement continu (ADR-005) : chaque merge sur main dont la CI est verte et dont les images
+# ont été publiées par « Release » part sur la démo en ligne, puis — après approbation dans
+# l'environnement GitHub `production` — en production. Même SHA, mêmes images, deux namespaces.
+#
+# Configuration (Settings → Environments) — tant qu'elle manque, le job s'arrête proprement :
+#   demo, production : secret KUBECONFIG (accès au cluster k3s, voir docs/exploitation/deploiement.md),
+#                      variable PUBLIC_HOST (ex. demo.epickem.example.org).
+#   production       : reviewers requis (validation humaine avant la mise en production).
+#
+# Retour arrière : « Run workflow » avec l'environnement et le SHA d'une version déjà publiée,
+# case « rollback » cochée ; un échec de mise à jour est annulé automatiquement (helm --atomic).
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [demo, production]
+        default: demo
+      sha:
+        description: SHA complet à déployer (vide = dernier commit de main)
+        type: string
+        required: false
+      rollback:
+        description: Autoriser un SHA plus ancien que celui déployé
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  prepare:
+    # Seulement les releases réussies issues d'un push sur main (pas les PR de forks).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+        run: |
+          if [ -z "$SHA" ]; then SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha); fi
+          echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "SHA invalide : $SHA"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - name: La CI de ce commit est verte (ci-ok)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?check_name=ci-ok" \
+            --jq '[.check_runs[] | select(.status == "completed")][0].conclusion')
+          [ "$conclusion" = success ] || { echo "ci-ok n'est pas vert pour $SHA ($conclusion)"; exit 1; }
+      - name: Les images de ce commit sont publiées
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          repo=$(echo "ghcr.io/$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          for image in api-public api-internal migrations web; do
+            docker manifest inspect "$repo/$image:$SHA" >/dev/null || { echo "Image absente : $image:$SHA"; exit 1; }
+          done
+
+  demo:
+    needs: prepare
+    if: github.event_name == 'workflow_run' || inputs.environment == 'demo'
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: demo
+      sha: ${{ needs.prepare.outputs.sha }}
+      rollback: ${{ inputs.rollback || false }}
+    secrets: inherit
+
+  production:
+    # Après une démo réussie (même SHA), ou sur demande explicite.
+    needs: [prepare, demo]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      ((github.event_name == 'workflow_run' && needs.demo.result == 'success' && needs.demo.outputs.deployed == 'true') ||
+       inputs.environment == 'production')
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: production
+      sha: ${{ needs.prepare.outputs.sha }}
+      rollback: ${{ inputs.rollback || false }}
+    secrets: inherit

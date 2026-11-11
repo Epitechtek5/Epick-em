@@ -1,0 +1,47 @@
+# Un namespace et un Secret par environnement : identifiants et bases séparés (ADR-007).
+- name: Namespaces
+  ansible.builtin.shell: |
+    set -o pipefail
+    k3s kubectl create namespace {{ item.namespace }} --dry-run=client -o yaml | k3s kubectl apply -f -
+  args:
+    executable: /bin/bash
+  loop: "{{ epickem_environments }}"
+  loop_control: { label: "{{ item.namespace }}" }
+  register: namespaces
+  changed_when: "'unchanged' not in namespaces.stdout"
+
+- name: Secrets applicatifs (depuis le vault)
+  when: item.secrets | length > 0
+  ansible.builtin.shell: |
+    set -o pipefail
+    k3s kubectl create secret generic {{ item.secret_name }} -n {{ item.namespace }} \
+      --from-env-file=/dev/stdin --dry-run=client -o yaml | k3s kubectl apply -f -
+  args:
+    executable: /bin/bash
+    stdin: "{% for k, v in item.secrets.items() %}{{ k }}={{ v }}\n{% endfor %}"
+  loop: "{{ epickem_environments }}"
+  loop_control: { label: "{{ item.namespace }}/{{ item.secret_name }}" }
+  no_log: true
+  register: app_secrets
+  changed_when: "'unchanged' not in app_secrets.stdout"
+
+- name: Déploiement manuel du chart (seulement avec -e epickem_deploy_tag=<sha> -e epickem_deploy_env=<nom>)
+  when: epickem_deploy_tag | length > 0
+  vars:
+    target: "{{ epickem_environments | selectattr('name', 'equalto', epickem_deploy_env | mandatory) | first }}"
+  block:
+    - name: Copie du chart
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../helm/epickem/"
+        dest: /opt/epickem/chart/
+        mode: preserve
+    - name: helm upgrade --install (annulé automatiquement en cas d'échec)
+      ansible.builtin.command: >
+        helm upgrade --install epickem /opt/epickem/chart
+        --namespace {{ target.namespace }}
+        -f /opt/epickem/chart/values-{{ target.name }}.yaml
+        --set image.tag={{ epickem_deploy_tag }}
+        --atomic --wait --timeout 10m
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true

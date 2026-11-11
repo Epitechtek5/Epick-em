@@ -1,0 +1,71 @@
+name: Deploy environment
+
+# Un environnement à la fois, jamais deux déploiements simultanés sur le même (pas d'annulation :
+# un helm upgrade interrompu laisserait la release dans un état « pending »).
+on:
+  workflow_call:
+    inputs:
+      environment: { type: string, required: true }
+      sha: { type: string, required: true }
+      rollback: { type: boolean, default: false }
+    outputs:
+      deployed:
+        value: ${{ jobs.deploy.outputs.deployed }}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.PUBLIC_HOST && format('https://{0}', vars.PUBLIC_HOST) || '' }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      deployed: ${{ steps.deploy.outputs.deployed }}
+    steps:
+      - id: configured
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+          PUBLIC_HOST: ${{ vars.PUBLIC_HOST }}
+        run: |
+          if [ -z "$KUBECONFIG_CONTENT" ] || [ -z "$PUBLIC_HOST" ]; then
+            echo "::warning::Environnement ${{ inputs.environment }} non configuré (secret KUBECONFIG, variable PUBLIC_HOST) : déploiement ignoré."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.configured.outputs.ok == 'true'
+        with:
+          # Historique complet : comparaison avec le SHA déjà déployé (jamais de retour arrière implicite).
+          fetch-depth: 0
+          ref: ${{ inputs.sha }}
+      - uses: azure/setup-helm@v4
+        if: steps.configured.outputs.ok == 'true'
+        with: { version: v3.19.0 }
+      - uses: azure/setup-kubectl@v4
+        if: steps.configured.outputs.ok == 'true'
+      - id: deploy
+        if: steps.configured.outputs.ok == 'true'
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+          PUBLIC_HOST: ${{ vars.PUBLIC_HOST }}
+        run: |
+          umask 077
+          printf '%s' "$KUBECONFIG_CONTENT" > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          export PUBLIC_URL="https://$PUBLIC_HOST"
+          export HELM_EXTRA_ARGS="--set ingress.host=$PUBLIC_HOST --set publicUrl=$PUBLIC_URL"
+          scripts/deploy/deploy.sh "${{ inputs.environment }}" "${{ inputs.sha }}" ${{ inputs.rollback && '--rollback' || '' }}
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+      - name: Résumé
+        if: always() && steps.configured.outputs.ok == 'true'
+        run: |
+          echo "### ${{ inputs.environment }} : ${{ steps.deploy.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "SHA \`${{ inputs.sha }}\` — https://${{ vars.PUBLIC_HOST }}" >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        run: rm -f "$RUNNER_TEMP/kubeconfig"

@@ -1,0 +1,20 @@
+- name: cert-manager {{ cert_manager_version }}
+  ansible.builtin.command: >
+    helm upgrade --install cert-manager cert-manager
+    --repo https://charts.jetstack.io --version {{ cert_manager_version }}
+    --namespace cert-manager --create-namespace --set crds.enabled=true --wait
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: cert_manager
+  changed_when: "'STATUS: deployed' in cert_manager.stdout"
+
+- name: Émetteur Let's Encrypt (ClusterIssuer `letsencrypt`, défi HTTP-01 via Traefik)
+  ansible.builtin.shell: |
+    set -o pipefail
+    cat <<'YAML' | k3s kubectl apply -f -
+    {{ lookup('ansible.builtin.template', 'cluster-issuer.yaml.j2') }}
+    YAML
+  args:
+    executable: /bin/bash
+  register: issuer
+  changed_when: "'unchanged' not in issuer.stdout"

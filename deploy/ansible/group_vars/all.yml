@@ -1,0 +1,30 @@
+# Versions épinglées : une mise à jour est un changement relu, pas une surprise.
+k3s_version: v1.33.5+k3s1
+cert_manager_version: v1.19.1
+helm_version: v3.19.0
+
+# Adresse de contact Let's Encrypt (avis d'expiration). À renseigner dans l'inventaire.
+acme_email: ""
+# `letsencrypt-staging` pour essayer sans consommer le quota de production.
+acme_server: https://acme-v02.api.letsencrypt.org/directory
+
+# Ports ouverts au monde : SSH, HTTP (challenge ACME + redirection) et HTTPS. L'API
+# Kubernetes (6443) n'est ouverte qu'aux adresses listées (runner CI, poste d'admin).
+firewall_public_ports: [22, 80, 443]
+kube_api_allowed_cidrs: []
+
+# Environnements : namespace, nom du Secret attendu par le chart, valeurs secrètes.
+# Les valeurs viennent d'un fichier chiffré (ansible-vault), jamais du dépôt en clair :
+#   ansible-vault create group_vars/epickem/vault.yml   (voir docs/exploitation/deploiement.md)
+epickem_environments:
+  - name: demo
+    namespace: epickem-demo
+    secret_name: epickem-demo-secrets
+    secrets: "{{ vault_epickem_secrets.demo | default({}) }}"
+  - name: production
+    namespace: epickem
+    secret_name: epickem-secrets
+    secrets: "{{ vault_epickem_secrets.production | default({}) }}"
+
+# Déploiement manuel facultatif du chart (le CD le fait normalement).
+epickem_deploy_tag: ""

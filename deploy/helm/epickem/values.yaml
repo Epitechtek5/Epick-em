@@ -1,5 +1,80 @@
-# Valeurs par défaut du chart. Aucun secret ici (voir ADR-007).
+# Valeurs par défaut du chart. Aucun secret ici (voir ADR-007) : ils viennent du Secret
+# Kubernetes `secrets.existingSecret`, créé hors du chart (Ansible ou CI, depuis des secrets
+# protégés). Un environnement = un namespace + un fichier de valeurs (values-demo.yaml,
+# values-production.yaml) : configuration, identifiants et bases séparés.
+
+# Nom de l'environnement (`demo`, `production`) : étiquette des ressources.
+environment: demo
+
 image:
   registry: ghcr.io
-  # Tag commun aux images : SHA du commit ou version semver.
+  # Images : <registry>/<repository>/<composant>:<tag>
+  repository: epitechtek5/epick-em
+  # SHA complet du commit testé (obligatoire) : les images sont immuables, jamais `latest`.
   tag: ""
+  pullPolicy: IfNotPresent
+
+# Origine publique du site (liens des e-mails) ; l'ingress sert ce même hôte.
+publicUrl: https://epickem.example.org
+
+ingress:
+  enabled: true
+  # k3s embarque Traefik.
+  className: traefik
+  host: epickem.example.org
+  tls:
+    enabled: true
+    # ClusterIssuer cert-manager (créé par le playbook Ansible).
+    clusterIssuer: letsencrypt
+
+secrets:
+  # Clés attendues : JWT_SECRET, POSTGRES_PASSWORD ; facultatives : RESEND_API_KEY,
+  # STARTGG_TOKEN, GOOGLE_CLIENT_SECRET, TOTP_ENCRYPTION_KEY.
+  existingSecret: epickem-secrets
+
+postgres:
+  image: postgres:17-alpine
+  database: epickem
+  user: epickem
+  storage: 5Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+redis:
+  image: redis:7-alpine
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+apiPublic:
+  replicas: 1
+  port: 8080
+  env: {}
+  resources:
+    requests: { cpu: 100m, memory: 64Mi }
+    limits: { memory: 512Mi }
+
+apiInternal:
+  # Le planificateur de synchronisation prend un bail par source : plusieurs réplicas sont
+  # possibles, une suffit.
+  replicas: 1
+  port: 8081
+  env: {}
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+web:
+  replicas: 1
+  # Résolveur DNS du cluster pour nginx (k3s : CoreDNS sous ce nom).
+  resolver: kube-dns.kube-system.svc.cluster.local
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+migrations:
+  # Job Liquibase avant chaque mise à jour (après la première installation).
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
