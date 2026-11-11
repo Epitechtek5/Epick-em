@@ -30,9 +30,9 @@ use crate::error::{ApiError, ErrorResponse};
 use crate::export_cache;
 use crate::game_io::{Format, FormatQuery};
 use crate::store::{
-    AuthStore, ParticipantImport, ParticipantStatus, ParticipantType, ScoringMode,
-    ScoringRuleImport, StoreError, TeamScoringMode, Tournament, TournamentImport, TournamentInput,
-    TournamentStatus,
+    AuthStore, Entrant, ParticipantImport, ParticipantStatus, ParticipantType, ScoringMode,
+    ScoringRuleImport, StepPlan, StoreError, TeamPlan, TeamScoringMode, Tournament,
+    TournamentImport, TournamentInput, TournamentStatus,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournaments::{check as check_fields, definition_checked};
@@ -45,6 +45,8 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+mod preview;
 
 const FORMAT_VERSION: u32 = 1;
 /// Nombre maximal de problèmes détaillés dans une réponse `400`.
@@ -118,6 +120,45 @@ pub trait TournamentChild: Send + Sync {
     ) -> Result<Vec<Uuid>, StoreError> {
         self.import(tournament_id, items).await
     }
+
+    /// Plan d'écriture de `items`, déjà validés, pour l'import atomique (voir
+    /// [`crate::store::ImportPlan`]) : tout ce qui se déduit est calculé ici, et rien n'est écrit.
+    /// `None` si ce niveau ne sait pas se planifier : l'import écrit alors niveau par niveau, sans
+    /// atomicité entre les niveaux.
+    async fn plan_in(
+        &self,
+        _game_id: Uuid,
+        _items: &[Value],
+        _scope: &PlanScope,
+    ) -> Result<Option<ChildPlan>, StoreError> {
+        Ok(None)
+    }
+}
+
+/// Plan d'écriture d'un sous-niveau d'un tournoi.
+#[derive(Debug, Clone)]
+pub enum ChildPlan {
+    Teams(Vec<TeamPlan>),
+    Steps {
+        steps: Vec<StepPlan>,
+        /// Écarts entre le fichier et ce qui a été recalculé, à montrer avant l'écriture.
+        warnings: Vec<String>,
+    },
+}
+
+/// Ce que le fichier d'un tournoi déclare de ses inscrits, résolu dans la base, pour planifier
+/// les sous-niveaux qui s'y réfèrent.
+#[derive(Debug, Default, Clone)]
+pub struct PlanScope {
+    /// Comptes des inscrits qui jouent à titre individuel, par nom d'utilisateur en minuscules.
+    pub users: HashMap<String, Uuid>,
+    /// Rangs (dans `teams`) des équipes inscrites seules.
+    pub teams: HashSet<usize>,
+    /// Barème du tournoi, qui sert à calculer les points.
+    pub rules: Vec<ScoringRuleImport>,
+    /// Instant d'inscription de chaque inscrit (`None` : l'instant de l'import), qui départage les
+    /// égalités d'un classement.
+    pub registered_at: HashMap<Entrant, Option<String>>,
 }
 
 /// Ce que le fichier d'un tournoi déclare de ses inscrits, pour les sous-niveaux qui s'y
@@ -414,65 +455,78 @@ pub(crate) async fn import_tournaments(
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let format = query.format.unwrap_or_default();
-    let tournaments = decode(format, &body).map_err(file_error)?;
-    let lookups = Lookups::load(&state, &tournaments).await?;
-    let prepared = match prepare(&state, &lookups, tournaments).await? {
-        Ok(prepared) => prepared,
+    let analysis = match preview::analyze(&state, format, &body).await? {
+        Ok(analysis) => analysis,
         Err(problems) => return Err(file_error(problems)),
     };
+    let report = preview::apply(&state, analysis).await?;
+    Ok(HttpResponse::Ok().json(report))
+}
 
-    let (imports, files): (Vec<_>, Vec<_>) = prepared
-        .into_iter()
-        .map(|p| (p.import, (p.participants, p.teams, p.steps, p.matches)))
-        .unzip();
-    let saved = state
-        .store
-        .import_tournaments(imports)
-        .await
-        .map_err(ApiError::internal)?;
-    let mut report = ImportReport {
-        created: 0,
-        updated: 0,
-    };
-    for ((tournament, created), (participants, teams, steps, matches)) in
-        saved.into_iter().zip(files)
-    {
-        let team_ids = state
-            .tournament_teams
-            .import(tournament.id, teams)
-            .await
-            .map_err(ApiError::internal)?;
-        let participants = participants
-            .into_iter()
-            .map(|p| ParticipantImport {
-                user_id: p.user_id,
-                tournament_team_id: p.team.and_then(|rank| team_ids.get(rank).copied()),
-                status: p.status,
-                registered_at: p.registered_at,
-            })
-            .collect();
-        // Les inscrits d'abord : les étapes et les matchs les désignent.
-        state
-            .store
-            .replace_participants(tournament.id, participants)
-            .await
-            .map_err(ApiError::internal)?;
-        state
-            .steps
-            .import_in(tournament.id, steps, &team_ids)
-            .await
-            .map_err(ApiError::internal)?;
-        state
-            .matches
-            .import(tournament.id, matches)
-            .await
-            .map_err(ApiError::internal)?;
-        if created {
-            report.created += 1;
-        } else {
-            report.updated += 1;
-        }
-    }
+/// Aperçu d'un import de tournois, sans rien écrire (administrateur).
+///
+/// Lit et valide le fichier comme `POST /tournaments/import`, puis décrit les changements : ce qui
+/// est créé, mis à jour, remplacé ou supprimé (barème, inscrits, équipes, étapes, matchs), les
+/// conséquences en aval (résultats traités, classements recalculés, données écrasées), les
+/// avertissements et les erreurs de validation. Un fichier valide reçoit un `preview_id` valable
+/// dix minutes, à confirmer avec `POST /tournaments/import/apply` ; il est lié au fichier et à
+/// l'état de la base, et refusé si l'un ou l'autre a changé.
+#[utoipa::path(
+    post,
+    path = "/tournaments/import/preview",
+    tag = "tournaments",
+    security(("bearer" = [])),
+    params(FormatQuery),
+    request_body(content = String, content_type = "text/plain", description = "Contenu du fichier, 256 Kio au maximum"),
+    responses(
+        (status = 200, description = "Aperçu ; `valid` est faux si le fichier a des erreurs", body = preview::ImportPreview),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
+    ),
+)]
+#[post("/tournaments/import/preview")]
+pub(crate) async fn preview_import(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    query: web::Query<FormatQuery>,
+    body: web::Bytes,
+) -> Result<HttpResponse, ApiError> {
+    require_admin(&state, &claims).await?;
+    let format = query.format.unwrap_or_default();
+    let preview = preview::preview(&state, claims.sub, format, &body).await?;
+    Ok(HttpResponse::Ok().json(preview))
+}
+
+/// Applique un aperçu confirmé, en une seule transaction (administrateur).
+///
+/// L'aperçu est à usage unique et refusé s'il est inconnu, expiré ou déjà appliqué (`410`), si le
+/// fichier ou l'état de la base ont changé depuis (`409`, `import_preview_stale`), ou si l'import
+/// remplace des données existantes sans `confirm_destructive` (`409`,
+/// `import_confirmation_required`). Les résultats de matchs sont traités comme par l'API : points
+/// d'après le barème, rangs, progression des vainqueurs, totaux et classement d'étape. En cas
+/// d'erreur, rien n'est modifié.
+#[utoipa::path(
+    post,
+    path = "/tournaments/import/apply",
+    tag = "tournaments",
+    security(("bearer" = [])),
+    request_body = preview::ApplyRequest,
+    responses(
+        (status = 200, description = "Tournois créés et mis à jour", body = ImportReport),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
+        (status = 409, description = "Aperçu périmé ou confirmation explicite requise", body = ErrorResponse),
+        (status = 410, description = "Aperçu inconnu, expiré ou déjà appliqué", body = ErrorResponse),
+    ),
+)]
+#[post("/tournaments/import/apply")]
+pub(crate) async fn apply_import(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    request: web::Json<preview::ApplyRequest>,
+) -> Result<HttpResponse, ApiError> {
+    require_admin(&state, &claims).await?;
+    let report = preview::confirm(&state, claims.sub, request.into_inner()).await?;
     Ok(HttpResponse::Ok().json(report))
 }
 
@@ -573,6 +627,9 @@ struct Prepared {
     teams: Vec<Value>,
     steps: Vec<Value>,
     matches: Vec<Value>,
+    /// Nom et jeu du tournoi, tels que le fichier les écrit, pour en parler à l'utilisateur.
+    game: String,
+    plan_scope: PlanScope,
 }
 
 /// Tournois prêts à écrire, ou les problèmes du fichier, un message par tournoi invalide (les
@@ -667,6 +724,35 @@ async fn prepare(
             }
         }
         if reasons.is_empty() {
+            let plan_scope = PlanScope {
+                users: tournament
+                    .participants
+                    .iter()
+                    .filter_map(|p| p.user.as_deref())
+                    .filter_map(|name| {
+                        let key = name.trim().to_lowercase();
+                        lookups
+                            .users
+                            .get(&key)
+                            .copied()
+                            .flatten()
+                            .map(|id| (key, id))
+                    })
+                    .collect(),
+                teams: scope.teams.clone(),
+                rules: rules.clone(),
+                registered_at: participants
+                    .iter()
+                    .filter_map(|p| {
+                        let who = match (p.user_id, p.team) {
+                            (Some(user), _) => Entrant::User(user),
+                            (None, Some(rank)) => Entrant::Team(rank),
+                            (None, None) => return None,
+                        };
+                        Some((who, p.registered_at.clone()))
+                    })
+                    .collect(),
+            };
             prepared.push(Prepared {
                 import: TournamentImport {
                     input,
@@ -677,6 +763,8 @@ async fn prepare(
                 teams: tournament.teams,
                 steps: tournament.steps,
                 matches: tournament.matches,
+                game: tournament.game.trim().to_string(),
+                plan_scope,
             });
         } else {
             problems.push(format!("Tournoi {} : {}", index + 1, reasons.join(" ")));

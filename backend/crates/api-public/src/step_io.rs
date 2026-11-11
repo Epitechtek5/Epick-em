@@ -20,13 +20,14 @@
 //! mêmes opérations que sur l'API (création, lancement, points, clôture), si bien qu'un fichier
 //! exporté se réimporte sans perte (hors horodatages).
 
-use crate::match_io::StoreMatches;
+use crate::match_io::{MatchesPlan, StoreMatches};
 use crate::steps::{check, tiebreak_value};
 use crate::store::{
-    AuthStore, MatchType, StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome,
-    StepParticipantStatus, StepStart, StepStatus, StoreError,
+    AuthStore, Entrant, MatchType, MemberPlan, ScoringRuleImport, StepClosing, StepDefinition,
+    StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepPlan, StepStart, StepStatus,
+    StoreError,
 };
-use crate::tournament_io::{FileScope, TournamentChild};
+use crate::tournament_io::{ChildPlan, FileScope, PlanScope, TournamentChild};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -104,6 +105,20 @@ pub trait StepMatches: Send + Sync {
         scope: &StepScope,
         items: &[Value],
     ) -> Result<Option<String>, StoreError>;
+
+    /// Plan d'écriture des matchs `items`, déjà validés, pour l'import atomique : `entrants`
+    /// désigne chaque inscrit du tournoi, `rules` est le barème du tournoi. `None` si ce niveau ne
+    /// sait pas se planifier (l'import écrit alors étape par étape).
+    async fn plan(
+        &self,
+        _game_id: Uuid,
+        _scope: &StepScope,
+        _entrants: &HashMap<Who, Entrant>,
+        _rules: &[ScoringRuleImport],
+        _items: &[Value],
+    ) -> Result<Option<MatchesPlan>, StoreError> {
+        Ok(None)
+    }
 
     /// Remplace les matchs de l'étape (déjà lancée, ses groupes existent) par `items`, déjà
     /// validés. `participants` donne l'identifiant de chaque inscrit du tournoi.
@@ -224,6 +239,10 @@ pub(crate) struct StepParticipantItem {
     /// `in` s'il est absent.
     #[serde(default)]
     status: Option<StepParticipantStatus>,
+    /// Tête de série dans l'étape (1 = la meilleure). Tous les participants de l'étape en ont une,
+    /// de 1 à leur nombre sans doublon, ou aucun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    seed: Option<i32>,
 }
 
 impl StepParticipantItem {
@@ -356,7 +375,33 @@ fn step_problems(step: &StepItem, scope: &FileScope) -> Vec<String> {
             }
         }
     }
+    reasons.extend(seed_problems(step));
     reasons
+}
+
+/// Têtes de série d'une étape lancée : toutes ou aucune, de 1 au nombre de participants, sans
+/// doublon.
+fn seed_problems(step: &StepItem) -> Vec<String> {
+    let members: Vec<&StepParticipantItem> =
+        step.groups.iter().flat_map(|g| &g.participants).collect();
+    let mut seeds: Vec<i32> = members.iter().filter_map(|p| p.seed).collect();
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    if seeds.len() != members.len() {
+        return vec![
+            "seed : tous les participants de l'étape ont une tête de série, ou aucun.".to_string(),
+        ];
+    }
+    seeds.sort_unstable();
+    let expected: Vec<i32> = (1..=i32::try_from(members.len()).unwrap_or(i32::MAX)).collect();
+    if seeds != expected {
+        return vec![format!(
+            "seed : les têtes de série vont de 1 à {}, sans doublon.",
+            members.len()
+        )];
+    }
+    Vec::new()
 }
 
 impl StoreSteps {
@@ -465,6 +510,7 @@ impl TournamentChild for StoreSteps {
                         points: Some(member.points),
                         final_rank: member.final_rank,
                         status: Some(member.status),
+                        seed: member.seed,
                     });
                 }
                 // Ordre indépendant des identifiants : deux exports du même contenu sont identiques.
@@ -597,6 +643,18 @@ impl TournamentChild for StoreSteps {
         Ok((!problems.is_empty()).then(|| problems.join(" ")))
     }
 
+    async fn plan_in(
+        &self,
+        game_id: Uuid,
+        items: &[Value],
+        scope: &PlanScope,
+    ) -> Result<Option<ChildPlan>, StoreError> {
+        Ok(self
+            .plan_steps(game_id, items, scope)
+            .await?
+            .map(|(steps, warnings)| ChildPlan::Steps { steps, warnings }))
+    }
+
     async fn import_in(
         &self,
         tournament_id: Uuid,
@@ -652,6 +710,14 @@ impl TournamentChild for StoreSteps {
                             .collect(),
                     })
                     .await?;
+                let seeds: Vec<(Uuid, i32)> = resolved
+                    .iter()
+                    .flatten()
+                    .filter_map(|(id, participant)| participant.seed.map(|seed| (*id, seed)))
+                    .collect();
+                if !seeds.is_empty() {
+                    self.store.set_step_seeds(created.id, seeds).await?;
+                }
                 let mut outcomes = Vec::new();
                 for (id, participant) in resolved.iter().flatten() {
                     if let Some(points) = participant.points.filter(|p| *p != 0.0) {
@@ -681,6 +747,151 @@ impl TournamentChild for StoreSteps {
             ids.push(created.id);
         }
         Ok(ids)
+    }
+}
+
+impl StoreSteps {
+    /// Étapes prêtes à écrire, avec les écarts entre le fichier et ce qui est recalculé. `None` si
+    /// le sous-niveau des matchs ne sait pas se planifier.
+    async fn plan_steps(
+        &self,
+        game_id: Uuid,
+        items: &[Value],
+        scope: &PlanScope,
+    ) -> Result<Option<(Vec<StepPlan>, Vec<String>)>, StoreError> {
+        let mut steps = parse(items).map_err(StoreError::Other)?;
+        steps.sort_by_key(|step| step.position);
+        let entrants: HashMap<Who, Entrant> = scope
+            .users
+            .iter()
+            .map(|(name, id)| (Who::User(name.clone()), Entrant::User(*id)))
+            .chain(
+                scope
+                    .teams
+                    .iter()
+                    .map(|rank| (Who::Team(*rank), Entrant::Team(*rank))),
+            )
+            .collect();
+        let mut planned = Vec::with_capacity(steps.len());
+        let mut warnings = Vec::new();
+        for step in steps {
+            let status = step.status.unwrap_or(StepStatus::Pending);
+            let label = format!("étape {}", step.position);
+            let definition = definition(&step);
+            if status == StepStatus::Pending {
+                planned.push(StepPlan {
+                    definition,
+                    status,
+                    groups: Vec::new(),
+                    matches: Vec::new(),
+                });
+                continue;
+            }
+            let mut groups = step.groups;
+            groups.sort_by_key(|group| group.index);
+            let step_scope = StepScope {
+                status,
+                format: step.format,
+                match_type: step.match_type,
+                group_size: step.group_size,
+                groups: groups
+                    .iter()
+                    .map(|group| {
+                        (
+                            group.index,
+                            group
+                                .participants
+                                .iter()
+                                .filter_map(|p| p.who().ok())
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            };
+            let Some(matches) = self
+                .matches
+                .plan(game_id, &step_scope, &entrants, &scope.rules, &step.matches)
+                .await?
+            else {
+                return Ok(None);
+            };
+            warnings.extend(matches.warnings.iter().map(|w| format!("{label} : {w}")));
+            let mut members: Vec<Vec<MemberPlan>> = Vec::with_capacity(groups.len());
+            for group in &groups {
+                let mut in_group = Vec::with_capacity(group.participants.len());
+                for participant in &group.participants {
+                    let who = participant.who().map_err(other)?;
+                    in_group.push(MemberPlan {
+                        who: entrants
+                            .get(&who)
+                            .copied()
+                            .ok_or_else(|| other(format!("inscrit {who} introuvable")))?,
+                        seed: participant.seed,
+                        points: participant.points.unwrap_or(0.0),
+                        final_rank: participant.final_rank,
+                        status: participant.status.unwrap_or(StepParticipantStatus::In),
+                    });
+                }
+                members.push(in_group);
+            }
+            let finished: Vec<_> = matches
+                .matches
+                .iter()
+                .filter(|m| m.status == crate::store::MatchStatus::Finished)
+                .collect();
+            if !finished.is_empty() {
+                // Points, classement et qualifications se déduisent des matchs terminés, comme à la
+                // clôture par l'API ; ce que le fichier en dit ne sert plus.
+                for group in &mut members {
+                    for member in group.iter_mut() {
+                        let total: f64 = finished
+                            .iter()
+                            .flat_map(|m| &m.participants)
+                            .filter(|e| e.who == member.who)
+                            .map(|e| e.points)
+                            .sum();
+                        if (member.points - total).abs() > 1e-9 {
+                            warnings.push(format!(
+                                "{label} : le total de points d'un participant est recalculé d'après ses matchs ({total})."
+                            ));
+                        }
+                        member.points = total;
+                    }
+                    if status == StepStatus::Finished {
+                        let ranked = crate::steps::rank_members(
+                            group
+                                .iter()
+                                .enumerate()
+                                .map(|(position, m)| {
+                                    let registered =
+                                        scope.registered_at.get(&m.who).cloned().flatten();
+                                    (position, m.points, registered)
+                                })
+                                .collect(),
+                            step.advance_per_group,
+                        );
+                        for (position, final_rank, outcome) in ranked {
+                            let member = &mut group[position];
+                            if member.final_rank != Some(final_rank) || member.status != outcome {
+                                warnings.push(format!(
+                                    "{label} : le classement et les qualifications sont recalculés d'après les matchs."
+                                ));
+                            }
+                            member.final_rank = Some(final_rank);
+                            member.status = outcome;
+                        }
+                    }
+                }
+            }
+            planned.push(StepPlan {
+                definition,
+                status,
+                groups: members,
+                matches: matches.matches,
+            });
+        }
+        warnings.dedup();
+        Ok(Some((planned, warnings)))
     }
 }
 

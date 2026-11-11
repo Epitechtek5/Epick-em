@@ -3,14 +3,15 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, Bracket, GameInput, GameUpdate, MatchFinish, MatchInput, MatchResult, MatchScore,
-    MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
+    AuthStore, Bracket, Entrant, EntryPlan, GameInput, GameUpdate, ImportPlan, MatchFinish,
+    MatchInput, MatchPlan, MatchResult, MatchScore, MatchStatus, MatchType, MatchUpdate,
+    MemberImport, MemberPlan, ParticipantImport, ParticipantInput, ParticipantPlan,
     ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
     ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
-    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
+    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepPlan, StepStart,
     StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
-    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
-    UserUpdate,
+    TournamentImport, TournamentInput, TournamentPlan, TournamentStatus, TournamentTeamInput,
+    TournamentUpdate, UserUpdate,
 };
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
@@ -2693,4 +2694,185 @@ async fn expired_password_reset_tokens_are_refused() {
             .password_hash,
         "old"
     );
+}
+
+/// Plan d'import d'un tournoi de quatre joueurs : une étape `pool` lancée, têtes de série 1 à 4
+/// et un match terminé.
+fn import_plan(
+    game_id: Uuid,
+    name: &str,
+    description: &str,
+    users: &[Uuid],
+    steps: usize,
+) -> ImportPlan {
+    let step = || StepPlan {
+        definition: step_definition(1, 1, 4, 2),
+        status: StepStatus::Ongoing,
+        groups: vec![
+            users
+                .iter()
+                .zip(1..)
+                .map(|(user, seed)| MemberPlan {
+                    who: Entrant::User(*user),
+                    seed: Some(seed),
+                    points: 0.0,
+                    final_rank: None,
+                    status: StepParticipantStatus::In,
+                })
+                .collect(),
+        ],
+        matches: vec![MatchPlan {
+            group: Some(1),
+            round: Some(1),
+            bracket: None,
+            next: None,
+            scheduled_at: None,
+            started_at: None,
+            ended_at: None,
+            status: MatchStatus::Finished,
+            participants: users
+                .iter()
+                .zip(1..)
+                .map(|(user, rank)| EntryPlan {
+                    who: Entrant::User(*user),
+                    stats: serde_json::json!({}),
+                    points: f64::from(5 - rank),
+                    rank: Some(rank),
+                    result: Some(if rank == 1 {
+                        MatchResult::Win
+                    } else {
+                        MatchResult::Loss
+                    }),
+                })
+                .collect(),
+        }],
+    };
+    ImportPlan {
+        tournaments: vec![TournamentPlan {
+            import: TournamentImport {
+                input: TournamentInput {
+                    name: name.to_string(),
+                    description: Some(description.to_string()),
+                    max_participants: 4,
+                    ..tournament_input(game_id)
+                },
+                status: TournamentStatus::Draft,
+                rules: Vec::new(),
+            },
+            teams: Vec::new(),
+            participants: users
+                .iter()
+                .map(|user| ParticipantPlan {
+                    user_id: Some(*user),
+                    team: None,
+                    status: ParticipantStatus::Registered,
+                    registered_at: None,
+                })
+                .collect(),
+            steps: (0..steps).map(|_| step()).collect(),
+        }],
+    }
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn apply_import_is_one_transaction_with_seeds_and_lock() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    {
+        let mut users = Vec::new();
+        for prefix in ["a", "b", "c", "d"] {
+            users.push(user(&store, prefix).await);
+        }
+        let name = unique("Import");
+
+        let saved = store
+            .apply_import(import_plan(game_id, &name, "première", &users, 1))
+            .await
+            .unwrap();
+        let (tournament, created) = &saved[0];
+        assert!(*created);
+        let steps = store.list_steps(tournament.id).await.unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status, StepStatus::Ongoing);
+        let mut seeds: Vec<Option<i32>> = store
+            .list_step_participants(steps[0].id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| p.seed)
+            .collect();
+        seeds.sort();
+        assert_eq!(seeds, [Some(1), Some(2), Some(3), Some(4)]);
+        let matches = store.list_matches(steps[0].id, None, None).await.unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            store
+                .list_step_match_participants(steps[0].id)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+
+        // Deux étapes à la même position : l'écriture échoue en cours de route et rien ne change,
+        // ni le tournoi mis à jour (description), ni ses étapes ou ses inscrits.
+        let failed = store
+            .apply_import(import_plan(
+                game_id,
+                &name.to_uppercase(),
+                "écrasée ?",
+                &users,
+                2,
+            ))
+            .await;
+        assert!(
+            matches!(failed, Err(StoreError::StepPositionTaken)),
+            "{failed:?}"
+        );
+        let unchanged = store.find_tournament(tournament.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.description.as_deref(), Some("première"));
+        assert_eq!(store.list_steps(tournament.id).await.unwrap(), steps);
+        assert_eq!(
+            store
+                .list_participants(tournament.id, i64::MAX, 0)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+
+        // Une tête de série en double est refusée par la base, avec le même retour en arrière.
+        let mut duplicated = import_plan(game_id, &name, "doublon", &users, 1);
+        duplicated.tournaments[0].steps[0].groups[0][1].seed = Some(1);
+        assert!(store.apply_import(duplicated).await.is_err());
+        let unchanged = store.find_tournament(tournament.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.description.as_deref(), Some("première"));
+
+        // Remplacer un tournoi existant : mêmes étapes, nouvelles lignes, une seule étape.
+        let replaced = store
+            .apply_import(import_plan(game_id, &name, "seconde", &users, 1))
+            .await
+            .unwrap();
+        assert!(!replaced[0].1);
+        assert_eq!(store.list_steps(tournament.id).await.unwrap().len(), 1);
+
+        // Un tournoi en cours est verrouillé.
+        sqlx::query("UPDATE tournaments SET status = 'ongoing' WHERE id = $1")
+            .bind(tournament.id)
+            .execute(
+                &sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let locked = store
+            .apply_import(import_plan(game_id, &name, "interdit", &users, 1))
+            .await;
+        assert!(
+            matches!(locked, Err(StoreError::TournamentLocked)),
+            "{locked:?}"
+        );
+    }
 }

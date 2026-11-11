@@ -2,14 +2,15 @@
 
 use super::teams::now_rfc3339;
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
-    MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
-    ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
-    StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
-    StepParticipantStatus, StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput,
-    TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput,
-    TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
+    AuthStore, Entrant, Game, GameInput, GameUpdate, ImportPlan, Match, MatchFinish, MatchImport,
+    MatchInput, MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport,
+    ParticipantInput, ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition,
+    ScoringRuleInput, Stat, StatInput, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
+    StepInput, StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Team,
+    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
+    TournamentInput, TournamentParticipant, TournamentPlan, TournamentStatus, TournamentTeam,
+    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
+    UserUpdate,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -17,6 +18,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+#[derive(Clone)]
 struct RefreshToken {
     user_id: Uuid,
     expires_at: Instant,
@@ -30,13 +32,14 @@ enum VerificationStatus {
     Retired,
 }
 
+#[derive(Clone)]
 struct ResetToken {
     user_id: Uuid,
     expires_at: Instant,
     used: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct State {
     users: Vec<UserRecord>,
     games: Vec<Game>,
@@ -1971,6 +1974,49 @@ impl AuthStore for MemoryStore {
         Ok(result)
     }
 
+    async fn set_step_seeds(
+        &self,
+        step_id: Uuid,
+        seeds: Vec<(Uuid, i32)>,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if !state.steps.iter().any(|s| s.id == step_id) {
+            return Ok(false);
+        }
+        let mut taken: HashSet<i32> = state
+            .step_participants
+            .iter()
+            .filter(|p| p.step_id == step_id)
+            .filter_map(|p| p.seed)
+            .collect();
+        for (participant_id, seed) in seeds {
+            if !taken.insert(seed) {
+                return Err(StoreError::Other(
+                    "tête de série déjà prise dans l'étape".into(),
+                ));
+            }
+            if let Some(member) = state
+                .step_participants
+                .iter_mut()
+                .find(|p| p.step_id == step_id && p.participant_id == participant_id)
+            {
+                member.seed = Some(seed);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
+        let mut state = self.state();
+        // Tout ou rien : l'état d'avant est restauré si une écriture échoue.
+        let snapshot = state.clone();
+        let outcome = state.apply_import(plan);
+        if outcome.is_err() {
+            *state = snapshot;
+        }
+        outcome
+    }
+
     async fn replace_participants(
         &self,
         tournament_id: Uuid,
@@ -2157,6 +2203,262 @@ impl State {
         }
     }
 
+    /// Écrit tout le plan d'import ; l'appelant restaure l'état en cas d'erreur.
+    fn apply_import(&mut self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
+        let mut result = Vec::with_capacity(plan.tournaments.len());
+        for tournament_plan in plan.tournaments {
+            let TournamentPlan {
+                import,
+                teams,
+                participants,
+                steps,
+            } = tournament_plan;
+            let game_id = import.input.game_id;
+            let locked = self.tournaments.iter().any(|t| {
+                t.game_id == game_id
+                    && t.name.to_lowercase() == import.input.name.to_lowercase()
+                    && matches!(
+                        t.status,
+                        TournamentStatus::Ongoing | TournamentStatus::Finished
+                    )
+            });
+            if locked {
+                return Err(StoreError::TournamentLocked);
+            }
+            let (saved, created) = self.upsert_tournament(import);
+            let id = saved.id;
+            let doomed_steps: Vec<Uuid> = self
+                .steps
+                .iter()
+                .filter(|s| s.tournament_id == id)
+                .map(|s| s.id)
+                .collect();
+            for step_id in doomed_steps {
+                self.remove_step(step_id);
+            }
+            self.participants.retain(|p| p.tournament_id != id);
+            let doomed_teams: Vec<Uuid> = self
+                .tournament_teams
+                .iter()
+                .filter(|t| t.tournament_id == id)
+                .map(|t| t.id)
+                .collect();
+            self.tournament_teams.retain(|t| t.tournament_id != id);
+            self.tournament_team_members
+                .retain(|(team, _)| !doomed_teams.contains(team));
+            let now = now_rfc3339();
+            let mut team_ids = Vec::with_capacity(teams.len());
+            for team in teams {
+                let team_id = Uuid::new_v4();
+                if let Some(origin) = team.origin
+                    && self
+                        .tournament_teams
+                        .iter()
+                        .any(|t| t.tournament_id == id && t.team_id == Some(origin))
+                {
+                    return Err(StoreError::TeamAlreadyRegistered);
+                }
+                self.tournament_teams.push(TournamentTeam {
+                    id: team_id,
+                    tournament_id: id,
+                    team_id: team.origin,
+                    name: team.name,
+                    tag: team.tag,
+                    picture_url: team.picture_url,
+                    owner_id: team.owner_id,
+                    created_at: now.clone(),
+                });
+                self.tournament_team_members.extend(
+                    team.members
+                        .into_iter()
+                        .map(|(user_id, role)| (team_id, TournamentTeamMember { user_id, role })),
+                );
+                team_ids.push(team_id);
+            }
+            let mut entrants: HashMap<Entrant, Uuid> = HashMap::new();
+            for participant in participants {
+                let participant_id = Uuid::new_v4();
+                self.participants.push(TournamentParticipant {
+                    id: participant_id,
+                    tournament_id: id,
+                    user_id: participant.user_id,
+                    tournament_team_id: participant
+                        .team
+                        .and_then(|rank| team_ids.get(rank).copied()),
+                    status: participant.status,
+                    registered_at: participant.registered_at.unwrap_or_else(|| now.clone()),
+                });
+                match (participant.user_id, participant.team) {
+                    (Some(user_id), _) => entrants.insert(Entrant::User(user_id), participant_id),
+                    (None, Some(rank)) => entrants.insert(Entrant::Team(rank), participant_id),
+                    (None, None) => None,
+                };
+            }
+            let resolve = |who: &Entrant| -> Result<Uuid, StoreError> {
+                entrants
+                    .get(who)
+                    .copied()
+                    .ok_or_else(|| StoreError::Other(format!("inscrit {who:?} introuvable")))
+            };
+            for step_plan in steps {
+                if self
+                    .steps
+                    .iter()
+                    .any(|s| s.tournament_id == id && s.position == step_plan.definition.position)
+                {
+                    return Err(StoreError::StepPositionTaken);
+                }
+                let step_id = Uuid::new_v4();
+                let definition = step_plan.definition;
+                self.steps.push(Step {
+                    id: step_id,
+                    tournament_id: id,
+                    position: definition.position,
+                    format: definition.format,
+                    match_type: definition.match_type,
+                    group_count: definition.group_count,
+                    group_size: definition.group_size,
+                    matches_per_group: definition.matches_per_group,
+                    advance_per_group: definition.advance_per_group,
+                    tiebreak: definition.tiebreak,
+                    status: step_plan.status,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                });
+                if step_plan.status == StepStatus::Pending {
+                    continue;
+                }
+                let mut seeds = HashSet::new();
+                let mut group_ids = HashMap::new();
+                for (index, members) in step_plan.groups.iter().enumerate() {
+                    let rank = i32::try_from(index + 1).unwrap_or(i32::MAX);
+                    let group_id = Uuid::new_v4();
+                    self.step_groups.push(StepGroup {
+                        id: group_id,
+                        step_id,
+                        index: rank,
+                    });
+                    group_ids.insert(rank, group_id);
+                    for member in members {
+                        if let Some(seed) = member.seed
+                            && !seeds.insert(seed)
+                        {
+                            return Err(StoreError::Other(
+                                "tête de série déjà prise dans l'étape".into(),
+                            ));
+                        }
+                        self.step_participants.push(StepParticipant {
+                            step_id,
+                            participant_id: resolve(&member.who)?,
+                            group_id,
+                            points: member.points,
+                            final_rank: member.final_rank,
+                            status: member.status,
+                            seed: member.seed,
+                        });
+                    }
+                }
+                let match_ids: Vec<Uuid> =
+                    step_plan.matches.iter().map(|_| Uuid::new_v4()).collect();
+                for (index, planned) in step_plan.matches.into_iter().enumerate() {
+                    self.matches.push(Match {
+                        id: match_ids[index],
+                        game_id,
+                        step_id,
+                        group_id: planned.group.and_then(|rank| group_ids.get(&rank).copied()),
+                        round: planned.round,
+                        bracket: planned.bracket,
+                        next_match_id: planned.next.and_then(|next| match_ids.get(next).copied()),
+                        scheduled_at: planned.scheduled_at,
+                        started_at: planned.started_at,
+                        ended_at: planned.ended_at,
+                        status: planned.status,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                    });
+                    for entry in planned.participants {
+                        self.match_participants.push(MatchParticipant {
+                            match_id: match_ids[index],
+                            participant_id: resolve(&entry.who)?,
+                            stats: entry.stats,
+                            points: entry.points,
+                            rank: entry.rank,
+                            result: entry.result,
+                        });
+                    }
+                }
+            }
+            result.push((saved, created));
+        }
+        Ok(result)
+    }
+
+    /// Crée ou met à jour (par jeu et nom) un tournoi et remplace son barème.
+    fn upsert_tournament(&mut self, import: TournamentImport) -> (Tournament, bool) {
+        let TournamentImport {
+            input,
+            status,
+            rules,
+        } = import;
+        let now = now_rfc3339();
+        let existing = self.tournaments.iter().position(|t| {
+            t.game_id == input.game_id && t.name.to_lowercase() == input.name.to_lowercase()
+        });
+        let (tournament, created) = match existing {
+            Some(index) => {
+                let t = &mut self.tournaments[index];
+                t.name = input.name;
+                t.description = input.description;
+                t.start_date = input.start_date;
+                t.end_date = input.end_date;
+                t.registration_open_at = input.registration_open_at;
+                t.registration_close_at = input.registration_close_at;
+                t.participant_type = input.participant_type;
+                t.team_size = input.team_size;
+                t.max_participants = input.max_participants;
+                t.team_scoring_mode = input.team_scoring_mode;
+                t.team_scoring_n = input.team_scoring_n;
+                t.status = status;
+                t.updated_at = now;
+                (t.clone(), false)
+            }
+            None => {
+                let t = Tournament {
+                    id: Uuid::new_v4(),
+                    game_id: input.game_id,
+                    name: input.name,
+                    description: input.description,
+                    start_date: input.start_date,
+                    end_date: input.end_date,
+                    registration_open_at: input.registration_open_at,
+                    registration_close_at: input.registration_close_at,
+                    participant_type: input.participant_type,
+                    team_size: input.team_size,
+                    max_participants: input.max_participants,
+                    team_scoring_mode: input.team_scoring_mode,
+                    team_scoring_n: input.team_scoring_n,
+                    status,
+                    created_at: now.clone(),
+                    updated_at: now,
+                };
+                self.tournaments.push(t.clone());
+                (t, true)
+            }
+        };
+        self.scoring_rules
+            .retain(|r| r.tournament_id != tournament.id);
+        self.scoring_rules
+            .extend(rules.into_iter().map(|rule| ScoringRule {
+                id: Uuid::new_v4(),
+                tournament_id: tournament.id,
+                stat_id: rule.stat_id,
+                mode: rule.definition.mode,
+                coefficient: rule.definition.coefficient,
+                points_table: rule.definition.points_table,
+            }));
+        (tournament, created)
+    }
+
     /// Crée les groupes et les participants d'une étape `pending` et la passe en `ongoing`.
     fn start_step(&mut self, start: StepStart) -> Result<Option<Step>, StoreError> {
         let Some(step) = self.steps.iter().find(|s| s.id == start.step_id) else {
@@ -2191,6 +2493,7 @@ impl State {
                     points: 0.0,
                     final_rank: None,
                     status: StepParticipantStatus::In,
+                    seed: None,
                 });
             }
             self.step_groups.push(group);

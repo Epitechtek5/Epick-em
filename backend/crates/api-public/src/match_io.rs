@@ -19,8 +19,9 @@
 use crate::matches::{ROUND_MAX, capacity_of, parse_stats, playable_problem, points_of, settle};
 use crate::step_io::{Designation, StepMatches, StepScope, Who, designate};
 use crate::store::{
-    AuthStore, Bracket, MatchImport, MatchParticipant, MatchResult, MatchScore, MatchStatus,
-    StatType, StepFormat, StepStatus, StoreError,
+    AuthStore, Bracket, Entrant, EntryPlan, MatchImport, MatchParticipant, MatchPlan, MatchResult,
+    MatchScore, MatchStatus, ScoringRule, ScoringRuleImport, Stat, StatType, StepFormat,
+    StepStatus, StoreError,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournament_io::TournamentChild;
@@ -150,6 +151,8 @@ fn problems(
         StepFormat::SingleElim | StepFormat::DoubleElim
     );
     let mut out = Vec::new();
+    // Vainqueur de chaque match terminé, pour contrôler la progression en élimination.
+    let mut winners: Vec<Option<Option<Who>>> = vec![None; matches.len()];
     for (index, item) in matches.iter().enumerate() {
         let mut reasons = Vec::new();
         let label = index + 1;
@@ -224,7 +227,9 @@ fn problems(
         }
         let mut seen = HashSet::new();
         let mut members = Vec::with_capacity(count);
+        let mut whos: Vec<Option<Who>> = Vec::with_capacity(count);
         for participant in &item.participants {
+            whos.push(participant.who().ok());
             match participant.who() {
                 Err(problem) => reasons.push(format!("participants : {problem}.")),
                 Ok(who) => {
@@ -257,16 +262,99 @@ fn problems(
                 result: participant.result,
             });
         }
-        if status == MatchStatus::Finished
-            && let Err(problem) = settle(&members)
-        {
-            reasons.push(format!("participants : {problem}"));
+        if status == MatchStatus::Finished {
+            match settle(&members) {
+                Err(problem) => reasons.push(format!("participants : {problem}")),
+                // Sans rang, résultat ni points dans le fichier, le vainqueur dépend du barème : il
+                // n'est contrôlé qu'à la planification.
+                Ok(scores)
+                    if members.iter().all(|m| m.rank.is_some())
+                        || members.iter().any(|m| m.result.is_some())
+                        || item.participants.iter().all(|p| p.points.is_some()) =>
+                {
+                    let mut won = scores
+                        .iter()
+                        .zip(&whos)
+                        .filter(|(score, _)| score.result == Some(MatchResult::Win))
+                        .map(|(_, who)| who.clone());
+                    winners[index] = Some(match (won.next(), won.next()) {
+                        (Some(who), None) => who,
+                        _ => None,
+                    });
+                }
+                Ok(_) => {}
+            }
         }
         if !reasons.is_empty() {
             out.push(format!("match {label} : {}", reasons.join(" ")));
         }
     }
+    if eliminating {
+        out.extend(progression_problems(matches, scope, &winners));
+    }
     out.truncate(MAX_REPORTED_ERRORS);
+    out
+}
+
+/// Ordre et cohérence de la progression des vainqueurs : un match ne se joue qu'une fois ses
+/// matchs précédents terminés, et le vainqueur d'un match terminé est dans le match suivant.
+fn progression_problems(
+    matches: &[MatchItem],
+    scope: &StepScope,
+    winners: &[Option<Option<Who>>],
+) -> Vec<String> {
+    let status = |item: &MatchItem| item.status.unwrap_or(MatchStatus::Scheduled);
+    let capacity = capacity_of(scope.match_type, scope.group_size);
+    let mut out = Vec::new();
+    for (index, item) in matches.iter().enumerate() {
+        let Some(next) = item.next.filter(|next| *next < matches.len()) else {
+            continue;
+        };
+        let (current, following) = (status(item), &matches[next]);
+        if matches!(
+            status(following),
+            MatchStatus::Ongoing | MatchStatus::Finished
+        ) && !matches!(current, MatchStatus::Finished | MatchStatus::Cancelled)
+        {
+            out.push(format!(
+                "match {} : il avance avant la fin du match {}, qui le précède.",
+                next + 1,
+                index + 1
+            ));
+        }
+        if current != MatchStatus::Finished {
+            continue;
+        }
+        let Some(Some(winner)) = &winners[index] else {
+            if winners[index].is_some() {
+                out.push(format!(
+                    "match {} : un match d'élimination a un seul vainqueur (`win`).",
+                    index + 1
+                ));
+            }
+            continue;
+        };
+        let waiting: Vec<Who> = following
+            .participants
+            .iter()
+            .filter_map(|p| p.who().ok())
+            .collect();
+        if !waiting.contains(winner) {
+            if status(following) != MatchStatus::Scheduled {
+                out.push(format!(
+                    "match {} : le vainqueur du match {} doit y figurer.",
+                    next + 1,
+                    index + 1
+                ));
+            } else if waiting.len() >= capacity {
+                out.push(format!(
+                    "match {} : plus de place pour le vainqueur du match {}.",
+                    next + 1,
+                    index + 1
+                ));
+            }
+        }
+    }
     out
 }
 
@@ -392,6 +480,30 @@ impl StepMatches for StoreMatches {
         Ok((!found.is_empty()).then(|| found.join(" ")))
     }
 
+    async fn plan(
+        &self,
+        game_id: Uuid,
+        scope: &StepScope,
+        entrants: &HashMap<Who, Entrant>,
+        rules: &[ScoringRuleImport],
+        items: &[Value],
+    ) -> Result<Option<MatchesPlan>, StoreError> {
+        let matches = parse(items).map_err(StoreError::Other)?;
+        let stats = self.0.list_game_stats(game_id).await?.unwrap_or_default();
+        let rules: Vec<ScoringRule> = rules
+            .iter()
+            .map(|rule| ScoringRule {
+                id: Uuid::nil(),
+                tournament_id: Uuid::nil(),
+                stat_id: rule.stat_id,
+                mode: rule.definition.mode,
+                coefficient: rule.definition.coefficient,
+                points_table: rule.definition.points_table.clone(),
+            })
+            .collect();
+        plan_matches(&matches, scope, entrants, &rules, &stats).map(Some)
+    }
+
     async fn import(
         &self,
         step_id: Uuid,
@@ -399,7 +511,6 @@ impl StepMatches for StoreMatches {
         participants: &HashMap<Who, Uuid>,
         items: Vec<Value>,
     ) -> Result<(), StoreError> {
-        let matches = parse(&items).map_err(StoreError::Other)?;
         let store = &self.0;
         let step = store
             .find_step(step_id)
@@ -411,66 +522,54 @@ impl StepMatches for StoreMatches {
             .into_iter()
             .map(|g| (g.index, g.id))
             .collect();
+        // Les inscrits déjà écrits sont désignés par leur identifiant : le plan les nomme par
+        // `Entrant`, et on rend l'écriture au store avec les identifiants d'inscrits.
+        let entrants: HashMap<Who, Entrant> = participants
+            .iter()
+            .map(|(who, id)| (who.clone(), Entrant::User(*id)))
+            .collect();
+        let scope = StepScope {
+            status: step.status,
+            format: step.format,
+            match_type: step.match_type,
+            group_size: step.group_size,
+            groups: HashMap::new(),
+        };
         let stats = store.list_game_stats(game_id).await?.unwrap_or_default();
         let rules = store.list_scoring_rules(step.tournament_id).await?;
-        let known: HashMap<String, StatType> =
-            stats.iter().map(|s| (s.key.clone(), s.kind)).collect();
-
-        let mut imports = Vec::with_capacity(matches.len());
-        for item in matches {
-            let status = item.status.unwrap_or(MatchStatus::Scheduled);
-            let mut scores = Vec::with_capacity(item.participants.len());
-            for participant in &item.participants {
-                let who = participant.who().map_err(other)?;
-                let participant_id = participants
-                    .get(&who)
-                    .copied()
-                    .ok_or_else(|| other(format!("inscrit {who} introuvable")))?;
-                let value = participant.stats();
-                let points = match participant.points {
-                    Some(points) => points,
-                    None => points_of(&parse_stats(&value, &known).map_err(other)?, &rules, &stats),
-                };
-                scores.push(MatchScore {
-                    participant_id,
-                    stats: value,
-                    points,
-                    rank: participant.rank,
-                    result: participant.result,
-                });
-            }
-            if status == MatchStatus::Finished {
-                // Les rangs et résultats absents d'un match terminé se déduisent des points.
-                let members: Vec<MatchParticipant> = scores
-                    .iter()
-                    .map(|s| MatchParticipant {
-                        match_id: Uuid::nil(),
-                        participant_id: s.participant_id,
-                        stats: s.stats.clone(),
-                        points: s.points,
-                        rank: s.rank,
-                        result: s.result,
+        let parsed = parse(&items).map_err(StoreError::Other)?;
+        let planned = plan_matches(&parsed, &scope, &entrants, &rules, &stats)?;
+        let imports = planned
+            .matches
+            .into_iter()
+            .map(|planned| {
+                let scores = planned
+                    .participants
+                    .into_iter()
+                    .map(|entry| match entry.who {
+                        Entrant::User(participant_id) => Ok(MatchScore {
+                            participant_id,
+                            stats: entry.stats,
+                            points: entry.points,
+                            rank: entry.rank,
+                            result: entry.result,
+                        }),
+                        Entrant::Team(_) => Err(other("équipe non résolue")),
                     })
-                    .collect();
-                scores = settle(&members).map_err(other)?;
-            }
-            let normalized = |value: &Option<String>| {
-                value
-                    .as_deref()
-                    .map(|v| normalize_timestamp(v).unwrap_or_else(|| v.to_string()))
-            };
-            imports.push(MatchImport {
-                group_id: item.group.and_then(|index| groups.get(&index).copied()),
-                round: item.round,
-                bracket: item.bracket,
-                next: item.next,
-                scheduled_at: normalized(&item.scheduled_at),
-                started_at: normalized(&item.started_at),
-                ended_at: normalized(&item.ended_at),
-                status,
-                participants: scores,
-            });
-        }
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(MatchImport {
+                    group_id: planned.group.and_then(|index| groups.get(&index).copied()),
+                    round: planned.round,
+                    bracket: planned.bracket,
+                    next: planned.next,
+                    scheduled_at: planned.scheduled_at,
+                    started_at: planned.started_at,
+                    ended_at: planned.ended_at,
+                    status: planned.status,
+                    participants: scores,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
         if store
             .replace_step_matches(step_id, game_id, imports)
             .await?
@@ -480,6 +579,150 @@ impl StepMatches for StoreMatches {
             Err(other(format!("étape {step_id} introuvable")))
         }
     }
+}
+
+/// Matchs d'une étape prêts à écrire, avec les écarts entre le fichier et ce qui est recalculé.
+#[derive(Debug, Clone, Default)]
+pub struct MatchesPlan {
+    pub matches: Vec<MatchPlan>,
+    pub warnings: Vec<String>,
+}
+
+/// Matchs d'une étape, calculés comme le fait l'API quand un match se termine : points d'après les
+/// statistiques et le barème (ceux du fichier ne servent que faute de statistiques), rangs et
+/// résultats déduits, vainqueur placé dans le match suivant d'une élimination. Rien n'est écrit
+/// deux fois : le plan se recalcule en entier depuis le fichier.
+pub(crate) fn plan_matches(
+    matches: &[MatchItem],
+    scope: &StepScope,
+    entrants: &HashMap<Who, Entrant>,
+    rules: &[ScoringRule],
+    stats: &[Stat],
+) -> Result<MatchesPlan, StoreError> {
+    let known: HashMap<String, StatType> = stats.iter().map(|s| (s.key.clone(), s.kind)).collect();
+    let mut warnings = Vec::new();
+    let mut planned: Vec<MatchPlan> = Vec::with_capacity(matches.len());
+    let mut winners: Vec<Option<Entrant>> = vec![None; matches.len()];
+    for (index, item) in matches.iter().enumerate() {
+        let status = item.status.unwrap_or(MatchStatus::Scheduled);
+        let mut entries = Vec::with_capacity(item.participants.len());
+        for participant in &item.participants {
+            let who = participant.who().map_err(other)?;
+            let entrant = entrants
+                .get(&who)
+                .copied()
+                .ok_or_else(|| other(format!("inscrit {who} introuvable")))?;
+            let value = participant.stats();
+            let has_stats = value.as_object().is_some_and(|o| !o.is_empty());
+            let points = if has_stats {
+                let computed =
+                    points_of(&parse_stats(&value, &known).map_err(other)?, rules, stats);
+                if participant
+                    .points
+                    .is_some_and(|given| (given - computed).abs() > 1e-9)
+                {
+                    warnings.push(format!(
+                        "match {} : les points de {who} sont recalculés d'après le barème ({computed}).",
+                        index + 1
+                    ));
+                }
+                computed
+            } else {
+                participant.points.unwrap_or(0.0)
+            };
+            entries.push(EntryPlan {
+                who: entrant,
+                stats: value,
+                points,
+                rank: participant.rank,
+                result: participant.result,
+            });
+        }
+        if status == MatchStatus::Finished {
+            // Les rangs et résultats absents d'un match terminé se déduisent des points.
+            let members: Vec<MatchParticipant> = entries
+                .iter()
+                .enumerate()
+                .map(|(position, e)| MatchParticipant {
+                    match_id: Uuid::nil(),
+                    participant_id: Uuid::from_u128(position as u128 + 1),
+                    stats: e.stats.clone(),
+                    points: e.points,
+                    rank: e.rank,
+                    result: e.result,
+                })
+                .collect();
+            let settled = settle(&members)
+                .map_err(|p| StoreError::InvalidPlan(format!("match {} : {p}", index + 1)))?;
+            for (entry, score) in entries.iter_mut().zip(settled) {
+                entry.rank = score.rank;
+                entry.result = score.result;
+            }
+            let won: Vec<Entrant> = entries
+                .iter()
+                .filter(|e| e.result == Some(MatchResult::Win))
+                .map(|e| e.who)
+                .collect();
+            match won[..] {
+                [winner] => winners[index] = Some(winner),
+                _ if item.next.is_some() && scope.format != StepFormat::Pool => {
+                    return Err(StoreError::InvalidPlan(format!(
+                        "match {} : un match d'élimination a un seul vainqueur (`win`).",
+                        index + 1
+                    )));
+                }
+                _ => {}
+            }
+        }
+        planned.push(MatchPlan {
+            group: item.group,
+            round: item.round,
+            bracket: item.bracket,
+            next: item.next,
+            scheduled_at: normalize(&item.scheduled_at),
+            started_at: normalize(&item.started_at),
+            ended_at: normalize(&item.ended_at),
+            status,
+            participants: entries,
+        });
+    }
+    // Progression : le vainqueur d'un match terminé est placé dans le match suivant, une seule fois.
+    let capacity = capacity_of(scope.match_type, scope.group_size);
+    for index in 0..planned.len() {
+        let (Some(winner), Some(next)) = (winners[index], planned[index].next) else {
+            continue;
+        };
+        let Some(following) = planned.get_mut(next) else {
+            continue;
+        };
+        if following.participants.iter().any(|e| e.who == winner) {
+            continue;
+        }
+        if following.status != MatchStatus::Scheduled || following.participants.len() >= capacity {
+            return Err(StoreError::InvalidPlan(format!(
+                "match {} : le vainqueur du match {} ne peut pas y avancer.",
+                next + 1,
+                index + 1
+            )));
+        }
+        following.participants.push(EntryPlan {
+            who: winner,
+            stats: serde_json::json!({}),
+            points: 0.0,
+            rank: None,
+            result: None,
+        });
+    }
+    Ok(MatchesPlan {
+        matches: planned,
+        warnings,
+    })
+}
+
+fn normalize(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(|v| normalize_timestamp(v).unwrap_or_else(|| v.to_string()))
 }
 
 #[cfg(test)]
@@ -704,5 +947,171 @@ mod tests {
             .map(|next| item(json!({ "next": next })))
             .collect();
         assert!(!loops(&chain, 0));
+    }
+
+    fn stats() -> Vec<Stat> {
+        vec![Stat {
+            id: Uuid::from_u128(7),
+            name: "Kills".into(),
+            key: "kills".into(),
+            kind: StatType::Flat,
+        }]
+    }
+
+    fn rules() -> Vec<ScoringRule> {
+        vec![ScoringRule {
+            id: Uuid::nil(),
+            tournament_id: Uuid::nil(),
+            stat_id: Uuid::from_u128(7),
+            mode: crate::store::ScoringMode::Linear,
+            coefficient: Some(1.5),
+            points_table: None,
+        }]
+    }
+
+    fn entrants() -> HashMap<Who, Entrant> {
+        ["ann", "bob", "cat", "dan"]
+            .iter()
+            .zip(1u128..)
+            .map(|(name, id)| {
+                (
+                    Who::User((*name).to_string()),
+                    Entrant::User(Uuid::from_u128(id)),
+                )
+            })
+            .collect()
+    }
+
+    fn planned(scope: &StepScope, items: Vec<Value>) -> Result<MatchesPlan, StoreError> {
+        let items: Vec<MatchItem> = items.into_iter().map(item).collect();
+        plan_matches(&items, scope, &entrants(), &rules(), &stats())
+    }
+
+    #[test]
+    fn finished_matches_are_scored_from_the_scoring_rules() {
+        let duel = scope(MatchType::Duel, StepFormat::Pool);
+        let plan = planned(
+            &duel,
+            vec![json!({ "group": 1, "status": "finished", "participants": [
+                { "user": "ann", "stats": { "kills": 3 }, "points": 99 },
+                { "user": "bob", "stats": { "kills": 1 } },
+            ] })],
+        )
+        .unwrap();
+        let entries = &plan.matches[0].participants;
+        assert_eq!((entries[0].points, entries[1].points), (4.5, 1.5));
+        assert_eq!(
+            (entries[0].rank, entries[0].result),
+            (Some(1), Some(MatchResult::Win))
+        );
+        assert_eq!(entries[1].result, Some(MatchResult::Loss));
+        assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+        // Sans statistiques, les points du fichier servent de repli.
+        let plan = planned(
+            &duel,
+            vec![json!({ "group": 1, "status": "finished", "participants": [
+                { "user": "ann", "rank": 1, "points": 7.0 }, { "user": "bob", "rank": 2 },
+            ] })],
+        )
+        .unwrap();
+        assert_eq!(plan.matches[0].participants[0].points, 7.0);
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn winners_advance_once_in_an_elimination() {
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        let semi = |a: &str, b: &str| {
+            json!({ "group": 1, "round": 1, "status": "finished", "next": 2, "participants": [
+                { "user": a, "stats": { "kills": 3 }, "points": 4.5 },
+                { "user": b, "stats": { "kills": 1 }, "points": 1.5 },
+            ] })
+        };
+        let items = vec![
+            semi("ann", "bob"),
+            semi("cat", "dan"),
+            // La finale attend déjà `ann` : elle n'est pas dupliquée.
+            json!({ "group": 1, "round": 2, "participants": [{ "user": "ann" }] }),
+        ];
+        let plan = planned(&single, items.clone()).unwrap();
+        let finalists: Vec<Entrant> = plan.matches[2].participants.iter().map(|e| e.who).collect();
+        assert_eq!(
+            finalists,
+            [
+                Entrant::User(Uuid::from_u128(1)),
+                Entrant::User(Uuid::from_u128(3))
+            ]
+        );
+        assert_eq!(plan.matches[2].participants[1].points, 0.0);
+    }
+
+    #[test]
+    fn progression_order_and_consistency_are_checked() {
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        let semi = |status: &str| {
+            json!({ "group": 1, "status": status, "next": 1, "participants": [
+                { "user": "ann", "stats": { "kills": 3 }, "points": 4.5 },
+                { "user": "bob", "stats": { "kills": 1 }, "points": 1.5 },
+            ] })
+        };
+        // La finale se joue avant la fin de la demi-finale.
+        let found = problems_of(
+            &single,
+            vec![
+                semi("ongoing"),
+                json!({ "group": 1, "status": "ongoing", "participants": [
+                { "user": "ann" }, { "user": "cat" },
+            ] }),
+            ],
+        );
+        assert!(found.contains("avance avant la fin"), "{found}");
+        // La finale est lancée sans le vainqueur de la demi-finale.
+        let found = problems_of(
+            &single,
+            vec![
+                semi("finished"),
+                json!({ "group": 1, "status": "ongoing", "participants": [
+                { "user": "bob" }, { "user": "cat" },
+            ] }),
+            ],
+        );
+        assert!(found.contains("doit y figurer"), "{found}");
+        // Plus de place pour le vainqueur.
+        let found = problems_of(
+            &single,
+            vec![
+                semi("finished"),
+                json!({ "group": 1, "participants": [
+                { "user": "cat" }, { "user": "dan" },
+            ] }),
+            ],
+        );
+        assert!(found.contains("plus de place"), "{found}");
+        // Un match d'élimination terminé à égalité n'a pas de vainqueur.
+        let tie = json!({ "group": 1, "status": "finished", "next": 1, "participants": [
+            { "user": "ann", "stats": { "kills": 2 }, "points": 3.0 },
+            { "user": "bob", "stats": { "kills": 2 }, "points": 3.0 },
+        ] });
+        let found = problems_of(&single, vec![tie, json!({ "group": 1 })]);
+        assert!(found.contains("un seul vainqueur"), "{found}");
+    }
+
+    #[test]
+    fn a_tie_in_an_elimination_is_an_invalid_plan_even_without_given_points() {
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        let result = planned(
+            &single,
+            vec![
+                json!({ "group": 1, "status": "finished", "next": 1, "participants": [
+                    { "user": "ann", "stats": { "kills": 2 } },
+                    { "user": "bob", "stats": { "kills": 2 } },
+                ] }),
+                json!({ "group": 1 }),
+            ],
+        );
+        assert!(
+            matches!(result, Err(StoreError::InvalidPlan(_))),
+            "{result:?}"
+        );
     }
 }

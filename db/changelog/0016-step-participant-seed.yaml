@@ -1,0 +1,22 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0016-step-participant-seed
+      author: epickem
+      changes:
+        - addColumn:
+            tableName: step_participant
+            columns:
+              - column:
+                  name: seed
+                  type: integer
+                  remarks: Tête de série du participant dans l'étape (1 = meilleure) ; vide si le placement n'est pas semé
+        - sql:
+            sql: >-
+              ALTER TABLE step_participant
+              ADD CONSTRAINT step_participant_seed_check CHECK (seed IS NULL OR seed > 0);
+              CREATE UNIQUE INDEX step_participant_seed_key ON step_participant (step_id, seed)
+              WHERE seed IS NOT NULL
+      rollback:
+        - dropColumn:
+            tableName: step_participant
+            columnName: seed

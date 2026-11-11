@@ -4,6 +4,7 @@
 //! [`MemoryStore`] sert aux tests sans base.
 
 mod games;
+mod imports;
 mod matches;
 mod memory;
 mod postgres;
@@ -13,6 +14,10 @@ mod teams;
 mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
+pub use self::imports::{
+    Entrant, EntryPlan, ImportPlan, MatchPlan, MemberPlan, ParticipantPlan, StepPlan, TeamPlan,
+    TournamentPlan,
+};
 pub use self::matches::{
     Bracket, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchResult,
     MatchScore, MatchStatus, MatchUpdate,
@@ -146,6 +151,11 @@ pub enum StoreError {
     TournamentFull,
     /// Une étape occupe déjà cette position dans le tournoi.
     StepPositionTaken,
+    /// Le tournoi est `ongoing` ou `finished` : ses résultats sont verrouillés.
+    TournamentLocked,
+    /// Le contenu d'un fichier d'import est incohérent : détecté en planifiant l'import, pas une
+    /// panne.
+    InvalidPlan(String),
     /// L'étape n'est pas dans l'état attendu pour cette opération.
     StepState,
     /// Le match n'est pas dans l'état attendu pour cette opération.
@@ -175,6 +185,10 @@ impl fmt::Display for StoreError {
             StoreError::AlreadyParticipant => f.write_str("participant déjà inscrit au tournoi"),
             StoreError::TournamentFull => f.write_str("tournoi complet"),
             StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
+            StoreError::InvalidPlan(detail) => f.write_str(detail),
+            StoreError::TournamentLocked => {
+                f.write_str("tournoi en cours ou terminé : résultats verrouillés")
+            }
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
@@ -667,6 +681,21 @@ pub trait AuthStore: Send + Sync {
         &self,
         tournaments: Vec<TournamentImport>,
     ) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Fixe la tête de série de participants d'une étape lancée (`seeds` : inscrit, rang), en une
+    /// seule opération ; `false` si l'étape n'existe pas. Les rangs sont uniques dans l'étape.
+    async fn set_step_seeds(
+        &self,
+        step_id: Uuid,
+        seeds: Vec<(Uuid, i32)>,
+    ) -> Result<bool, StoreError>;
+
+    /// Écrit tout le plan d'import en **une seule transaction** : en cas d'erreur, rien n'est
+    /// modifié. Un tournoi existant (même jeu et même nom) est mis à jour et ses barème, équipes,
+    /// inscrits, étapes et matchs sont remplacés ; sinon il est créé. Un tournoi existant
+    /// `ongoing` ou `finished` est refusé ([`StoreError::TournamentLocked`]). Renvoie chaque
+    /// tournoi avec `true` s'il vient d'être créé, dans l'ordre du plan.
+    async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError>;
 
     /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
     /// et les équipes existent, et les équipes sont celles du tournoi.

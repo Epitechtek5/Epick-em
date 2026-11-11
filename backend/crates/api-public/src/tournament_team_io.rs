@@ -7,9 +7,9 @@
 //! Les comptes sont désignés par leur nom d'utilisateur et l'équipe globale copiée (`origin`) par
 //! son nom, dans le jeu du tournoi. Importer remplace toutes les équipes du tournoi.
 
-use crate::store::{AuthStore, StoreError, TeamRole, TournamentTeamInput};
+use crate::store::{AuthStore, StoreError, TeamPlan, TeamRole, TournamentTeamInput};
 use crate::teams::validate;
-use crate::tournament_io::TournamentChild;
+use crate::tournament_io::{ChildPlan, PlanScope, TournamentChild};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -219,6 +219,49 @@ impl TournamentChild for StoreTournamentTeams {
         }
         problems.truncate(MAX_REPORTED_ERRORS);
         Ok((!problems.is_empty()).then(|| problems.join(" ")))
+    }
+
+    async fn plan_in(
+        &self,
+        game_id: Uuid,
+        items: &[Value],
+        _scope: &PlanScope,
+    ) -> Result<Option<ChildPlan>, StoreError> {
+        let teams = parse(items).map_err(StoreError::Other)?;
+        let globals = self.global_teams(game_id).await?;
+        let mut planned = Vec::with_capacity(teams.len());
+        for team in teams {
+            let owner_id = self
+                .user_id(&team.owner)
+                .await?
+                .ok_or_else(|| other(format!("compte {} introuvable", team.owner)))?;
+            let mut members = Vec::with_capacity(team.members.len());
+            for member in &team.members {
+                let user_id = self
+                    .user_id(&member.username)
+                    .await?
+                    .ok_or_else(|| other(format!("compte {} introuvable", member.username)))?;
+                members.push((user_id, member.role));
+            }
+            planned.push(TeamPlan {
+                origin: team
+                    .origin
+                    .as_ref()
+                    .and_then(|origin| globals.get(&origin.trim().to_lowercase()).copied()),
+                name: team.name.trim().to_string(),
+                tag: team
+                    .tag
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty()),
+                picture_url: team
+                    .picture_url
+                    .map(|u| u.trim().to_string())
+                    .filter(|u| !u.is_empty()),
+                owner_id,
+                members,
+            });
+        }
+        Ok(Some(ChildPlan::Teams(planned)))
     }
 
     async fn import(

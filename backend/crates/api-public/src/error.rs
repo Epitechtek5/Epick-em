@@ -68,6 +68,12 @@ pub enum ApiError {
     InvalidResetToken,
     EmailUnverified,
     VerificationLimited,
+    /// Aperçu d'import inconnu, expiré ou déjà appliqué.
+    ImportPreviewExpired,
+    /// L'état de la base a changé depuis l'aperçu : il ne s'applique plus.
+    ImportPreviewStale,
+    /// L'aperçu contient des opérations destructives qui exigent une confirmation explicite.
+    ImportConfirmationRequired,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -190,6 +196,21 @@ impl ApiError {
                 StatusCode::BAD_REQUEST,
                 "invalid_reset_token",
                 "Lien de réinitialisation invalide ou expiré",
+            ),
+            ApiError::ImportPreviewExpired => (
+                StatusCode::GONE,
+                "import_preview_expired",
+                "Aperçu d'import inconnu, expiré ou déjà appliqué",
+            ),
+            ApiError::ImportPreviewStale => (
+                StatusCode::CONFLICT,
+                "import_preview_stale",
+                "Les données ont changé depuis l'aperçu : refaites l'aperçu",
+            ),
+            ApiError::ImportConfirmationRequired => (
+                StatusCode::CONFLICT,
+                "import_confirmation_required",
+                "Cet import remplace des données existantes : confirmez explicitement",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
