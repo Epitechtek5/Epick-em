@@ -3,14 +3,14 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, Bracket, GameInput, GameUpdate, MatchFinish, MatchInput, MatchResult, MatchScore,
-    MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
-    ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
-    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
-    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
-    StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
-    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
-    UserUpdate,
+    AuthStore, Bracket, GameInput, GameUpdate, GeneratedMatch, Generation, MatchFinish, MatchInput,
+    MatchResult, MatchScore, MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport,
+    ParticipantInput, ParticipantStatus, ParticipantType, PgStore, Placement, Role, ScoringMode,
+    ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate,
+    StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus,
+    StepStart, StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode,
+    TeamUpdate, TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput,
+    TournamentUpdate, UserUpdate,
 };
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
@@ -1671,6 +1671,7 @@ fn step_definition(
         matches_per_group: 3,
         advance_per_group: advance,
         tiebreak: serde_json::json!(["wins"]),
+        rules: Default::default(),
     }
 }
 
@@ -1747,6 +1748,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
         .start_step(StepStart {
             step_id: first.id,
             groups: vec![players.clone()],
+            seeds: Vec::new(),
         })
         .await
         .unwrap()
@@ -1757,6 +1759,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
             .start_step(StepStart {
                 step_id: first.id,
                 groups: vec![players.clone()],
+                seeds: Vec::new(),
             })
             .await,
         Err(StoreError::StepState)
@@ -1766,6 +1769,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
             .start_step(StepStart {
                 step_id: Uuid::new_v4(),
                 groups: vec![],
+                seeds: Vec::new(),
             })
             .await
             .unwrap()
@@ -1826,6 +1830,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
                 next: Some(StepStart {
                     step_id: last.id,
                     groups: vec![vec![Uuid::new_v4()]],
+                    seeds: Vec::new(),
                 }),
             })
             .await
@@ -1844,6 +1849,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
             next: Some(StepStart {
                 step_id: last.id,
                 groups: vec![vec![players[0], players[1]]],
+                seeds: Vec::new(),
             }),
         })
         .await
@@ -1948,6 +1954,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .start_step(StepStart {
             step_id: first.id,
             groups: vec![players.clone()],
+            seeds: Vec::new(),
         })
         .await
         .unwrap();
@@ -1977,6 +1984,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
             next: Some(StepStart {
                 step_id: last.id,
                 groups: vec![vec![players[0], players[1]]],
+                seeds: Vec::new(),
             }),
         })
         .await
@@ -2008,6 +2016,8 @@ async fn steps_export_and_reimport_into_another_tournament() {
                     points: 2.5,
                     rank: Some(1),
                     result: Some(MatchResult::Win),
+                    games_won: None,
+                    slot: None,
                 },
                 MatchScore {
                     participant_id: players[1],
@@ -2015,9 +2025,12 @@ async fn steps_export_and_reimport_into_another_tournament() {
                     points: 1.0,
                     rank: Some(2),
                     result: Some(MatchResult::Loss),
+                    games_won: None,
+                    slot: None,
                 },
             ],
-            advance: None,
+            placements: Vec::new(),
+            cancel: Vec::new(),
             step_points: vec![(players[0], 2.5), (players[1], 1.0)],
         })
         .await
@@ -2324,6 +2337,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         .start_step(StepStart {
             step_id: step.id,
             groups: vec![players.clone()],
+            seeds: Vec::new(),
         })
         .await
         .unwrap();
@@ -2418,6 +2432,8 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         points,
         rank: Some(rank),
         result: Some(result),
+        games_won: None,
+        slot: None,
     };
     let scores = vec![
         score(players[0], 3, 4.5, 1, MatchResult::Win),
@@ -2464,7 +2480,12 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         .finish_match(MatchFinish {
             match_id: semi.id,
             scores,
-            advance: Some((last.id, players[0])),
+            placements: vec![Placement {
+                match_id: last.id,
+                participant_id: players[0],
+                slot: None,
+            }],
+            cancel: Vec::new(),
             step_points: vec![(players[0], 4.5), (players[1], 1.5)],
         })
         .await
@@ -2495,7 +2516,8 @@ async fn matches_are_stored_scored_and_finished_atomically() {
             .finish_match(MatchFinish {
                 match_id: semi.id,
                 scores: vec![],
-                advance: None,
+                placements: Vec::new(),
+                cancel: Vec::new(),
                 step_points: vec![],
             })
             .await
@@ -2693,4 +2715,247 @@ async fn expired_password_reset_tokens_are_refused() {
             .password_hash,
         "old"
     );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn generated_matches_persist_their_links_and_are_generated_once() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: StepDefinition {
+                format: StepFormat::DoubleElim,
+                match_type: MatchType::Duel,
+                rules: api_public::store::StepRules {
+                    best_of: 3,
+                    ..Default::default()
+                },
+                ..step_definition(1, 1, 4, 1)
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(step.rules.best_of, 3, "les réglages sont conservés");
+    // Les têtes de série sont enregistrées au lancement, dans l'ordre donné.
+    let seeds = vec![players[2], players[0], players[3], players[1]];
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![seeds.clone()],
+            seeds: seeds.clone(),
+        })
+        .await
+        .unwrap();
+    let seeded = store.list_step_participants(step.id).await.unwrap();
+    for (index, id) in seeds.iter().enumerate() {
+        let member = seeded.iter().find(|m| m.participant_id == *id).unwrap();
+        assert_eq!(member.seed, Some(i32::try_from(index + 1).unwrap()));
+    }
+    let group = store.list_step_groups(step.id).await.unwrap()[0].id;
+
+    // Une mini-génération : une demi-finale, ses deux destinations (vainqueur et perdant) et un
+    // match exempt.
+    let planned = |round: i32,
+                   number: i32,
+                   bracket: Option<Bracket>,
+                   participants: Vec<(Uuid, Option<i32>)>,
+                   next: Option<(usize, i32)>,
+                   loser_next: Option<(usize, i32)>,
+                   bye: Option<f64>| GeneratedMatch {
+        group_id: group,
+        round,
+        number,
+        bracket,
+        best_of: 3,
+        participants,
+        next,
+        loser_next,
+        bye_points: bye,
+    };
+    let generation = |initial: bool, matches: Vec<GeneratedMatch>| Generation {
+        step_id: step.id,
+        game_id,
+        matches,
+        step_points: vec![(players[3], 3.0)],
+        initial,
+    };
+    let batch = vec![
+        planned(
+            1,
+            1,
+            Some(Bracket::Winners),
+            vec![(players[0], Some(1)), (players[1], Some(2))],
+            Some((1, 1)),
+            Some((2, 2)),
+            None,
+        ),
+        planned(2, 1, Some(Bracket::Winners), vec![], None, None, None),
+        planned(1, 1, Some(Bracket::Losers), vec![], None, None, None),
+        planned(
+            1,
+            2,
+            Some(Bracket::Winners),
+            vec![(players[3], Some(1))],
+            None,
+            None,
+            Some(3.0),
+        ),
+    ];
+    // Deux générations concurrentes : une seule réussit, sans doublon.
+    let (first, second) = tokio::join!(
+        store.generate_matches(generation(true, batch.clone())),
+        store.generate_matches(generation(true, batch.clone())),
+    );
+    let (created, refused) = match (first, second) {
+        (Ok(created), Err(error)) | (Err(error), Ok(created)) => (created, error),
+        other => panic!("une seule génération doit réussir : {other:?}"),
+    };
+    assert!(matches!(refused, StoreError::StepState), "{refused}");
+    assert_eq!(created.len(), 4);
+    assert_eq!(
+        store.list_matches(step.id, None, None).await.unwrap().len(),
+        4
+    );
+
+    let semi = &created[0];
+    assert_eq!(semi.number, Some(1));
+    assert_eq!(semi.best_of, 3);
+    assert_eq!(semi.next_match_id, Some(created[1].id));
+    assert_eq!(semi.next_slot, Some(1));
+    assert_eq!(semi.loser_next_match_id, Some(created[2].id));
+    assert_eq!(semi.loser_next_slot, Some(2));
+    let bye = &created[3];
+    assert_eq!(bye.status, MatchStatus::Finished);
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    let placed = members
+        .iter()
+        .find(|p| p.match_id == semi.id && p.participant_id == players[1]);
+    assert_eq!(placed.unwrap().slot, Some(2));
+    let exempt = members.iter().find(|p| p.match_id == bye.id).unwrap();
+    assert_eq!((exempt.points, exempt.rank), (3.0, Some(1)));
+    let totals = store.list_step_participants(step.id).await.unwrap();
+    assert_eq!(
+        totals
+            .iter()
+            .find(|m| m.participant_id == players[3])
+            .unwrap()
+            .points,
+        3.0
+    );
+
+    // Ronde suivante : refusée si elle existe déjà, acceptée sinon.
+    let again = vec![planned(
+        1,
+        1,
+        Some(Bracket::Winners),
+        vec![],
+        None,
+        None,
+        None,
+    )];
+    assert!(matches!(
+        store.generate_matches(generation(false, again)).await,
+        Err(StoreError::StepState)
+    ));
+    let fresh = vec![planned(
+        9,
+        1,
+        None,
+        vec![(players[0], Some(1)), (players[1], Some(2))],
+        None,
+        None,
+        None,
+    )];
+    assert_eq!(
+        store
+            .generate_matches(generation(false, fresh))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // La clôture place le vainqueur et le perdant, et annule un match devenu inutile.
+    store
+        .finish_match(MatchFinish {
+            match_id: semi.id,
+            scores: vec![
+                MatchScore {
+                    participant_id: players[0],
+                    stats: serde_json::json!({}),
+                    points: 3.0,
+                    rank: Some(1),
+                    result: Some(MatchResult::Win),
+                    games_won: Some(2),
+                    slot: None,
+                },
+                MatchScore {
+                    participant_id: players[1],
+                    stats: serde_json::json!({}),
+                    points: 0.0,
+                    rank: Some(2),
+                    result: Some(MatchResult::Loss),
+                    games_won: Some(1),
+                    slot: None,
+                },
+            ],
+            placements: vec![
+                Placement {
+                    match_id: created[1].id,
+                    participant_id: players[0],
+                    slot: Some(1),
+                },
+                Placement {
+                    match_id: created[2].id,
+                    participant_id: players[1],
+                    slot: Some(2),
+                },
+            ],
+            cancel: vec![created[1].id],
+            step_points: vec![(players[0], 3.0)],
+        })
+        .await
+        .unwrap();
+    let after = store.list_matches(step.id, None, None).await.unwrap();
+    let cancelled = after.iter().find(|m| m.id == created[1].id).unwrap();
+    assert_eq!(cancelled.status, MatchStatus::Cancelled);
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    let dropped = members
+        .iter()
+        .find(|p| p.match_id == created[2].id && p.participant_id == players[1])
+        .unwrap();
+    assert_eq!(dropped.slot, Some(2));
+    let played = members
+        .iter()
+        .find(|p| p.match_id == semi.id && p.participant_id == players[0])
+        .unwrap();
+    assert_eq!(played.games_won, Some(2));
+
+    // Supprimer un match ne laisse pas de lien vers lui.
+    store.delete_match(created[2].id).await.unwrap();
+    let relinked = store.find_match(semi.id).await.unwrap().unwrap();
+    assert_eq!(relinked.loser_next_match_id, None);
 }

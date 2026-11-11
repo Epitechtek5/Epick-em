@@ -33,6 +33,7 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::tournament_teams::routes)
         .configure(crate::tournaments::routes)
         .configure(crate::steps::routes)
+        .configure(crate::generation::routes)
         .configure(crate::matches::routes);
 }
 
