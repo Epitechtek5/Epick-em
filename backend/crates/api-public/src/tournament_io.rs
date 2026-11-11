@@ -617,7 +617,14 @@ async fn prepare(
                     reasons
                         .push("name : ce tournoi apparaît plusieurs fois dans le fichier.".into());
                 }
-                if let Some(current) = lookups.existing.get(&(game_id, input.name.to_lowercase()))
+                let current = lookups.existing.get(&(game_id, input.name.to_lowercase()));
+                if let Some(current) = current
+                    && crate::external::is_external(state, current.id).await?
+                {
+                    reasons.push(
+                        "ce tournoi est géré par une source externe : import impossible.".into(),
+                    );
+                } else if let Some(current) = current
                     && matches!(
                         current.status,
                         TournamentStatus::Ongoing | TournamentStatus::Finished

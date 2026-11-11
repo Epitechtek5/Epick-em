@@ -23,6 +23,8 @@ use actix_web::{HttpResponse, post, web};
 use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use connectors::ConnectorRegistry;
+use connectors::sync::{MemorySyncStore, SyncPolicy, SyncService};
 use infra::{Cache, MemoryCache};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -63,6 +65,9 @@ pub struct AppState {
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
     pub(crate) public_url: Arc<str>,
+    /// Sources externes et synchronisation ([`external`](crate::external)). Par défaut aucune
+    /// source et un état en mémoire.
+    pub(crate) sync: Arc<SyncService>,
 }
 
 impl AppState {
@@ -82,6 +87,11 @@ impl AppState {
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
+            sync: Arc::new(SyncService::new(
+                ConnectorRegistry::new(),
+                Arc::new(MemorySyncStore::new()),
+                SyncPolicy::default(),
+            )),
         })
     }
 
@@ -112,6 +122,12 @@ impl AppState {
     /// Branche le sous-niveau qui importe et exporte les statistiques des jeux.
     pub fn with_stats(mut self, stats: Arc<dyn GameStats>) -> Self {
         self.stats = stats;
+        self
+    }
+
+    /// Branche les sources externes et leur synchronisation (PostgreSQL en production).
+    pub fn with_sync(mut self, sync: Arc<SyncService>) -> Self {
+        self.sync = sync;
         self
     }
 

@@ -1,0 +1,51 @@
+{
+  "event": {
+    "id": 900,
+    "name": "Ultimate Singles",
+    "slug": "tournament/epick-open-2026/event/ultimate-singles",
+    "startAt": 1767225600,
+    "state": "ACTIVE",
+    "numEntrants": 4,
+    "videogame": {
+      "name": "Super Smash Bros. Ultimate"
+    },
+    "phases": [
+      {
+        "id": 1000,
+        "name": "Pools",
+        "phaseOrder": 1,
+        "bracketType": "ROUND_ROBIN",
+        "state": "COMPLETED",
+        "phaseGroups": {
+          "nodes": [
+            {
+              "id": 2000,
+              "displayIdentifier": "A1",
+              "bracketType": "ROUND_ROBIN",
+              "state": 3,
+              "bracketUrl": "https://www.start.gg/tournament/epick-open-2026/event/ultimate-singles/brackets/1000/2000"
+            }
+          ]
+        }
+      },
+      {
+        "id": 1001,
+        "name": "Top 4",
+        "phaseOrder": 2,
+        "bracketType": "DOUBLE_ELIMINATION",
+        "state": "ACTIVE",
+        "phaseGroups": {
+          "nodes": [
+            {
+              "id": 2001,
+              "displayIdentifier": "1",
+              "bracketType": null,
+              "state": 2,
+              "bracketUrl": null
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

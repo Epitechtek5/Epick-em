@@ -1,0 +1,35 @@
+{
+  "tournament": {
+    "id": 500,
+    "slug": "tournament/epick-open-2026",
+    "name": "Epick Open 2026",
+    "url": "https://www.start.gg/tournament/epick-open-2026",
+    "startAt": 1767225600,
+    "endAt": 1767312000,
+    "state": 2,
+    "events": [
+      {
+        "id": 900,
+        "name": "Ultimate Singles",
+        "slug": "tournament/epick-open-2026/event/ultimate-singles",
+        "startAt": 1767225600,
+        "state": "ACTIVE",
+        "numEntrants": 4,
+        "videogame": {
+          "name": "Super Smash Bros. Ultimate"
+        }
+      },
+      {
+        "id": 901,
+        "name": "Ultimate Doubles",
+        "slug": "tournament/epick-open-2026/event/ultimate-doubles",
+        "startAt": 1767225600,
+        "state": "CREATED",
+        "numEntrants": 0,
+        "videogame": {
+          "name": "Super Smash Bros. Ultimate"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,173 @@
+{
+  "event": {
+    "state": "ACTIVE",
+    "sets": {
+      "pageInfo": {
+        "totalPages": 1
+      },
+      "nodes": [
+        {
+          "id": 3001,
+          "round": 1,
+          "fullRoundText": "Round 1",
+          "state": 3,
+          "winnerId": 7002,
+          "startedAt": 1767226000,
+          "completedAt": 1767227000,
+          "displayScore": "Alpha 1 - Bravo 2",
+          "phaseGroup": {
+            "id": 2000,
+            "phase": {
+              "id": 1000
+            }
+          },
+          "slots": [
+            {
+              "entrant": {
+                "id": 7001
+              },
+              "standing": {
+                "stats": {
+                  "score": {
+                    "value": 1
+                  }
+                }
+              }
+            },
+            {
+              "entrant": {
+                "id": 7002
+              },
+              "standing": {
+                "stats": {
+                  "score": {
+                    "value": 2
+                  }
+                }
+              }
+            }
+          ],
+          "games": [
+            {
+              "id": 1,
+              "orderNum": 1,
+              "winnerId": 7001,
+              "stage": {
+                "name": "Battlefield"
+              },
+              "selections": [
+                {
+                  "entrant": {
+                    "id": 7001
+                  },
+                  "character": {
+                    "name": "Mario"
+                  }
+                },
+                {
+                  "entrant": {
+                    "id": 7002
+                  },
+                  "character": {
+                    "name": "Link"
+                  }
+                }
+              ]
+            },
+            {
+              "id": 2,
+              "orderNum": 2,
+              "winnerId": 7002,
+              "stage": {
+                "name": "Final Destination"
+              },
+              "selections": [
+                {
+                  "entrant": {
+                    "id": 7001
+                  },
+                  "character": {
+                    "name": "Mario"
+                  }
+                },
+                {
+                  "entrant": {
+                    "id": 7002
+                  },
+                  "character": {
+                    "name": "Link"
+                  }
+                }
+              ]
+            },
+            {
+              "id": 3,
+              "orderNum": 3,
+              "winnerId": 7001,
+              "stage": null,
+              "selections": [
+                {
+                  "entrant": {
+                    "id": 7001
+                  },
+                  "character": {
+                    "name": "Mario"
+                  }
+                },
+                {
+                  "entrant": {
+                    "id": 7002
+                  },
+                  "character": null
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 3003,
+          "round": 1,
+          "fullRoundText": "Winners Semi-Final",
+          "state": 3,
+          "winnerId": 7001,
+          "startedAt": 1767228000,
+          "completedAt": 1767229000,
+          "displayScore": null,
+          "phaseGroup": {
+            "id": 2001,
+            "phase": {
+              "id": 1001
+            }
+          },
+          "slots": [
+            {
+              "entrant": {
+                "id": 7001
+              },
+              "standing": {
+                "stats": {
+                  "score": {
+                    "value": 3
+                  }
+                }
+              }
+            },
+            {
+              "entrant": {
+                "id": 7003
+              },
+              "standing": {
+                "stats": {
+                  "score": {
+                    "value": 1
+                  }
+                }
+              }
+            }
+          ],
+          "games": []
+        }
+      ]
+    }
+  }
+}
