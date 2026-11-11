@@ -486,6 +486,8 @@ struct Lookups {
     games: HashMap<String, Uuid>,
     /// Statistiques par clé.
     stats: HashMap<String, Uuid>,
+    /// Statistiques qui ne sont pas numériques (`select`, `mvp`) : hors barème.
+    non_numeric: HashSet<Uuid>,
     /// Liaisons (statistique, jeu) existantes.
     links: HashSet<(Uuid, Uuid)>,
     /// Comptes par nom d'utilisateur en minuscules, `None` s'il n'existe pas.
@@ -504,10 +506,16 @@ impl Lookups {
             .into_iter()
             .map(|game| (game.name.to_lowercase(), game.id))
             .collect();
-        let stats = store
+        let all_stats = store
             .list_stats(i64::MAX, 0)
             .await
-            .map_err(ApiError::internal)?
+            .map_err(ApiError::internal)?;
+        let non_numeric = all_stats
+            .iter()
+            .filter(|stat| !stat.kind.is_numeric())
+            .map(|stat| stat.id)
+            .collect();
+        let stats = all_stats
             .into_iter()
             .map(|stat| (stat.key, stat.id))
             .collect();
@@ -552,6 +560,7 @@ impl Lookups {
         Ok(Lookups {
             games,
             stats,
+            non_numeric,
             links,
             users,
             existing,
@@ -709,6 +718,12 @@ fn check_rules(
         if game_id.is_some_and(|game| !lookups.links.contains(&(stat_id, game))) {
             reasons.push(format!(
                 "scoring_rules : la statistique « {} » n'est pas liée au jeu du tournoi.",
+                rule.stat
+            ));
+        }
+        if lookups.non_numeric.contains(&stat_id) {
+            reasons.push(format!(
+                "scoring_rules : la statistique « {} » n'est pas numérique.",
                 rule.stat
             ));
         }
