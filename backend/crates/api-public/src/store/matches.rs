@@ -116,7 +116,6 @@ pub struct MatchFinish {
     pub match_id: Uuid,
     pub scores: Vec<MatchScore>,
     pub advance: Option<(Uuid, Uuid)>,
-    pub step_points: Vec<(Uuid, f64)>,
 }
 
 /// Match d'une étape tel qu'un fichier le décrit. Les horodatages sont en RFC 3339 UTC.

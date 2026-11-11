@@ -24,12 +24,16 @@ Monorepo unique (voir [ADR-001](docs/adr/001-monorepo.md)) :
 | `db/` | Changelogs Liquibase + Dockerfile de l'image de migration |
 | `web/` | Front web |
 | `mobile/` | Application mobile |
-| `loadtest/` | Scénarios k6 |
+| `loadtest/` | Scénarios k6 ([résultats mesurés](docs/exploitation/tests-de-charge.md)) |
 | `deploy/helm/epickem/` | Chart Helm |
 | `deploy/ansible/` | Provisioning VM, k3s, déploiement |
 | `docs/` | Documentation et [ADR](docs/adr/README.md) |
 
 Chaque service est publié comme image Docker indépendante sur GHCR, taguée avec le SHA du commit et, pour une release `vX.Y.Z`, avec sa version semver.
+
+## Tests, accessibilité et performance
+
+Commandes de test, couverture du moteur de compétition, contrôles d'accessibilité et limites : [`docs/qualite-et-performance.md`](docs/qualite-et-performance.md). Tests de charge k6 (seuils, environnement, latences p50/p95/p99 mesurées) : [`docs/exploitation/tests-de-charge.md`](docs/exploitation/tests-de-charge.md).
 
 ## CI
 

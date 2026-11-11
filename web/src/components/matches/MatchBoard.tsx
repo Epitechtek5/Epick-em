@@ -94,7 +94,13 @@ export function MatchBoard({
       {byGroupAndRound(matches, groups).map((block) => {
         const id = `match-group-${block.group_id ?? 'none'}`
         return (
-          <section key={id} aria-labelledby={id} className="grid gap-3 rounded-xl bg-background/60 p-3 ring-1 ring-foreground/10 sm:p-4 dark:bg-input/20">
+          // Nom de région distinct du classement du même groupe (`StepGroups`) : deux régions
+          // homonymes se confondent dans la liste des repères d'un lecteur d'écran.
+          <section
+            key={id}
+            aria-label={block.index === null ? t('matches.unknownGroup') : t('matches.groupMatches', { index: block.index })}
+            className="grid gap-3 rounded-xl bg-background/60 p-3 ring-1 ring-foreground/10 sm:p-4 dark:bg-input/20"
+          >
             <h3 id={id} className="font-semibold">
               {block.index === null ? t('matches.unknownGroup') : t('matches.groupNumber', { index: block.index })}
             </h3>

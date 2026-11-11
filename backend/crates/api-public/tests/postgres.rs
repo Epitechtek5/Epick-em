@@ -2018,7 +2018,6 @@ async fn steps_export_and_reimport_into_another_tournament() {
                 },
             ],
             advance: None,
-            step_points: vec![(players[0], 2.5), (players[1], 1.0)],
         })
         .await
         .unwrap();
@@ -2465,7 +2464,6 @@ async fn matches_are_stored_scored_and_finished_atomically() {
             match_id: semi.id,
             scores,
             advance: Some((last.id, players[0])),
-            step_points: vec![(players[0], 4.5), (players[1], 1.5)],
         })
         .await
         .unwrap()
@@ -2496,7 +2494,6 @@ async fn matches_are_stored_scored_and_finished_atomically() {
                 match_id: semi.id,
                 scores: vec![],
                 advance: None,
-                step_points: vec![],
             })
             .await
             .map(|_| ()),

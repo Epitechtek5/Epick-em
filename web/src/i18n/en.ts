@@ -1041,6 +1041,7 @@ export const en: Messages = {
     participantsOf: 'Participants of match {number}',
     groupLabel: 'Group',
     groupNumber: 'Group {index}',
+    groupMatches: 'Group {index} matches',
     unknownGroup: 'Unknown group',
     groupFixed: 'A match cannot change group.',
     chooseGroup: 'Choose a group',

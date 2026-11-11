@@ -48,17 +48,19 @@ export function SectionCard({
   )
 }
 
-// Tuile de chiffre clé (libellé + valeur), dans une liste de définitions.
+// Tuile de chiffre clé (libellé + valeur), dans une liste de définitions. La tuile est le
+// groupe `dt`/`dd` lui-même (seuls enfants permis dans un `<dl>`) ; l'icône, décorative, est
+// placée dans le `dt` et masquée aux lecteurs d'écran.
 export function FactTile({ icon, label, children }: { icon: IconSvgElement; label: string; children: ReactNode }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl bg-card p-4 shadow-sm ring-1 ring-foreground/10">
-      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground/70">
-        <Icon icon={icon} size={18} />
-      </span>
-      <div className="grid min-w-0 gap-0.5">
-        <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</dt>
-        <dd className="text-sm font-semibold break-words">{children}</dd>
-      </div>
+    <div className="relative grid min-h-17 min-w-0 content-start gap-0.5 rounded-xl bg-card p-4 pl-16 shadow-sm ring-1 ring-foreground/10">
+      <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        <span aria-hidden="true" className="absolute top-4 left-4 grid size-9 place-items-center rounded-lg bg-muted text-foreground/70">
+          <Icon icon={icon} size={18} />
+        </span>
+        {label}
+      </dt>
+      <dd className="text-sm font-semibold break-words">{children}</dd>
     </div>
   )
 }

@@ -1823,15 +1823,6 @@ impl AuthStore for MemoryStore {
                 .match_participants
                 .push(empty_participant(next_id, participant_id));
         }
-        for (participant_id, points) in finish.step_points {
-            if let Some(member) = state
-                .step_participants
-                .iter_mut()
-                .find(|p| p.step_id == step_id && p.participant_id == participant_id)
-            {
-                member.points = points;
-            }
-        }
         let now = now_rfc3339();
         let m = state
             .matches
@@ -1842,7 +1833,36 @@ impl AuthStore for MemoryStore {
         m.started_at.get_or_insert(now.clone());
         m.ended_at = Some(now.clone());
         m.updated_at = now;
-        Ok(Some(m.clone()))
+        let finished = m.clone();
+        // Total de l'étape recalculé depuis ses matchs terminés, comme PostgreSQL.
+        let done: Vec<Uuid> = state
+            .matches
+            .iter()
+            .filter(|m| m.step_id == step_id && m.status == MatchStatus::Finished)
+            .map(|m| m.id)
+            .collect();
+        let players: Vec<Uuid> = state
+            .match_participants
+            .iter()
+            .filter(|p| p.match_id == finish.match_id)
+            .map(|p| p.participant_id)
+            .collect();
+        for participant_id in players {
+            let total: f64 = state
+                .match_participants
+                .iter()
+                .filter(|p| p.participant_id == participant_id && done.contains(&p.match_id))
+                .map(|p| p.points)
+                .sum();
+            if let Some(member) = state
+                .step_participants
+                .iter_mut()
+                .find(|p| p.step_id == step_id && p.participant_id == participant_id)
+            {
+                member.points = total;
+            }
+        }
+        Ok(Some(finished))
     }
 
     async fn replace_step_matches(

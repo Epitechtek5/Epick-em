@@ -1039,6 +1039,7 @@ export const fr = {
     participantsOf: 'Participants du match {number}',
     groupLabel: 'Groupe',
     groupNumber: 'Groupe {index}',
+    groupMatches: 'Matchs du groupe {index}',
     unknownGroup: 'Groupe inconnu',
     groupFixed: 'Le groupe d’un match ne change pas.',
     chooseGroup: 'Choisir un groupe',
