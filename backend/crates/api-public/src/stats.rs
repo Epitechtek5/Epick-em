@@ -5,10 +5,11 @@
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
-use crate::store::{Stat, StatInput, StatType, StatUpdate, StoreError};
+use crate::store::{Stat, StatInput, StatOption, StatScope, StatType, StatUpdate, StoreError};
 use crate::users::require_admin;
 use actix_web::{HttpResponse, delete, get, patch, post, put, web};
 use serde::Deserialize;
+use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
@@ -17,6 +18,7 @@ const DEFAULT_PAGE_SIZE: i64 = 50;
 const MAX_PAGE_SIZE: i64 = 100;
 const NAME_MAX: usize = 64;
 const KEY_MAX: usize = 64;
+const OPTIONS_MAX: usize = 500;
 
 /// Routes des statistiques, avec leur documentation OpenAPI.
 pub fn routes(cfg: &mut ServiceConfig) {
@@ -29,6 +31,8 @@ pub fn routes(cfg: &mut ServiceConfig) {
         .service(update_stat)
         .service(delete_stat)
         .service(list_game_stats)
+        .service(list_stat_options)
+        .service(set_stat_options)
         .service(link_stat)
         .service(unlink_stat);
 }
@@ -44,9 +48,14 @@ struct CreateStatRequest {
         example = "kills"
     )]
     key: String,
-    /// `flat` (valeur brute) ou `percent` (pourcentage).
+    /// `flat` (valeur brute), `percent` (pourcentage), `select` (choix parmi les options du jeu)
+    /// ou `mvp` (participant ou joueur désigné meilleur joueur de la partie).
     #[serde(rename = "type")]
     kind: StatType,
+    /// `participant` (une valeur par participant) ou `match` (attribut de la partie : carte,
+    /// MVP...). `participant` par défaut, `match` pour `mvp` ; `flat` et `percent` sont
+    /// toujours `participant`, `mvp` toujours `match`.
+    scope: Option<StatScope>,
 }
 
 /// Champs modifiables, tous facultatifs.
@@ -58,6 +67,8 @@ struct UpdateStatRequest {
     key: Option<String>,
     #[serde(rename = "type")]
     kind: Option<StatType>,
+    /// Modifiable pour une statistique `select` seulement.
+    scope: Option<StatScope>,
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -148,16 +159,28 @@ async fn create_stat(
     body: web::Json<CreateStatRequest>,
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
-    let CreateStatRequest { name, key, kind } = body.into_inner();
+    let CreateStatRequest {
+        name,
+        key,
+        kind,
+        scope,
+    } = body.into_inner();
     let name = name.trim().to_string();
     let key = key.trim().to_string();
-    let errors = validate(Some(&name), Some(&key));
+    let mut errors = validate(Some(&name), Some(&key));
+    let scope = scope.unwrap_or(default_scope(kind));
+    errors.extend(check_scope(kind, scope));
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
     let stat = state
         .store
-        .create_stat(StatInput { name, key, kind })
+        .create_stat(StatInput {
+            name,
+            key,
+            kind,
+            scope,
+        })
         .await
         .map_err(store_error)?;
     Ok(HttpResponse::Created().json(stat))
@@ -188,8 +211,13 @@ async fn update_stat(
     body: web::Json<UpdateStatRequest>,
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
-    let UpdateStatRequest { name, key, kind } = body.into_inner();
-    if name.is_none() && key.is_none() && kind.is_none() {
+    let UpdateStatRequest {
+        name,
+        key,
+        kind,
+        scope,
+    } = body.into_inner();
+    if name.is_none() && key.is_none() && kind.is_none() && scope.is_none() {
         return Err(ApiError::Validation(vec![(
             "body",
             "Renseignez au moins un champ à modifier.".to_string(),
@@ -197,17 +225,79 @@ async fn update_stat(
     }
     let name = name.map(|name| name.trim().to_string());
     let key = key.map(|key| key.trim().to_string());
-    let errors = validate(name.as_deref(), key.as_deref());
+    let mut errors = validate(name.as_deref(), key.as_deref());
+    let id = id.into_inner();
+    let mut new_scope = None;
+    if kind.is_some() || scope.is_some() {
+        let current = state
+            .store
+            .find_stat(id)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or(ApiError::NotFound)?;
+        let new_kind = kind.unwrap_or(current.kind);
+        if new_kind.is_numeric() != current.kind.is_numeric() {
+            errors.push((
+                "type",
+                "Une statistique numérique (`flat`, `percent`) ne devient pas `select` ou `mvp`, ni l'inverse : créez-en une autre."
+                    .to_string(),
+            ));
+        }
+        let wanted = scope.unwrap_or(if new_kind == current.kind {
+            current.scope
+        } else {
+            default_scope(new_kind)
+        });
+        errors.extend(check_scope(new_kind, wanted));
+        new_scope = Some(wanted);
+    }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
     let stat = state
         .store
-        .update_stat(id.into_inner(), StatUpdate { name, key, kind })
+        .update_stat(
+            id,
+            StatUpdate {
+                name,
+                key,
+                kind,
+                scope: new_scope,
+            },
+        )
         .await
         .map_err(store_error)?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(stat))
+}
+
+fn default_scope(kind: StatType) -> StatScope {
+    if kind == StatType::Mvp {
+        StatScope::Match
+    } else {
+        StatScope::Participant
+    }
+}
+
+/// Une statistique numérique est toujours de portée `participant`, un MVP toujours de portée
+/// `match` ; une statistique `select` est de l'une ou l'autre.
+pub(crate) fn check_scope(kind: StatType, scope: StatScope) -> Vec<(&'static str, String)> {
+    let valid = match kind {
+        StatType::Flat | StatType::Percent => scope == StatScope::Participant,
+        StatType::Select => true,
+        StatType::Mvp => scope == StatScope::Match,
+    };
+    if valid {
+        return Vec::new();
+    }
+    vec![(
+        "scope",
+        format!(
+            "Une statistique `{}` est de portée `{}`.",
+            kind.as_str(),
+            default_scope(kind).as_str()
+        ),
+    )]
 }
 
 /// Supprime une statistique et ses liaisons aux jeux (administrateur).
@@ -347,6 +437,141 @@ async fn unlink_stat(
     }
 }
 
+/// Options d'une statistique `select` pour un jeu.
+#[derive(Deserialize, ToSchema)]
+struct OptionsRequest {
+    /// Remplace toutes les options du jeu, dans l'ordre d'affichage.
+    options: Vec<StatOption>,
+}
+
+/// Options d'une statistique `select` pour un jeu, dans l'ordre d'affichage.
+#[utoipa::path(
+    get,
+    path = "/games/{game_id}/stats/{stat_id}/options",
+    tag = "stats",
+    security(("bearer" = [])),
+    params(
+        ("game_id" = Uuid, Path, description = "Identifiant du jeu"),
+        ("stat_id" = Uuid, Path, description = "Identifiant de la statistique"),
+    ),
+    responses(
+        (status = 200, description = "Options autorisées pour le jeu", body = Vec<StatOption>),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 404, description = "Jeu introuvable ou statistique non liée à ce jeu", body = ErrorResponse),
+    ),
+)]
+#[get("/games/{game_id}/stats/{stat_id}/options")]
+async fn list_stat_options(
+    state: web::Data<AppState>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, ApiError> {
+    let (game_id, stat_id) = path.into_inner();
+    let stat = state
+        .store
+        .list_game_stats(game_id)
+        .await
+        .map_err(ApiError::internal)?
+        .and_then(|stats| stats.into_iter().find(|s| s.id == stat_id))
+        .ok_or(ApiError::NotFound)?;
+    Ok(HttpResponse::Ok().json(stat.options))
+}
+
+/// Remplace les options d'une statistique `select` pour un jeu (administrateur).
+///
+/// Chaque option a une clé stable (slug, identifiant stocké dans les résultats) et un libellé.
+/// Les résultats déjà saisis gardent leur clé ; une clé retirée n'est plus acceptée pour de
+/// nouveaux résultats.
+#[utoipa::path(
+    put,
+    path = "/games/{game_id}/stats/{stat_id}/options",
+    tag = "stats",
+    security(("bearer" = [])),
+    params(
+        ("game_id" = Uuid, Path, description = "Identifiant du jeu"),
+        ("stat_id" = Uuid, Path, description = "Identifiant de la statistique"),
+    ),
+    request_body = OptionsRequest,
+    responses(
+        (status = 200, description = "Options enregistrées", body = Vec<StatOption>),
+        (status = 400, description = "Options invalides ou statistique qui n'est pas de type `select`", body = ErrorResponse),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
+        (status = 404, description = "Jeu introuvable ou statistique non liée à ce jeu", body = ErrorResponse),
+    ),
+)]
+#[put("/games/{game_id}/stats/{stat_id}/options")]
+async fn set_stat_options(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<OptionsRequest>,
+) -> Result<HttpResponse, ApiError> {
+    require_admin(&state, &claims).await?;
+    let (game_id, stat_id) = path.into_inner();
+    let stat = state
+        .store
+        .list_game_stats(game_id)
+        .await
+        .map_err(ApiError::internal)?
+        .and_then(|stats| stats.into_iter().find(|s| s.id == stat_id))
+        .ok_or(ApiError::NotFound)?;
+    if stat.kind != StatType::Select {
+        return Err(ApiError::Validation(vec![(
+            "options",
+            "Seule une statistique de type `select` a des options.".to_string(),
+        )]));
+    }
+    let options: Vec<StatOption> = body
+        .into_inner()
+        .options
+        .into_iter()
+        .map(|o| StatOption {
+            key: o.key.trim().to_string(),
+            label: o.label.trim().to_string(),
+        })
+        .collect();
+    if let Some(problem) = check_options(&options) {
+        return Err(ApiError::Validation(vec![("options", problem)]));
+    }
+    if !state
+        .store
+        .set_stat_options(game_id, stat_id, options.clone())
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::NotFound);
+    }
+    Ok(HttpResponse::Ok().json(options))
+}
+
+/// Ce qui ne va pas dans une liste d'options (déjà nettoyées), ou `None`.
+pub(crate) fn check_options(options: &[StatOption]) -> Option<String> {
+    if options.len() > OPTIONS_MAX {
+        return Some(format!("{OPTIONS_MAX} options au plus."));
+    }
+    let mut keys = HashSet::new();
+    for (index, option) in options.iter().enumerate() {
+        let position = index + 1;
+        if !is_slug(&option.key) {
+            return Some(format!(
+                "option {position} : la clé doit être un slug de {KEY_MAX} caractères au maximum (minuscules, chiffres et `_`)."
+            ));
+        }
+        if !(1..=NAME_MAX).contains(&option.label.chars().count()) {
+            return Some(format!(
+                "option {position} : le libellé doit contenir entre 1 et {NAME_MAX} caractères."
+            ));
+        }
+        if !keys.insert(option.key.as_str()) {
+            return Some(format!(
+                "option {position} : la clé `{}` apparaît plusieurs fois.",
+                option.key
+            ));
+        }
+    }
+    None
+}
+
 fn store_error(err: StoreError) -> ApiError {
     match err {
         StoreError::StatKeyTaken => ApiError::StatKeyTaken,
@@ -393,6 +618,32 @@ fn is_slug(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scope_follows_the_type() {
+        use StatScope::{Match, Participant};
+        assert!(check_scope(StatType::Flat, Participant).is_empty());
+        assert!(!check_scope(StatType::Percent, Match).is_empty());
+        assert!(check_scope(StatType::Select, Participant).is_empty());
+        assert!(check_scope(StatType::Select, Match).is_empty());
+        assert!(check_scope(StatType::Mvp, Match).is_empty());
+        assert!(!check_scope(StatType::Mvp, Participant).is_empty());
+        assert_eq!(default_scope(StatType::Mvp), Match);
+        assert_eq!(default_scope(StatType::Select), Participant);
+    }
+
+    #[test]
+    fn options_need_unique_slugs_and_labels() {
+        let option = |key: &str, label: &str| StatOption {
+            key: key.into(),
+            label: label.into(),
+        };
+        assert!(check_options(&[option("jett", "Jett"), option("omen", "Omen")]).is_none());
+        assert!(check_options(&[]).is_none());
+        assert!(check_options(&[option("Jett", "Jett")]).is_some());
+        assert!(check_options(&[option("jett", "")]).is_some());
+        assert!(check_options(&[option("jett", "A"), option("jett", "B")]).is_some());
+    }
 
     #[test]
     fn slugs() {

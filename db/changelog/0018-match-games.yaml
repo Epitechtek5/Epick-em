@@ -1,0 +1,81 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0018-match-games
+      author: epickem
+      comment: >-
+        Statistiques à choix (select) et MVP, options par jeu, séries (best_of) et parties de match
+        (match_game). Compatible avec l'existant : les stats flat/percent gardent leur portée
+        participant ; un match sans partie reste un match d'une seule partie saisie directement
+        dans match_participant (matchs historiques conservés tels quels, best_of = 1).
+      changes:
+        - sql:
+            sql: >-
+              ALTER TABLE stats ADD COLUMN scope varchar(12) NOT NULL DEFAULT 'participant';
+              COMMENT ON COLUMN stats.scope IS 'participant : valeur par participant, match : attribut de la partie (carte, MVP...)';
+              ALTER TABLE stats DROP CONSTRAINT stats_type_check;
+              ALTER TABLE stats
+              ADD CONSTRAINT stats_type_check CHECK (type IN ('flat', 'percent', 'select', 'mvp')),
+              ADD CONSTRAINT stats_scope_check CHECK (scope IN ('participant', 'match')),
+              ADD CONSTRAINT stats_type_scope_check CHECK (
+                (type IN ('flat', 'percent') AND scope = 'participant')
+                OR type = 'select'
+                OR (type = 'mvp' AND scope = 'match'));
+              COMMENT ON COLUMN stats.type IS 'flat : valeur brute, percent : pourcentage, select : choix parmi stat_option, mvp : participant ou joueur désigné';
+              CREATE TABLE stat_option (
+                stat_id uuid NOT NULL,
+                game_id uuid NOT NULL,
+                key varchar(64) NOT NULL,
+                label varchar(64) NOT NULL,
+                position integer NOT NULL,
+                CONSTRAINT stat_option_pkey PRIMARY KEY (stat_id, game_id, key),
+                CONSTRAINT stat_option_stat_game_fk FOREIGN KEY (stat_id, game_id)
+                  REFERENCES stat_game (stat_id, game_id) ON DELETE CASCADE,
+                CONSTRAINT stat_option_key_slug CHECK (key ~ '^[a-z0-9]+(_[a-z0-9]+)*$'),
+                CONSTRAINT stat_option_position_check CHECK (position >= 0)
+              );
+              COMMENT ON TABLE stat_option IS 'Valeurs autorisées d''une statistique select pour un jeu, key est l''identifiant stable stocké dans les résultats';
+              CREATE INDEX stat_option_game_idx ON stat_option (game_id);
+              ALTER TABLE match ADD COLUMN best_of integer NOT NULL DEFAULT 1,
+              ADD CONSTRAINT match_best_of_check CHECK (best_of IN (1, 3, 5));
+              COMMENT ON COLUMN match.best_of IS 'Longueur de la série : 1, 3 ou 5 parties (match_game), round reste la ronde du tournoi';
+              CREATE TABLE match_game (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                match_id uuid NOT NULL REFERENCES match (id) ON DELETE CASCADE,
+                number integer NOT NULL,
+                status varchar(16) NOT NULL DEFAULT 'ongoing',
+                attributes jsonb NOT NULL DEFAULT '{}',
+                started_at timestamptz,
+                ended_at timestamptz,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT match_game_number_key UNIQUE (match_id, number),
+                CONSTRAINT match_game_number_check CHECK (number BETWEEN 1 AND 5),
+                CONSTRAINT match_game_status_check CHECK (status IN ('scheduled', 'ongoing', 'finished', 'cancelled')),
+                CONSTRAINT match_game_attributes_check CHECK (jsonb_typeof(attributes) = 'object'),
+                CONSTRAINT match_game_ended_after_started_check CHECK (started_at IS NULL OR ended_at IS NULL OR ended_at >= started_at)
+              );
+              COMMENT ON TABLE match_game IS 'Partie d''un match (série BO1/BO3/BO5), numérotée à partir de 1, attributes porte les statistiques de portée match (carte, MVP...)';
+              CREATE TABLE match_game_participant (
+                game_id uuid NOT NULL REFERENCES match_game (id) ON DELETE CASCADE,
+                participant_id uuid NOT NULL REFERENCES tournament_participant (id) ON DELETE CASCADE,
+                stats jsonb NOT NULL DEFAULT '{}',
+                points numeric NOT NULL DEFAULT 0,
+                rank integer,
+                result varchar(8),
+                CONSTRAINT match_game_participant_pkey PRIMARY KEY (game_id, participant_id),
+                CONSTRAINT match_game_participant_stats_check CHECK (jsonb_typeof(stats) = 'object'),
+                CONSTRAINT match_game_participant_rank_check CHECK (rank IS NULL OR rank > 0),
+                CONSTRAINT match_game_participant_result_check CHECK (result IS NULL OR result IN ('win', 'loss', 'draw'))
+              );
+              CREATE INDEX match_game_participant_participant_idx ON match_game_participant (participant_id)
+      rollback:
+        - sql:
+            sql: >-
+              DROP TABLE match_game_participant;
+              DROP TABLE match_game;
+              ALTER TABLE match DROP COLUMN best_of;
+              DROP TABLE stat_option;
+              DELETE FROM stats WHERE type IN ('select', 'mvp');
+              ALTER TABLE stats DROP CONSTRAINT stats_type_scope_check, DROP CONSTRAINT stats_scope_check, DROP CONSTRAINT stats_type_check;
+              ALTER TABLE stats ADD CONSTRAINT stats_type_check CHECK (type IN ('flat', 'percent'));
+              ALTER TABLE stats DROP COLUMN scope

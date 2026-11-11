@@ -3,14 +3,14 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, Bracket, GameInput, GameUpdate, MatchFinish, MatchInput, MatchResult, MatchScore,
-    MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
-    ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
-    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
-    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
-    StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
-    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
-    UserUpdate,
+    AuthStore, Bracket, GameFinish, GameImport, GameInput, GameScores, GameUpdate, MatchFinish,
+    MatchInput, MatchResult, MatchScore, MatchStatus, MatchType, MatchUpdate, MemberImport,
+    ParticipantImport, ParticipantInput, ParticipantStatus, ParticipantType, PgStore, Role,
+    ScoringMode, ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, StatInput, StatOption,
+    StatScope, StatType, StatUpdate, StepClosing, StepDefinition, StepFormat, StepInput,
+    StepOutcome, StepParticipantStatus, StepStart, StepStatus, StoreError, TeamImport, TeamInput,
+    TeamRole, TeamScoringMode, TeamUpdate, TournamentImport, TournamentInput, TournamentStatus,
+    TournamentTeamInput, TournamentUpdate, UserUpdate,
 };
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
@@ -389,6 +389,7 @@ async fn stats_have_unique_keys_and_are_linked_to_games() {
         name: "Kills".into(),
         key: key.into(),
         kind,
+        scope: StatScope::Participant,
     };
 
     let stat = store
@@ -485,6 +486,7 @@ async fn stats_are_upserted_by_key_and_links_are_replaced() {
         name: name.into(),
         key: key.into(),
         kind,
+        scope: StatScope::Participant,
     };
     let game = |name: String| GameInput {
         name,
@@ -1112,6 +1114,7 @@ async fn scoring_rules_need_a_stat_of_the_game_and_lock_it_when_ongoing() {
             name: "Kills".into(),
             key,
             kind: StatType::Flat,
+            scope: StatScope::Participant,
         })
         .await
         .unwrap();
@@ -1361,6 +1364,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
             name: "Kills".into(),
             key: unique("kills").replace('-', "_").to_lowercase(),
             kind: StatType::Flat,
+            scope: StatScope::Participant,
         })
         .await
         .unwrap();
@@ -1992,6 +1996,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
             round: Some(round),
             bracket: None,
             next_match_id: None,
+            best_of: 1,
             scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
             participants,
         })
@@ -2019,6 +2024,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
             ],
             advance: None,
             step_points: vec![(players[0], 2.5), (players[1], 1.0)],
+            game: None,
         })
         .await
         .unwrap();
@@ -2253,6 +2259,67 @@ async fn match_tables_enforce_their_constraints() {
     .await
     .unwrap();
 
+    // Séries et parties : best_of vaut 1 par défaut, 1, 3 ou 5 ; une partie par numéro, de 1 à 5.
+    let best_of: i32 = sqlx::query_scalar("SELECT best_of FROM match WHERE id = $1")
+        .bind(match_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(best_of, 1);
+    for bad in [0, 2, 4, 7] {
+        let attempt = sqlx::query("UPDATE match SET best_of = $2 WHERE id = $1")
+            .bind(match_id)
+            .bind(bad)
+            .execute(&pool)
+            .await;
+        assert!(attempt.is_err(), "best_of {bad}");
+    }
+    let game = |number: i32, status: &str, attributes: &str| {
+        let pool = pool.clone();
+        let (status, attributes) = (status.to_string(), attributes.to_string());
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match_game (match_id, number, status, attributes) \
+                 VALUES ($1, $2, $3, $4::jsonb) RETURNING id",
+            )
+            .bind(match_id)
+            .bind(number)
+            .bind(status)
+            .bind(attributes)
+            .fetch_one(&pool)
+            .await
+        }
+    };
+    let game_id_row = game(1, "ongoing", "{}").await.unwrap();
+    assert!(game(1, "ongoing", "{}").await.is_err(), "numéro déjà pris");
+    assert!(game(0, "ongoing", "{}").await.is_err());
+    assert!(game(6, "ongoing", "{}").await.is_err());
+    assert!(game(2, "postponed", "{}").await.is_err());
+    assert!(game(2, "ongoing", "[1]").await.is_err());
+    game(2, "finished", "{\"map\": \"bind\"}").await.unwrap();
+    let in_game = |points: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(&format!(
+                "INSERT INTO match_game_participant (game_id, participant_id) VALUES ($1, $2); {points}"
+            ))
+            .bind(game_id_row)
+            .bind(participant.id)
+            .execute(&pool)
+            .await
+        }
+    };
+    in_game("").await.unwrap();
+    assert!(in_game("").await.is_err(), "un participant par partie");
+    for bad in [
+        "UPDATE match_game_participant SET stats = '[1]'::jsonb WHERE game_id = $1",
+        "UPDATE match_game_participant SET rank = 0 WHERE game_id = $1",
+        "UPDATE match_game_participant SET result = 'forfeit' WHERE game_id = $1",
+    ] {
+        let attempt = sqlx::query(bad).bind(game_id_row).execute(&pool).await;
+        assert!(attempt.is_err(), "{bad}");
+    }
+
     sqlx::query("DELETE FROM match WHERE id = $1")
         .bind(next)
         .execute(&pool)
@@ -2274,9 +2341,12 @@ async fn match_tables_enforce_their_constraints() {
         .unwrap();
     let left: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM match WHERE id = $1) \
-         + (SELECT count(*) FROM match_participant WHERE match_id = $1)",
+         + (SELECT count(*) FROM match_participant WHERE match_id = $1) \
+         + (SELECT count(*) FROM match_game WHERE match_id = $1) \
+         + (SELECT count(*) FROM match_game_participant WHERE game_id = $2)",
     )
     .bind(match_id)
+    .bind(game_id_row)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -2335,6 +2405,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         round: Some(round),
         bracket: None,
         next_match_id: next,
+        best_of: 1,
         scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
         participants,
     };
@@ -2466,6 +2537,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
             scores,
             advance: Some((last.id, players[0])),
             step_points: vec![(players[0], 4.5), (players[1], 1.5)],
+            game: None,
         })
         .await
         .unwrap()
@@ -2497,6 +2569,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
                 scores: vec![],
                 advance: None,
                 step_points: vec![],
+                game: None,
             })
             .await
             .map(|_| ()),
@@ -2692,5 +2765,415 @@ async fn expired_password_reset_tokens_are_refused() {
             .unwrap()
             .password_hash,
         "old"
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn selection_stats_keep_their_options_per_game() {
+    let store = store().await;
+    let (first, second) = (game(&store).await, game(&store).await);
+    let key = unique("map").replace('-', "_");
+    let select = store
+        .create_stat(StatInput {
+            name: "Carte".into(),
+            key: key.clone(),
+            kind: StatType::Select,
+            scope: StatScope::Match,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (select.kind, select.scope),
+        (StatType::Select, StatScope::Match)
+    );
+    let flat = store
+        .create_stat(StatInput {
+            name: "Kills".into(),
+            key: unique("kills").replace('-', "_"),
+            kind: StatType::Flat,
+            scope: StatScope::Participant,
+        })
+        .await
+        .unwrap();
+    // La base refuse un MVP de portée participant et un numérique de portée match.
+    for (kind, scope) in [
+        (StatType::Mvp, StatScope::Participant),
+        (StatType::Flat, StatScope::Match),
+    ] {
+        let refused = store
+            .create_stat(StatInput {
+                name: "Incohérente".into(),
+                key: unique("bad").replace('-', "_"),
+                kind,
+                scope,
+            })
+            .await;
+        assert!(refused.is_err(), "{kind:?} {scope:?}");
+    }
+
+    for game_id in [first, second] {
+        assert!(store.link_stat(game_id, select.id).await.unwrap());
+        assert!(store.link_stat(game_id, flat.id).await.unwrap());
+    }
+    let option = |key: &str, label: &str| StatOption {
+        key: key.into(),
+        label: label.into(),
+    };
+    assert!(
+        store
+            .set_stat_options(
+                first,
+                select.id,
+                vec![option("ascent", "Ascent"), option("bind", "Bind")]
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .set_stat_options(second, select.id, vec![option("lotus", "Lotus")])
+            .await
+            .unwrap()
+    );
+    // Seule une statistique `select` liée au jeu a des options.
+    assert!(
+        !store
+            .set_stat_options(first, flat.id, vec![option("a", "A")])
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_stat_options(first, Uuid::new_v4(), vec![])
+            .await
+            .unwrap()
+    );
+    let of = |stats: Vec<api_public::store::Stat>, id: Uuid| {
+        stats.into_iter().find(|s| s.id == id).unwrap()
+    };
+    let stats = store.list_game_stats(first).await.unwrap().unwrap();
+    assert_eq!(
+        of(stats.clone(), select.id).options,
+        [option("ascent", "Ascent"), option("bind", "Bind")]
+    );
+    assert!(of(stats, flat.id).options.is_empty());
+    let other = store.list_game_stats(second).await.unwrap().unwrap();
+    assert_eq!(of(other, select.id).options, [option("lotus", "Lotus")]);
+
+    // Remplacer garde l'ordre donné ; une clé en double est refusée.
+    assert!(
+        store
+            .set_stat_options(
+                first,
+                select.id,
+                vec![option("bind", "Bind"), option("ascent", "A")]
+            )
+            .await
+            .unwrap()
+    );
+    let stats = store.list_game_stats(first).await.unwrap().unwrap();
+    assert_eq!(
+        of(stats, select.id).options,
+        [option("bind", "Bind"), option("ascent", "A")]
+    );
+    assert!(
+        store
+            .set_stat_options(first, select.id, vec![option("x", "X"), option("x", "Y")])
+            .await
+            .is_err()
+    );
+    // Délier la statistique du jeu retire ses options, pas celles de l'autre jeu.
+    assert!(store.unlink_stat(first, select.id).await.unwrap());
+    assert!(store.link_stat(first, select.id).await.unwrap());
+    let stats = store.list_game_stats(first).await.unwrap().unwrap();
+    assert!(of(stats, select.id).options.is_empty());
+    let other = store.list_game_stats(second).await.unwrap().unwrap();
+    assert_eq!(of(other, select.id).options.len(), 1);
+    // Mise à jour de la portée d'un choix, et upsert.
+    let updated = store
+        .update_stat(
+            select.id,
+            StatUpdate {
+                scope: Some(StatScope::Participant),
+                ..StatUpdate::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.scope, StatScope::Participant);
+    let upserted = store
+        .upsert_stats(vec![StatInput {
+            name: "Carte".into(),
+            key,
+            kind: StatType::Select,
+            scope: StatScope::Match,
+        }])
+        .await
+        .unwrap();
+    assert!(!upserted[0].1);
+    assert_eq!(upserted[0].0.scope, StatScope::Match);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn match_games_are_stored_finished_and_aggregated_atomically() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 2,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: StepDefinition {
+                format: StepFormat::Pool,
+                match_type: MatchType::Duel,
+                ..step_definition(1, 1, 2, 1)
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![players.clone()],
+        })
+        .await
+        .unwrap();
+    let group = store.list_step_groups(step.id).await.unwrap()[0].id;
+    let created = store
+        .create_match(MatchInput {
+            game_id,
+            step_id: step.id,
+            group_id: group,
+            round: Some(1),
+            bracket: None,
+            next_match_id: None,
+            best_of: 3,
+            scheduled_at: None,
+            participants: players.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.best_of, 3);
+    let score = |id: Uuid, kills: f64, rank: i32, result: MatchResult| MatchScore {
+        participant_id: id,
+        stats: serde_json::json!({ "kills": kills, "character": "jett" }),
+        points: kills,
+        rank: Some(rank),
+        result: Some(result),
+    };
+
+    // Partie 1 : numérotée, avec les participants du match ; le match démarre.
+    let first = store
+        .create_match_game(created.id, serde_json::json!({ "map": "ascent" }))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.number, first.status), (1, MatchStatus::Ongoing));
+    assert_eq!(first.participants.len(), 2);
+    assert!(first.started_at.is_some());
+    assert_eq!(
+        store.find_match(created.id).await.unwrap().unwrap().status,
+        MatchStatus::Ongoing
+    );
+    // Une seule partie ouverte à la fois.
+    assert!(matches!(
+        store
+            .create_match_game(created.id, serde_json::json!({}))
+            .await,
+        Err(StoreError::MatchState)
+    ));
+    assert!(
+        store
+            .create_match_game(Uuid::new_v4(), serde_json::json!({}))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let saved = store
+        .save_game_scores(GameScores {
+            game_id: first.id,
+            attributes: Some(serde_json::json!({ "map": "bind" })),
+            scores: vec![score(players[0], 5.0, 1, MatchResult::Win)],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.attributes, serde_json::json!({ "map": "bind" }));
+    let winner = saved
+        .participants
+        .iter()
+        .find(|p| p.participant_id == players[0])
+        .unwrap();
+    assert_eq!((winner.points, winner.rank), (5.0, Some(1)));
+    assert_eq!(winner.stats["character"], "jett");
+    let finished = store
+        .finish_game(GameFinish {
+            game_id: first.id,
+            scores: vec![
+                score(players[0], 5.0, 1, MatchResult::Win),
+                score(players[1], 2.0, 2, MatchResult::Loss),
+            ],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.status, MatchStatus::Finished);
+    assert!(finished.ended_at.is_some());
+    // Une partie terminée ne change plus et ne se supprime pas.
+    for result in [
+        store
+            .save_game_scores(GameScores {
+                game_id: first.id,
+                attributes: None,
+                scores: vec![],
+            })
+            .await
+            .map(|_| ()),
+        store.delete_match_game(first.id).await.map(|_| ()),
+        store
+            .finish_game(GameFinish {
+                game_id: first.id,
+                scores: vec![],
+            })
+            .await
+            .map(|_| ()),
+    ] {
+        assert!(matches!(result, Err(StoreError::MatchState)));
+    }
+
+    // Partie 2 supprimée avant d'être jouée, puis refaite : le numéro est repris.
+    let abandoned = store
+        .create_match_game(created.id, serde_json::json!({}))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(abandoned.number, 2);
+    assert!(store.delete_match_game(abandoned.id).await.unwrap());
+    assert!(!store.delete_match_game(abandoned.id).await.unwrap());
+    let second = store
+        .create_match_game(created.id, serde_json::json!({}))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.number, 2);
+
+    // La dernière partie et le match se terminent ensemble : tout ou rien.
+    let totals = vec![
+        score(players[0], 9.0, 1, MatchResult::Win),
+        score(players[1], 3.0, 2, MatchResult::Loss),
+    ];
+    let closed = store
+        .finish_match(MatchFinish {
+            match_id: created.id,
+            scores: totals.clone(),
+            advance: None,
+            step_points: vec![(players[0], 9.0), (players[1], 3.0)],
+            game: Some(GameFinish {
+                game_id: second.id,
+                scores: totals.clone(),
+            }),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(closed.status, MatchStatus::Finished);
+    let games = store.list_match_games(created.id).await.unwrap();
+    assert_eq!(games.iter().map(|g| g.number).collect::<Vec<_>>(), [1, 2]);
+    assert!(games.iter().all(|g| g.status == MatchStatus::Finished));
+    assert_eq!(store.list_step_match_games(step.id).await.unwrap(), games);
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    assert_eq!(
+        members
+            .iter()
+            .find(|m| m.participant_id == players[0])
+            .unwrap()
+            .points,
+        9.0
+    );
+    // Terminé : plus de partie.
+    assert!(matches!(
+        store
+            .create_match_game(created.id, serde_json::json!({}))
+            .await,
+        Err(StoreError::MatchState)
+    ));
+
+    // Un match supprimé emporte ses parties ; le réimport les recrée avec leurs numéros.
+    let imported = store
+        .replace_step_matches(
+            step.id,
+            game_id,
+            vec![api_public::store::MatchImport {
+                group_id: Some(group),
+                round: Some(1),
+                bracket: None,
+                next: None,
+                best_of: 3,
+                scheduled_at: None,
+                started_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+                ended_at: None,
+                status: MatchStatus::Ongoing,
+                participants: totals.clone(),
+                games: vec![
+                    GameImport {
+                        status: MatchStatus::Finished,
+                        attributes: serde_json::json!({ "map": "bind" }),
+                        started_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+                        ended_at: Some("2026-11-14T18:30:00.000000Z".to_string()),
+                        participants: totals.clone(),
+                    },
+                    GameImport {
+                        status: MatchStatus::Ongoing,
+                        attributes: serde_json::json!({}),
+                        started_at: None,
+                        ended_at: None,
+                        participants: vec![],
+                    },
+                ],
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(imported);
+    assert!(store.list_match_games(created.id).await.unwrap().is_empty());
+    let replaced = store.list_matches(step.id, None, None).await.unwrap();
+    assert_eq!((replaced.len(), replaced[0].best_of), (1, 3));
+    let games = store.list_match_games(replaced[0].id).await.unwrap();
+    assert_eq!(games.iter().map(|g| g.number).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(games[0].attributes, serde_json::json!({ "map": "bind" }));
+    assert_eq!(
+        games[0].ended_at.as_deref(),
+        Some("2026-11-14T18:30:00.000000Z")
+    );
+    assert_eq!(games[0].participants.len(), 2);
+    assert!(store.delete_match(replaced[0].id).await.unwrap());
+    assert!(
+        store
+            .list_step_match_games(step.id)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
