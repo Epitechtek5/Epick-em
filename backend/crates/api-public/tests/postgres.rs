@@ -2694,3 +2694,205 @@ async fn expired_password_reset_tokens_are_refused() {
         "old"
     );
 }
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn google_identities_are_unique_and_never_the_last_method_removed() {
+    use api_public::store::{GOOGLE, OAuthPurpose, OAuthState, SecurityStore, Unlink};
+    let store = store().await;
+    let sub = unique("sub");
+    let email = format!("{}@gmail.com", unique("g"));
+    let user = store
+        .create_oauth_user(&unique("g"), &email, "hash", GOOGLE, &sub)
+        .await
+        .unwrap();
+    assert!(user.email_verified_at.is_some());
+    assert_eq!(
+        store
+            .find_user_by_identity(GOOGLE, &sub)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        user.id
+    );
+    // Même identité, ou même adresse : refusé, rien n'est créé.
+    assert!(matches!(
+        store
+            .create_oauth_user(
+                &unique("g"),
+                &format!("{}@x.fr", unique("o")),
+                "h",
+                GOOGLE,
+                &sub
+            )
+            .await,
+        Err(StoreError::IdentityTaken)
+    ));
+    assert!(matches!(
+        store
+            .create_oauth_user(&unique("g"), &email, "h", GOOGLE, &unique("sub"))
+            .await,
+        Err(StoreError::EmailTaken)
+    ));
+    let other = store.create_user(&unique("o"), None, "h").await.unwrap();
+    assert!(matches!(
+        store.link_identity(other.id, GOOGLE, &sub, None).await,
+        Err(StoreError::IdentityTaken)
+    ));
+
+    let status = store.security_status(user.id).await.unwrap();
+    assert!(!status.password_set && status.google_linked && !status.totp_enabled);
+    assert_eq!(
+        store.unlink_identity(user.id, GOOGLE).await.unwrap(),
+        Unlink::LastMethod
+    );
+    store
+        .update_user(
+            user.id,
+            UserUpdate {
+                password_hash: Some("choisi".into()),
+                ..UserUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(store.security_status(user.id).await.unwrap().password_set);
+    let ttl = Duration::from_secs(60);
+    let refresh = unique("r");
+    store
+        .insert_refresh_token(user.id, &refresh, ttl)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.unlink_identity(user.id, GOOGLE).await.unwrap(),
+        Unlink::Unlinked
+    );
+    assert_eq!(
+        store.unlink_identity(user.id, GOOGLE).await.unwrap(),
+        Unlink::NotLinked
+    );
+    assert!(
+        !store
+            .rotate_refresh_token(user.id, &refresh, &unique("n"), ttl)
+            .await
+            .unwrap()
+    );
+
+    // `state` OAuth à usage unique, même en parallèle.
+    let state_hash = format!("{:0>64}", unique("s").replace('-', ""));
+    let saved = OAuthState {
+        purpose: OAuthPurpose::Link,
+        user_id: Some(user.id),
+        code_verifier: "v".into(),
+        nonce: "n".into(),
+    };
+    store
+        .save_oauth_state(&state_hash, &saved, ttl)
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        store.take_oauth_state(&state_hash),
+        store.take_oauth_state(&state_hash)
+    );
+    let taken: Vec<_> = [a.unwrap(), b.unwrap()].into_iter().flatten().collect();
+    assert_eq!(taken, vec![saved]);
+    let expired = format!("{:0>64}", unique("e").replace('-', ""));
+    store
+        .save_oauth_state(&expired, &taken[0], Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(store.take_oauth_state(&expired).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn totp_steps_recovery_codes_and_challenges_are_single_use() {
+    use api_public::store::SecurityStore;
+    let store = store().await;
+    let user = store.create_user(&unique("t"), None, "h").await.unwrap();
+    let id = user.id;
+    let hash = |s: &str| format!("{:0>64}", s);
+
+    assert!(
+        !store.enable_totp(id, 10, &[]).await.unwrap(),
+        "rien en attente"
+    );
+    assert!(store.stage_totp(id, b"chiffre-1").await.unwrap());
+    assert!(
+        store.stage_totp(id, b"chiffre-2").await.unwrap(),
+        "remplacé"
+    );
+    let record = store.find_totp(id).await.unwrap().unwrap();
+    assert_eq!(record.ciphertext, b"chiffre-2");
+    assert!(!record.enabled);
+    let codes = vec![hash(&format!("a{id}")), hash(&format!("b{id}"))];
+    assert!(store.enable_totp(id, 100, &codes).await.unwrap());
+    assert!(!store.stage_totp(id, b"x").await.unwrap(), "déjà active");
+    let status = store.security_status(id).await.unwrap();
+    assert!(status.totp_enabled);
+    assert_eq!(status.recovery_codes_remaining, 2);
+
+    // Pas déjà consommé, ou antérieur : rejeu refusé.
+    assert!(!store.use_totp_step(id, 100).await.unwrap());
+    assert!(!store.use_totp_step(id, 99).await.unwrap());
+    let (a, b) = tokio::join!(store.use_totp_step(id, 101), store.use_totp_step(id, 101));
+    assert!(a.unwrap() ^ b.unwrap(), "un seul usage simultané");
+
+    let (a, b) = tokio::join!(
+        store.consume_recovery_code(id, &codes[0]),
+        store.consume_recovery_code(id, &codes[0])
+    );
+    assert!(a.unwrap() ^ b.unwrap());
+    let fresh = vec![hash(&format!("c{id}"))];
+    assert!(store.replace_recovery_codes(id, &fresh).await.unwrap());
+    assert!(!store.consume_recovery_code(id, &codes[1]).await.unwrap());
+    assert_eq!(
+        store
+            .security_status(id)
+            .await
+            .unwrap()
+            .recovery_codes_remaining,
+        1
+    );
+
+    let challenge = hash(&format!("m{id}"));
+    store
+        .create_mfa_challenge(id, &challenge, Duration::from_secs(60))
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            store.attempt_mfa_challenge(&challenge, 2).await.unwrap(),
+            Some(id)
+        );
+    }
+    assert_eq!(
+        store.attempt_mfa_challenge(&challenge, 2).await.unwrap(),
+        None
+    );
+    assert!(store.consume_mfa_challenge(&challenge).await.unwrap());
+    assert!(!store.consume_mfa_challenge(&challenge).await.unwrap());
+
+    let key = hash(&format!("k{id}"));
+    for _ in 0..3 {
+        assert!(
+            store
+                .allow_attempt(&key, 3, Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+    }
+    assert!(
+        !store
+            .allow_attempt(&key, 3, Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+
+    assert!(store.disable_totp(id).await.unwrap());
+    assert!(!store.disable_totp(id).await.unwrap());
+    let status = store.security_status(id).await.unwrap();
+    assert!(!status.totp_enabled);
+    assert_eq!(status.recovery_codes_remaining, 0);
+}

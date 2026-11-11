@@ -30,3 +30,10 @@ opt-level = 3
 
 [profile.dev.package.blake2]
 opt-level = 3
+
+# Génération de clés RSA des tests de la connexion Google : interminable sans optimisation.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3

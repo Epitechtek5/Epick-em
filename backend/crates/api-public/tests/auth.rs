@@ -357,6 +357,7 @@ fn expired_token(user_id: uuid::Uuid) -> String {
         role: api_public::store::Role::User,
         iat: 1_000,
         exp: 2_000,
+        auth_time: 1_000,
     };
     jsonwebtoken::encode(
         &jsonwebtoken::Header::default(),

@@ -6,17 +6,22 @@
 //! - toutes les routes exigent un jeton d'accès `Authorization: Bearer` valide, sauf celles de
 //!   `guard::route_policy` ; `/refresh` accepte un jeton expiré ;
 //! - la déconnexion révoque le jeton de rafraîchissement. Le jeton d'accès reste valable
-//!   jusqu'à son expiration (`ACCESS_TOKEN_TTL_SECS`).
+//!   jusqu'à son expiration (`ACCESS_TOKEN_TTL_SECS`) ;
+//! - si la double authentification est active, `/login` (comme la connexion Google) ne renvoie
+//!   qu'un défi de courte durée : les jetons ne sont émis qu'après `/login/2fa`
+//!   ([`crate::security`]).
 
-use crate::config::AuthConfig;
+use crate::config::{AuthConfig, SecurityConfig};
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
+use crate::google::GoogleAuth;
 use crate::mail::{Mailer, NoopMailer};
 use crate::match_io::InSteps;
 use crate::password_reset::{email_error, normalize_email};
 use crate::stat_io::StoreStats;
 use crate::step_io::StoreSteps;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
+use crate::totp::TotpKey;
 use crate::tournament_io::TournamentChild;
 use crate::tournament_team_io::StoreTournamentTeams;
 use actix_web::{HttpResponse, post, web};
@@ -39,6 +44,8 @@ pub const USERNAME_MAX: usize = 32;
 pub const PASSWORD_MIN: usize = 8;
 pub const PASSWORD_MAX: usize = 128;
 const DEFAULT_PUBLIC_URL: &str = "http://localhost:3000";
+/// Durée d'un défi de second facteur émis par `/login`.
+pub const MFA_CHALLENGE_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -63,6 +70,10 @@ pub struct AppState {
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
     pub(crate) public_url: Arc<str>,
+    /// Connexion Google, si configurée.
+    pub(crate) google: Option<Arc<GoogleAuth>>,
+    /// Clé de chiffrement des secrets TOTP, si configurée.
+    pub(crate) totp_key: Option<TotpKey>,
 }
 
 impl AppState {
@@ -82,6 +93,8 @@ impl AppState {
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
+            google: None,
+            totp_key: None,
         })
     }
 
@@ -112,6 +125,25 @@ impl AppState {
     /// Branche le sous-niveau qui importe et exporte les statistiques des jeux.
     pub fn with_stats(mut self, stats: Arc<dyn GameStats>) -> Self {
         self.stats = stats;
+        self
+    }
+
+    /// Branche la connexion Google (réseau réel) et la clé TOTP de `config`.
+    pub fn with_security(self, config: SecurityConfig) -> Result<Self, reqwest::Error> {
+        let google = config.google.map(GoogleAuth::connect).transpose()?;
+        Ok(self
+            .with_google(google.map(Arc::new))
+            .with_totp_key(config.totp_key))
+    }
+
+    /// Branche une connexion Google (un fournisseur simulé dans les tests).
+    pub fn with_google(mut self, google: Option<Arc<GoogleAuth>>) -> Self {
+        self.google = google;
+        self
+    }
+
+    pub fn with_totp_key(mut self, key: Option<TotpKey>) -> Self {
+        self.totp_key = key;
         self
     }
 
@@ -167,13 +199,31 @@ struct RegisterResponse {
 }
 
 #[derive(Serialize, ToSchema)]
-struct TokenResponse {
+pub(crate) struct TokenResponse {
     access_token: String,
     refresh_token: String,
     #[schema(example = "Bearer")]
     token_type: &'static str,
     /// Durée de validité du jeton d'accès, en secondes.
     expires_in: u64,
+}
+
+/// Second facteur exigé : présenter `mfa_token` et un code à `POST /login/2fa`.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct MfaChallengeResponse {
+    /// Toujours `true`.
+    mfa_required: bool,
+    mfa_token: String,
+    /// Durée de validité du défi, en secondes.
+    expires_in: u64,
+}
+
+/// Réponse d'une connexion : les jetons, ou un défi de second facteur.
+#[derive(Serialize, ToSchema)]
+#[serde(untagged)]
+pub(crate) enum LoginResponse {
+    Tokens(TokenResponse),
+    MfaRequired(MfaChallengeResponse),
 }
 
 /// Contenu du jeton d'accès.
@@ -185,6 +235,11 @@ pub struct Claims {
     pub role: Role,
     pub iat: u64,
     pub exp: u64,
+    /// Instant de la dernière authentification complète (mot de passe ou Google, et second
+    /// facteur) : conservé par `/refresh`, il sert aux actions qui exigent une authentification
+    /// récente. Absent des anciens jetons (`0`).
+    #[serde(default)]
+    pub auth_time: u64,
 }
 
 /// Vérifie la signature et l'expiration d'un jeton d'accès.
@@ -265,7 +320,7 @@ async fn register(
     tag = "auth",
     request_body = Credentials,
     responses(
-        (status = 200, description = "Jetons émis", body = TokenResponse),
+        (status = 200, description = "Jetons émis, ou défi de second facteur si la double authentification est active", body = LoginResponse),
         (status = 400, description = "Requête invalide", body = ErrorResponse),
         (status = 401, description = "Identifiants refusés", body = ErrorResponse),
         (status = 403, description = "Adresse e-mail non vérifiée", body = ErrorResponse),
@@ -309,19 +364,7 @@ async fn login(
         Some(user) if verified && user.email_verified_at.is_none() => {
             Err(ApiError::EmailUnverified)
         }
-        Some(user) if verified => {
-            let refresh_token = new_token();
-            state
-                .store
-                .insert_refresh_token(
-                    user.id,
-                    &hash_token(&refresh_token),
-                    state.config.refresh_token_ttl,
-                )
-                .await
-                .map_err(ApiError::internal)?;
-            Ok(HttpResponse::Ok().json(token_response(&state.config, &user, refresh_token)?))
-        }
+        Some(user) if verified => Ok(HttpResponse::Ok().json(begin_session(&state, &user).await?)),
         _ => Err(ApiError::Unauthorized),
     }
 }
@@ -366,7 +409,12 @@ async fn refresh(
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::Unauthorized)?;
-    Ok(HttpResponse::Ok().json(token_response(&state.config, &user, new_token)?))
+    Ok(HttpResponse::Ok().json(token_response(
+        &state.config,
+        &user,
+        new_token,
+        claims.auth_time,
+    )?))
 }
 
 /// Idempotent : répond 204 même si le jeton est inconnu, déjà révoqué ou appartient à un
@@ -448,10 +496,63 @@ pub(crate) async fn hash_password_blocking(password: String) -> Result<String, A
         .map_err(ApiError::internal)
 }
 
+/// Secondes écoulées depuis l'époque Unix.
+pub(crate) fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Fin d'une authentification par mot de passe ou par Google : jetons, ou défi de second facteur
+/// si le compte a activé la double authentification.
+pub(crate) async fn begin_session(
+    state: &AppState,
+    user: &UserRecord,
+) -> Result<LoginResponse, ApiError> {
+    let security = state
+        .store
+        .security_status(user.id)
+        .await
+        .map_err(ApiError::internal)?;
+    if security.totp_enabled {
+        let mfa_token = new_token();
+        state
+            .store
+            .create_mfa_challenge(user.id, &hash_token(&mfa_token), MFA_CHALLENGE_TTL)
+            .await
+            .map_err(ApiError::internal)?;
+        return Ok(LoginResponse::MfaRequired(MfaChallengeResponse {
+            mfa_required: true,
+            mfa_token,
+            expires_in: MFA_CHALLENGE_TTL.as_secs(),
+        }));
+    }
+    Ok(LoginResponse::Tokens(issue_tokens(state, user).await?))
+}
+
+/// Émet un jeton de rafraîchissement et un jeton d'accès authentifiés à l'instant présent.
+pub(crate) async fn issue_tokens(
+    state: &AppState,
+    user: &UserRecord,
+) -> Result<TokenResponse, ApiError> {
+    let refresh_token = new_token();
+    state
+        .store
+        .insert_refresh_token(
+            user.id,
+            &hash_token(&refresh_token),
+            state.config.refresh_token_ttl,
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    token_response(&state.config, user, refresh_token, now_secs())
+}
+
 fn token_response(
     config: &AuthConfig,
     user: &UserRecord,
     refresh_token: String,
+    auth_time: u64,
 ) -> Result<TokenResponse, ApiError> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -463,6 +564,7 @@ fn token_response(
         role: user.role,
         iat: now,
         exp: now + config.access_token_ttl.as_secs(),
+        auth_time,
     };
     let access_token = jsonwebtoken::encode(
         &Header::new(Algorithm::HS256),
@@ -478,7 +580,7 @@ fn token_response(
     })
 }
 
-fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
+pub(crate) fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -553,12 +655,13 @@ mod tests {
             email_verified_at: None,
             pending_email: None,
         };
-        let response = token_response(&config, &user, "r".into()).unwrap();
+        let response = token_response(&config, &user, "r".into(), 42).unwrap();
         let claims = decode_access_token(&response.access_token, secret).unwrap();
         assert_eq!(claims.sub, id);
         assert_eq!(claims.username, "alice");
         assert_eq!(claims.role, Role::Admin);
         assert_eq!(claims.exp - claims.iat, 60);
+        assert_eq!(claims.auth_time, 42);
         assert!(
             decode_access_token(&response.access_token, "autre-secret-autre-secret-autre")
                 .is_none()

@@ -1,5 +1,6 @@
 //! Configuration de l'authentification, lue dans l'environnement (voir `.env.example`).
 
+use crate::totp::TotpKey;
 use std::fmt;
 use std::time::Duration;
 
@@ -72,6 +73,82 @@ impl AuthConfig {
     }
 }
 
+/// Connexion Google (OpenID Connect, code d'autorisation + PKCE).
+#[derive(Clone)]
+pub struct GoogleConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    /// URL de retour enregistrée chez Google : page du front qui renvoie `code` et `state` à
+    /// `POST /auth/google/callback` (ou `/account/google/link`).
+    pub redirect_uri: String,
+}
+
+impl fmt::Debug for GoogleConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GoogleConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<masqué>")
+            .field("redirect_uri", &self.redirect_uri)
+            .finish()
+    }
+}
+
+/// Connexion Google et double authentification. Chaque partie est facultative : sans elle, ses
+/// routes répondent `503 not_configured`.
+#[derive(Clone, Debug, Default)]
+pub struct SecurityConfig {
+    pub google: Option<GoogleConfig>,
+    /// Clé de chiffrement des secrets TOTP (`TOTP_ENCRYPTION_KEY`, 64 caractères hexadécimaux).
+    pub totp_key: Option<TotpKey>,
+}
+
+impl SecurityConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Variante testable de [`SecurityConfig::from_env`].
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |name: &str| lookup(name).filter(|value| !value.trim().is_empty());
+        let google = match (
+            get("GOOGLE_CLIENT_ID"),
+            get("GOOGLE_CLIENT_SECRET"),
+            get("GOOGLE_REDIRECT_URI"),
+        ) {
+            (None, None, None) => None,
+            (Some(client_id), Some(client_secret), Some(redirect_uri)) => {
+                if !valid_redirect_uri(&redirect_uri) {
+                    return Err(ConfigError::Invalid("GOOGLE_REDIRECT_URI"));
+                }
+                Some(GoogleConfig {
+                    client_id,
+                    client_secret,
+                    redirect_uri,
+                })
+            }
+            (None, ..) => return Err(ConfigError::Missing("GOOGLE_CLIENT_ID")),
+            (_, None, _) => return Err(ConfigError::Missing("GOOGLE_CLIENT_SECRET")),
+            (.., None) => return Err(ConfigError::Missing("GOOGLE_REDIRECT_URI")),
+        };
+        let totp_key = match get("TOTP_ENCRYPTION_KEY") {
+            None => None,
+            Some(value) => {
+                Some(TotpKey::from_hex(&value).ok_or(ConfigError::Invalid("TOTP_ENCRYPTION_KEY"))?)
+            }
+        };
+        Ok(SecurityConfig { google, totp_key })
+    }
+}
+
+/// HTTPS, ou HTTP vers la machine locale (développement).
+fn valid_redirect_uri(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
+        _ => false,
+    } && url.fragment().is_none())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +211,54 @@ mod tests {
     fn debug_hides_the_secret() {
         let config = config(&[("JWT_SECRET", SECRET)]).unwrap();
         assert!(!format!("{config:?}").contains(SECRET));
+    }
+
+    fn security(vars: &[(&str, &str)]) -> Result<SecurityConfig, ConfigError> {
+        let vars: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        SecurityConfig::from_lookup(|name| vars.get(name).cloned())
+    }
+
+    #[test]
+    fn security_is_optional_but_complete() {
+        let none = security(&[]).unwrap();
+        assert!(none.google.is_none() && none.totp_key.is_none());
+        let google = [
+            ("GOOGLE_CLIENT_ID", "id.apps.googleusercontent.com"),
+            ("GOOGLE_CLIENT_SECRET", "chut"),
+            (
+                "GOOGLE_REDIRECT_URI",
+                "https://epickem.app/auth/google/callback",
+            ),
+            ("TOTP_ENCRYPTION_KEY", &"0f".repeat(32)),
+        ];
+        let full = security(&google).unwrap();
+        assert_eq!(full.google.as_ref().unwrap().client_id, google[0].1);
+        assert!(full.totp_key.is_some());
+        assert!(!format!("{full:?}").contains("chut"));
+        assert_eq!(
+            security(&google[..1]).unwrap_err(),
+            ConfigError::Missing("GOOGLE_CLIENT_SECRET")
+        );
+        assert_eq!(
+            security(&google[1..3]).unwrap_err(),
+            ConfigError::Missing("GOOGLE_CLIENT_ID")
+        );
+        assert_eq!(
+            security(&[("TOTP_ENCRYPTION_KEY", "court")]).unwrap_err(),
+            ConfigError::Invalid("TOTP_ENCRYPTION_KEY")
+        );
+    }
+
+    #[test]
+    fn redirect_uri_must_be_https_or_local() {
+        assert!(valid_redirect_uri("https://epickem.app/auth/google"));
+        assert!(valid_redirect_uri("http://localhost:5173/auth/google"));
+        assert!(!valid_redirect_uri("http://epickem.app/auth/google"));
+        assert!(!valid_redirect_uri("javascript:alert(1)"));
+        assert!(!valid_redirect_uri("https://epickem.app/#frag"));
+        assert!(!valid_redirect_uri("pas une url"));
     }
 }
