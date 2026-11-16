@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { Modal, ScrollView, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { MatchCard } from '@/components/matches/MatchCard';
+import { MatchBracket } from '@/components/matches/MatchBracket';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ArrowLeft01Icon from '@hugeicons/core-free-icons/ArrowLeft01Icon';
@@ -113,6 +116,8 @@ export function PublicTournamentsScreen() {
 
 export function PublicTournamentDetailsScreen() {
   const { t, i18n } = useTranslation();
+  const [bracketStep, setBracketStep] = useState<string | null>(null);
+  const [selectedMatch, setSelectedMatch] = useState<string | null>(null);
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
   const load = useCallback(async () => {
     const [tournament, participants, players, teams, steps] = await Promise.all(
@@ -145,8 +150,44 @@ export function PublicTournamentDetailsScreen() {
       />
     );
   const { tournament } = data;
+  const names = Object.fromEntries(
+    data.participants.map((participant) => [participant.id, participant.name]),
+  );
+  const bracketMatches = bracketStep ? (data.matches[bracketStep] ?? []) : [];
+  const match = bracketMatches.find((entry) => entry.id === selectedMatch);
   return (
     <SafeAreaView className="flex-1 bg-background" edges={['top', 'bottom']}>
+      <Modal
+        visible={bracketStep !== null}
+        onRequestClose={() => {
+          setBracketStep(null);
+          setSelectedMatch(null);
+        }}
+      >
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaView className="flex-1 gap-3 bg-background p-5">
+            <Button
+              variant="outline"
+              onPress={() => {
+                setBracketStep(null);
+                setSelectedMatch(null);
+              }}
+            >
+              <Text>{t('common.back')}</Text>
+            </Button>
+            <MatchBracket
+              context={{ matches: bracketMatches, names }}
+              open={setSelectedMatch}
+            />
+            {match ? (
+              <MatchCard
+                match={match}
+                context={{ matches: bracketMatches, names, groups: [] }}
+              />
+            ) : null}
+          </SafeAreaView>
+        </GestureHandlerRootView>
+      </Modal>
       <ScrollView
         className="flex-1"
         contentContainerClassName="gap-4 px-5 pb-8 pt-2"
@@ -235,6 +276,26 @@ export function PublicTournamentDetailsScreen() {
                   count: data.matches[step.id]?.length ?? 0,
                 })}
               </Text>
+              {(data.matches[step.id] ?? []).map((match) => (
+                <MatchCard
+                  key={match.id}
+                  match={match}
+                  context={{
+                    matches: data.matches[step.id],
+                    names,
+                    groups: [],
+                  }}
+                />
+              ))}
+              {['single_elim', 'double_elim'].includes(step.format) &&
+              data.matches[step.id]?.length ? (
+                <Button
+                  variant="outline"
+                  onPress={() => setBracketStep(step.id)}
+                >
+                  <Text>{t('matches.bracket')}</Text>
+                </Button>
+              ) : null}
             </View>
           ))}
         </Section>
@@ -253,6 +314,7 @@ function usePublicResource<T>(load: () => Promise<T>) {
     try {
       setData(await load());
     } catch (caught) {
+      setData(null);
       setError(tournamentErrorKey(caught));
     } finally {
       setLoading(false);

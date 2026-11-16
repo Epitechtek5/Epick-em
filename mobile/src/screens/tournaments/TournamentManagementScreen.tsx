@@ -24,7 +24,8 @@ import {
 } from '@/features/tournaments/api';
 import { tournamentErrorKey } from '@/features/tournaments/errors';
 import type { TournamentRole } from '@/features/tournaments/types';
-import { getUser } from '@/features/users/api';
+import { getUser, listUsers } from '@/features/users/api';
+import { StepOptionSelect } from '@/components/steps/option-select';
 import { useTranslation } from '@/i18n';
 
 export default function TournamentManagementScreen() {
@@ -32,6 +33,8 @@ export default function TournamentManagementScreen() {
   const { token, user } = useAuth();
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
   const [userId, setUserId] = useState('');
+  const [userPage, setUserPage] = useState(0);
+  const [userSearch, setUserSearch] = useState('');
   const [role, setRole] = useState<TournamentRole>('referee');
   const [copyName, setCopyName] = useState('');
   const [message, setMessage] = useState('');
@@ -39,7 +42,7 @@ export default function TournamentManagementScreen() {
   const load = useCallback(
     async (accessToken: string) => {
       const tournament = await getTournament(accessToken, tournamentId);
-      const [roles, invitations, templates] = await Promise.all([
+      const [roles, invitations, templates, users] = await Promise.all([
         listTournamentRoles(accessToken, tournamentId),
         tournament.visibility === 'invitation_only'
           ? listTournamentInvitations(accessToken, tournamentId)
@@ -47,6 +50,7 @@ export default function TournamentManagementScreen() {
         user?.role === 'admin'
           ? listTournamentTemplates(accessToken)
           : Promise.resolve([]),
+        listUsers(accessToken, { limit: 20, offset: userPage * 20 }),
       ]);
       const ids = [
         ...new Set(
@@ -63,14 +67,14 @@ export default function TournamentManagementScreen() {
             try {
               return [id, (await getUser(accessToken, id)).username] as const;
             } catch {
-              return [id, id] as const;
+              return [id, null] as const;
             }
           }),
         ),
       );
-      return { tournament, roles, invitations, templates, names };
+      return { tournament, roles, invitations, templates, names, users };
     },
-    [tournamentId, user?.role],
+    [tournamentId, user?.role, userPage],
   );
   const { data, loading, error, reload } = useGameResource(
     load,
@@ -86,12 +90,13 @@ export default function TournamentManagementScreen() {
       await reload();
     } catch (caught) {
       setMessage(tournamentErrorKey(caught));
+      await reload();
     } finally {
       setBusy(false);
     }
   }
 
-  if (!data)
+  if (!data || error)
     return (
       <ScreenState
         loading={loading}
@@ -115,7 +120,8 @@ export default function TournamentManagementScreen() {
           </Text>
           <Text>
             {t('tournaments.management.owner')}:{' '}
-            {data.roles.owner_id ? data.names[data.roles.owner_id] : '—'}
+            {(data.roles.owner_id && data.names[data.roles.owner_id]) ||
+              t('common.noData')}
           </Text>
           {data.roles.roles.map((assignment) => (
             <View
@@ -123,7 +129,7 @@ export default function TournamentManagementScreen() {
               className="flex-row items-center gap-2"
             >
               <Text className="flex-1">
-                {data.names[assignment.user_id]} ·{' '}
+                {data.names[assignment.user_id] ?? t('common.noData')} ·{' '}
                 {t(`tournaments.role.${assignment.role}`)}
               </Text>
               {isOwner ? (
@@ -150,12 +156,55 @@ export default function TournamentManagementScreen() {
           {isOwner ? (
             <>
               <Input
-                accessibilityLabel={t('tournaments.management.userId')}
-                placeholder={t('tournaments.management.userId')}
-                value={userId}
-                onChangeText={setUserId}
+                accessibilityLabel={t('teams.searchUsers')}
+                placeholder={t('teams.searchUsers')}
+                value={userSearch}
+                onChangeText={setUserSearch}
                 autoCapitalize="none"
               />
+              <StepOptionSelect
+                label={t('tournaments.management.userId')}
+                value={userId}
+                options={data.users
+                  .filter(
+                    (candidate) =>
+                      candidate.id !== data.roles.owner_id &&
+                      candidate.username
+                        .toLowerCase()
+                        .includes(userSearch.toLowerCase()),
+                  )
+                  .map((candidate) => candidate.id)}
+                labelFor={(id) =>
+                  data.users.find((candidate) => candidate.id === id)
+                    ?.username ?? t('common.noData')
+                }
+                onSelect={setUserId}
+                disabled={busy}
+              />
+              <View className="flex-row justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={userPage === 0 || busy}
+                  onPress={() => {
+                    setUserId('');
+                    setUserPage((page) => page - 1);
+                  }}
+                >
+                  <Text>{t('users.previous')}</Text>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={data.users.length < 20 || busy}
+                  onPress={() => {
+                    setUserId('');
+                    setUserPage((page) => page + 1);
+                  }}
+                >
+                  <Text>{t('users.next')}</Text>
+                </Button>
+              </View>
               <View className="flex-row gap-2">
                 {(['admin', 'referee'] as const).map((value) => (
                   <Button

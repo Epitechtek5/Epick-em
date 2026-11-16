@@ -36,6 +36,7 @@ import type {
 } from '@/features/tournaments/types';
 import { allowedTransitions } from '@/features/tournaments/validation';
 import { useTranslation } from '@/i18n';
+import { getUser } from '@/features/users/api';
 
 export default function TournamentDetailsScreen() {
   const { t, i18n } = useTranslation();
@@ -47,10 +48,13 @@ export default function TournamentDetailsScreen() {
   const load = useCallback(
     async (accessToken: string) => {
       const tournament = await getTournament(accessToken, tournamentId);
-      const [game, participants, roles] = await Promise.all([
+      const [game, participants, roles, owner] = await Promise.all([
         getGame(accessToken, tournament.game_id).catch(() => null),
         listAllTournamentParticipants(accessToken, tournamentId),
         listTournamentRoles(accessToken, tournamentId).catch(() => null),
+        tournament.owner_id
+          ? getUser(accessToken, tournament.owner_id).catch(() => null)
+          : Promise.resolve(null),
       ]);
       const teamIds = [
         ...new Set(
@@ -74,6 +78,7 @@ export default function TournamentDetailsScreen() {
       );
       return {
         tournament,
+        ownerName: owner?.username,
         gameName: game?.name ?? tournament.game_id,
         participants,
         teamRegistrations: teamRegistrations.filter(
@@ -354,14 +359,14 @@ export default function TournamentDetailsScreen() {
           />
         ) : null}
         {tournament.rules ? (
-          <InfoLine
-            label={t('tournaments.fields.rules')}
-            value={tournament.rules}
-          />
+          <View className="gap-2">
+            <Text className="font-medium">{t('tournaments.fields.rules')}</Text>
+            <Text variant="muted">{tournament.rules}</Text>
+          </View>
         ) : null}
         <InfoLine
           label={t('tournaments.fields.owner')}
-          value={tournament.owner_id ?? '—'}
+          value={data.ownerName ?? t('common.noData')}
         />
         {tournament.participant_type === 'solo' ? (
           <InfoLine

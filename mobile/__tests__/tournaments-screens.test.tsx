@@ -29,6 +29,7 @@ jest.mock('../src/components/teams/game-filter-select', () => ({
   GameFilterSelect: () => null,
 }));
 jest.mock('expo-router', () => ({
+  useFocusEffect: jest.requireActual('react').useEffect,
   router: { push: jest.fn(), replace: jest.fn() },
   useLocalSearchParams: () => ({
     tournamentId: '22222222-2222-4222-8222-222222222222',
@@ -291,6 +292,89 @@ it('checks in the signed-in participant through the API', async () => {
       id,
     ),
   );
+});
+
+it.each([
+  ['other-user', 'Retirer'],
+  [id, 'Se retirer'],
+])(
+  'uses readable response labels and the correct removal action for %s',
+  async (userId, action) => {
+    await i18n.changeLanguage('fr');
+    jest.mocked(useAuth).mockReturnValue({
+      ...session,
+      user: { ...session.user, role: 'admin' },
+    });
+    const participant = {
+      id,
+      user_id: userId,
+      tournament_team_id: null,
+      status: 'registered',
+      responses: { ingame_name: 'Alice', accepted: false },
+    };
+    jest.mocked(useGameResource).mockReturnValue({
+      data: {
+        tournament: {
+          ...tournament,
+          status: 'registration',
+          registration_fields: [
+            {
+              key: 'ingame_name',
+              label: 'Pseudo en jeu',
+              field_type: 'text',
+              required: true,
+              options: [],
+            },
+            {
+              key: 'accepted',
+              label: 'Accord',
+              field_type: 'boolean',
+              required: false,
+              options: [],
+            },
+          ],
+        },
+        participants: [participant],
+        allParticipants: [participant],
+        teams: [],
+        teamOptions: [],
+        referencedTeams: [],
+        names: ['Alice'],
+        loadedAt: Date.now(),
+      },
+      loading: false,
+      refreshing: false,
+      error: '',
+      reload: jest.fn(),
+      setData: jest.fn(),
+    });
+    await render(<TournamentParticipantsScreen />);
+    expect(screen.getByText('Pseudo en jeu: Alice')).toBeTruthy();
+    expect(screen.queryByText(/ingame_name:/)).toBeNull();
+    expect(screen.getByText(action)).toBeTruthy();
+    expect(screen.queryByText('Accord: false')).toBeNull();
+  },
+);
+
+it('displays the owner name instead of their identifier', async () => {
+  jest.mocked(useGameResource).mockReturnValue({
+    data: {
+      tournament: { ...tournament, owner_id: 'owner-identifier' },
+      ownerName: 'Tournament owner',
+      gameName: 'Game',
+      participants: [],
+      teamRegistrations: [],
+      loadedAt: Date.now(),
+    },
+    loading: false,
+    refreshing: false,
+    error: '',
+    reload: jest.fn(),
+    setData: jest.fn(),
+  });
+  await render(<TournamentDetailsScreen />);
+  expect(screen.getByText('Tournament owner')).toBeTruthy();
+  expect(screen.queryByText('owner-identifier')).toBeNull();
 });
 
 it('registers the current solo player without requiring a team', async () => {

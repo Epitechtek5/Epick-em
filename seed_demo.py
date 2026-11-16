@@ -257,7 +257,7 @@ def create_tournament(
         "team_scoring_n": top_n,
         "mode": "online",
         "visibility": "public",
-        "rules": "Respect opponents, staff decisions and the published schedule.",
+        "rules": "Respectez les adversaires, les décisions des organisateurs et les horaires annoncés.",
         "registration_policy": "open",
         "waiting_list_enabled": False,
     }
@@ -546,14 +546,14 @@ def seed_registration_management(
             "registration_fields": [
                 {
                     "key": "ingame_name",
-                    "label": "In-game name",
+                    "label": "Pseudo en jeu",
                     "field_type": "text",
                     "required": True,
                     "options": [],
                 },
                 {
                     "key": "platform",
-                    "label": "Platform",
+                    "label": "Plateforme",
                     "field_type": "select",
                     "required": True,
                     "options": ["PC", "PlayStation", "Xbox"],
@@ -641,6 +641,8 @@ def main() -> int:
                         help="Allow local fixture email verification and admin promotion via docker exec")
     parser.add_argument("--postgres-container", default="epickem-postgres-1")
     parser.add_argument("--output", default="epickem-seed-manifest.json")
+    parser.add_argument("--refresh-demo-labels", action="store_true",
+                        help="Translate existing demo rules and field labels without resetting registrations")
     args = parser.parse_args()
 
     if args.admin in USERS:
@@ -649,6 +651,27 @@ def main() -> int:
         parser.error("This seed script is restricted to localhost development APIs")
     api = Api(args.url)
     api.request("GET", "/health")
+    if args.refresh_demo_labels:
+        admin_token = api.login(f"{args.admin}@example.test")
+        tournaments = api.get("/tournaments?limit=100", admin_token)
+        for tournament in tournaments:
+            if not tournament["name"].startswith("DEMO - "):
+                continue
+            changes: dict[str, Any] = {}
+            if tournament.get("rules") == "Respect opponents, staff decisions and the published schedule.":
+                changes["rules"] = "Respectez les adversaires, les décisions des organisateurs et les horaires annoncés."
+            fields = tournament.get("registration_fields", [])
+            labels = {"In-game name": "Pseudo en jeu", "Platform": "Plateforme"}
+            translated = [
+                {**field, "label": labels.get(field["label"], field["label"])}
+                for field in fields
+            ]
+            if translated != fields:
+                changes["registration_fields"] = translated
+            if changes:
+                api.request("PATCH", f"/tournaments/{tournament['id']}", changes, admin_token)
+                print(f"  updated demo labels: {tournament['name']}")
+        return 0
     spec = api.request("GET", "/openapi.json")
     required_routes = {
         "/tournaments/{id}/steps/{step_id}/matches": ("post",),

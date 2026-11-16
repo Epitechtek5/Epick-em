@@ -21,6 +21,7 @@ jest.mock('../src/features/games/use-game-resource', () => ({
 }));
 jest.mock('../src/features/steps/api');
 jest.mock('expo-router', () => ({
+  useFocusEffect: jest.requireActual('react').useEffect,
   router: { push: jest.fn(), replace: jest.fn() },
   useLocalSearchParams: () => ({
     tournamentId: '22222222-2222-4222-8222-222222222222',
