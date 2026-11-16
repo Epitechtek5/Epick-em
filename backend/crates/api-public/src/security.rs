@@ -852,7 +852,7 @@ mod tests {
         let state = AppState::new(
             std::sync::Arc::new(crate::store::MemoryStore::new()),
             AuthConfig {
-                jwt_secret: "0123456789abcdef0123456789abcdef".into(),
+                jwt_secret: "s".repeat(32),
                 access_token_ttl: Duration::from_secs(60),
                 refresh_token_ttl: Duration::from_secs(60),
             },
