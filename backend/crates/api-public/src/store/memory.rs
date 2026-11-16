@@ -693,6 +693,14 @@ impl AuthStore for MemoryStore {
 
     async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError> {
         let mut state = self.state();
+        if let Some(input) = stats.iter().find(|input| {
+            state
+                .stats
+                .iter()
+                .any(|s| s.key == input.key && s.kind.is_numeric() != input.kind.is_numeric())
+        }) {
+            return Err(StoreError::StatKindChanged(input.key.clone()));
+        }
         Ok(stats
             .into_iter()
             .map(|input| state.upsert_stat(input))

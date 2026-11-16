@@ -116,6 +116,35 @@ fn trimmed(options: &[StatOption]) -> Vec<StatOption> {
         .collect()
 }
 
+/// Statistiques du fichier dont la nature changerait : une statistique numérique (`flat`,
+/// `percent`) ne devient pas `select` ou `mvp`, ni l'inverse, comme pour `PATCH /stats/{id}`.
+/// Un message par statistique en cause.
+pub(crate) async fn kind_conflicts(
+    store: &dyn AuthStore,
+    wanted: impl IntoIterator<Item = (&str, StatType)>,
+) -> Result<Vec<String>, StoreError> {
+    let existing: HashMap<String, StatType> = store
+        .list_stats(i64::MAX, 0)
+        .await?
+        .into_iter()
+        .map(|stat| (stat.key, stat.kind))
+        .collect();
+    Ok(wanted
+        .into_iter()
+        .filter_map(|(key, kind)| {
+            let current = existing.get(key.trim())?;
+            (current.is_numeric() != kind.is_numeric()).then(|| {
+                format!(
+                    "la statistique `{}` est `{}` : elle ne devient pas `{}` (créez-en une autre).",
+                    key.trim(),
+                    current.as_str(),
+                    kind.as_str()
+                )
+            })
+        })
+        .collect())
+}
+
 fn parse_game_stats(stats: &[Value]) -> Result<Vec<GameStat>, String> {
     stats
         .iter()
@@ -165,6 +194,17 @@ impl GameStats for StoreStats {
             }
         }
         None
+    }
+
+    async fn conflicts(&self, stats: &[Value]) -> Result<Vec<String>, StoreError> {
+        let Ok(parsed) = parse_game_stats(stats) else {
+            return Ok(Vec::new());
+        };
+        kind_conflicts(
+            self.0.as_ref(),
+            parsed.iter().map(|stat| (stat.key.as_str(), stat.kind)),
+        )
+        .await
     }
 
     async fn import(&self, game_id: Uuid, stats: Vec<Value>) -> Result<(), StoreError> {
@@ -337,6 +377,15 @@ pub(crate) async fn import_stats(
     let problems = check(&games, &stats);
     if !problems.is_empty() {
         return Err(file_error(problems));
+    }
+    let conflicts = kind_conflicts(
+        state.store.as_ref(),
+        stats.iter().map(|stat| (stat.key.as_str(), stat.kind)),
+    )
+    .await
+    .map_err(ApiError::internal)?;
+    if !conflicts.is_empty() {
+        return Err(file_error(conflicts));
     }
 
     let options: Vec<Vec<(Uuid, Vec<StatOption>)>> = stats

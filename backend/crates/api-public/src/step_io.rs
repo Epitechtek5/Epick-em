@@ -83,6 +83,8 @@ pub struct StepScope {
     pub group_size: i32,
     /// Participants de chaque groupe, par rang de groupe.
     pub groups: HashMap<i32, HashSet<Who>>,
+    /// Comptes de chaque équipe du tournoi, par rang dans `teams` (voir [`FileScope`]).
+    pub team_players: HashMap<usize, HashSet<Uuid>>,
 }
 
 /// Import et export des matchs d'une étape.
@@ -581,6 +583,7 @@ impl TournamentChild for StoreSteps {
                         (group.index, members)
                     })
                     .collect(),
+                team_players: scope.team_players.clone(),
             };
             if let Some(problem) = self
                 .matches

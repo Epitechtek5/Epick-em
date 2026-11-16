@@ -1451,19 +1451,23 @@ impl AuthStore for PgStore {
         let mut tx = self.pool.begin().await?;
         let mut result = Vec::with_capacity(stats.len());
         for input in stats {
-            // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour.
+            // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour. La clause `WHERE`
+            // laisse intacte (et ne renvoie pas) une statistique dont la nature changerait.
+            let key = input.key.clone();
             let row = sqlx::query_as::<_, (Uuid, String, String, String, String, bool)>(
                 "INSERT INTO stats (name, key, type, scope) VALUES ($1, $2, $3, $4) \
                  ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, \
                      scope = EXCLUDED.scope \
+                 WHERE (stats.type IN ('flat', 'percent')) = (EXCLUDED.type IN ('flat', 'percent')) \
                  RETURNING id, name, key, type, scope, (xmax = 0)",
             )
             .bind(input.name)
             .bind(input.key)
             .bind(input.kind.as_str())
             .bind(input.scope.as_str())
-            .fetch_one(&mut *tx)
-            .await?;
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(StoreError::StatKindChanged(key))?;
             result.push((stat((row.0, row.1, row.2, row.3, row.4))?, row.5));
         }
         tx.commit().await?;

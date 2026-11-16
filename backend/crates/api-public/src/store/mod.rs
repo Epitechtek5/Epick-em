@@ -153,6 +153,9 @@ pub enum StoreError {
     MatchState,
     /// L'adresse e-mail est déjà utilisée par un autre compte.
     EmailTaken,
+    /// L'import changerait une statistique numérique (`flat`, `percent`) en `select` ou `mvp`,
+    /// ou l'inverse (clé de la statistique).
+    StatKindChanged(String),
     Other(String),
 }
 
@@ -179,6 +182,10 @@ impl fmt::Display for StoreError {
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
+            StoreError::StatKindChanged(key) => write!(
+                f,
+                "la statistique {key} ne peut pas passer de numérique à `select`/`mvp`, ni l'inverse"
+            ),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -323,7 +330,9 @@ pub trait AuthStore: Send + Sync {
 
     /// Crée ou met à jour (par clé) les statistiques données, en une seule opération : en cas
     /// d'erreur, aucune n'est modifiée. Chacune est renvoyée avec `true` si elle vient d'être
-    /// créée. Les clés de `stats` sont distinctes.
+    /// créée. Les clés de `stats` sont distinctes. [`StoreError::StatKindChanged`] si une
+    /// statistique existante passerait de numérique à `select`/`mvp` ou l'inverse, comme le
+    /// refuse `PATCH /stats/{id}`.
     async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError>;
 
     /// Remplace les statistiques liées au jeu par `stat_ids`, en une seule opération. `false`

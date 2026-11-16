@@ -515,6 +515,21 @@ async fn stats_are_upserted_by_key_and_links_are_replaced() {
     assert!(!again[0].1);
     assert_eq!((again[0].0.id, again[0].0.name.as_str()), (a.id, "A2"));
     assert_eq!(again[0].0.kind, StatType::Percent);
+    // Numérique vers `mvp` : refusé, et rien n'est écrit (pas même le renommage de B).
+    assert!(matches!(
+        store
+            .upsert_stats(vec![
+                input("B2", &key_b, StatType::Flat),
+                StatInput {
+                    scope: StatScope::Match,
+                    ..input("A3", &key_a, StatType::Mvp)
+                },
+            ])
+            .await,
+        Err(StoreError::StatKindChanged(key)) if key == key_a
+    ));
+    assert_eq!(store.find_stat(a.id).await.unwrap().unwrap().name, "A2");
+    assert_eq!(store.find_stat(b.id).await.unwrap().unwrap().name, "B");
 
     assert!(store.set_game_stats(g1.id, vec![a.id, b.id]).await.unwrap());
     assert!(store.set_game_stats(g1.id, vec![b.id]).await.unwrap());

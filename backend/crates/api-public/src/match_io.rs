@@ -24,13 +24,14 @@
 //! d'après le barème du tournoi, déjà écrit ; ceux du fichier sont conservés tels quels, si bien
 //! qu'un fichier exporté se réimporte sans perte (hors horodatages de création).
 
+use crate::match_games::{aggregate, is_decided};
 use crate::matches::{
     BEST_OF, ROUND_MAX, StatSchema, capacity_of, playable_problem, players_of, points_of, settle,
 };
 use crate::step_io::{Designation, StepMatches, StepScope, Who, designate};
 use crate::store::{
-    AuthStore, Bracket, GameImport, MatchGame, MatchImport, MatchParticipant, MatchResult,
-    MatchScore, MatchStatus, StepFormat, StepStatus, StoreError,
+    AuthStore, Bracket, GameImport, MatchGame, MatchGameParticipant, MatchImport, MatchParticipant,
+    MatchResult, MatchScore, MatchStatus, StepFormat, StepStatus, StoreError,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournament_io::TournamentChild;
@@ -254,8 +255,11 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
             reasons.push(format!("participants : {problem}"));
         }
         let mut seen = HashSet::new();
+        // Identifiant provisoire de chaque participant, commun au match et à ses parties.
+        let mut placeholders: HashMap<Who, Uuid> = HashMap::new();
         let mut members = Vec::with_capacity(count);
         for participant in &item.participants {
+            let mut placeholder = Uuid::new_v4();
             match participant.who() {
                 Err(problem) => reasons.push(format!("participants : {problem}.")),
                 Ok(who) => {
@@ -263,7 +267,10 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
                         reasons.push(format!("participants : {who} n'est pas dans ce groupe."));
                     } else if !seen.insert(who.clone()) {
                         reasons.push(format!("participants : {who} apparaît plusieurs fois."));
+                    } else {
+                        placeholders.insert(who.clone(), placeholder);
                     }
+                    placeholder = placeholders.get(&who).copied().unwrap_or(placeholder);
                 }
             }
             if !participant.points.is_none_or(f64::is_finite) {
@@ -281,19 +288,36 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
             }
             members.push(MatchParticipant {
                 match_id: Uuid::nil(),
-                participant_id: Uuid::new_v4(),
+                participant_id: placeholder,
                 stats: participant.stats(),
                 points: participant.points.unwrap_or(0.0),
                 rank: participant.rank,
                 result: participant.result,
             });
         }
-        if status == MatchStatus::Finished
-            && let Err(problem) = settle(&members)
-        {
-            reasons.push(format!("participants : {problem}"));
+        let settled = if status == MatchStatus::Finished {
+            match settle(&members) {
+                Ok(scores) => Some(scores),
+                Err(problem) => {
+                    reasons.push(format!("participants : {problem}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let (game_reasons, games) = game_problems(item, status, &placeholders, scope, schema);
+        let games_valid = game_reasons.is_empty();
+        reasons.extend(game_reasons);
+        if games_valid && !games.is_empty() {
+            reasons.extend(series_problems(
+                item.best_of.unwrap_or(1),
+                status,
+                &games,
+                settled.as_deref(),
+                &placeholders,
+            ));
         }
-        reasons.extend(game_problems(item, status, &seen, schema));
         if !reasons.is_empty() {
             out.push(format!("match {label} : {}", reasons.join(" ")));
         }
@@ -303,14 +327,17 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
 }
 
 /// Ce qui ne va pas dans la série d'un match : longueur, statut, participants et attributs des
-/// parties. `members` désigne les participants du match.
+/// parties. `members` donne l'identifiant provisoire de chaque participant du match. Rend aussi
+/// les parties, leurs résultats déduits, pour contrôler la série ([`series_problems`]).
 fn game_problems(
     item: &MatchItem,
     status: MatchStatus,
-    members: &HashSet<Who>,
+    members: &HashMap<Who, Uuid>,
+    scope: &StepScope,
     schema: &StatSchema,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<MatchGame>) {
     let mut reasons = Vec::new();
+    let mut games = Vec::new();
     let best_of = item.best_of.unwrap_or(1);
     if !BEST_OF.contains(&best_of) {
         reasons.push("best_of : la série compte 1, 3 ou 5 parties.".to_string());
@@ -321,7 +348,7 @@ fn game_problems(
                 "games : un match terminé en série de {best_of} a ses parties."
             ));
         }
-        return reasons;
+        return (reasons, games);
     }
     if item.games.len() > usize::try_from(best_of).unwrap_or(1) {
         reasons.push(format!(
@@ -333,11 +360,6 @@ fn game_problems(
         reasons.push("games : un match `scheduled` n'a pas de parties.".to_string());
     }
     let last = item.games.len() - 1;
-    // Identifiants provisoires des participants du match, pour valider les MVP.
-    let placeholders: HashMap<Who, Uuid> = members
-        .iter()
-        .map(|who| (who.clone(), Uuid::new_v4()))
-        .collect();
     for (index, game) in item.games.iter().enumerate() {
         let label = format!("games {}", index + 1);
         let game_status = game.status.unwrap_or(MatchStatus::Ongoing);
@@ -371,17 +393,31 @@ fn game_problems(
         let mut players = HashSet::new();
         let mut ranked = Vec::new();
         for participant in &game.participants {
+            let mut placeholder = Uuid::new_v4();
             match participant.who() {
                 Err(problem) => reasons.push(format!("{label} : participants : {problem}.")),
                 Ok(who) => {
-                    if !members.contains(&who) {
+                    if let Some(id) = members.get(&who) {
+                        placeholder = *id;
+                        if !seen.insert(who.clone()) {
+                            reasons.push(format!(
+                                "{label} : participants : {who} apparaît plusieurs fois."
+                            ));
+                        }
+                    } else {
                         reasons.push(format!(
                             "{label} : participants : {who} ne joue pas ce match."
                         ));
-                    } else if !seen.insert(who.clone()) {
-                        reasons.push(format!(
-                            "{label} : participants : {who} apparaît plusieurs fois."
-                        ));
+                    }
+                    // Un joueur ne se désigne (MVP) que s'il est membre de l'équipe qu'il
+                    // détaille.
+                    if let Who::Team(rank) = &who {
+                        let roster = scope.team_players.get(rank);
+                        players.extend(
+                            players_of(&participant.stats())
+                                .into_iter()
+                                .filter(|player| roster.is_some_and(|r| r.contains(player))),
+                        );
                     }
                 }
             }
@@ -400,30 +436,67 @@ fn game_problems(
             if let Err(problem) = schema.parse(&participant.stats()) {
                 reasons.push(format!("{label} : participants : stats : {problem}"));
             }
-            players.extend(players_of(&participant.stats()));
             ranked.push(MatchParticipant {
                 match_id: Uuid::nil(),
-                participant_id: Uuid::new_v4(),
+                participant_id: placeholder,
                 stats: participant.stats(),
                 points: participant.points.unwrap_or(0.0),
                 rank: participant.rank,
                 result: participant.result,
             });
         }
+        let mut settled = Vec::new();
         if game_status == MatchStatus::Finished {
+            // Une partie terminée réunit tous les participants du match : les absents ne
+            // pourraient plus y être ajoutés.
+            let mut missing: Vec<String> = members
+                .keys()
+                .filter(|who| !seen.contains(*who))
+                .map(ToString::to_string)
+                .collect();
+            missing.sort();
             if game.participants.is_empty() {
                 reasons.push(format!("{label} : une partie terminée a ses participants."));
-            } else if let Err(problem) = settle(&ranked) {
-                reasons.push(format!("{label} : participants : {problem}"));
+            } else if !missing.is_empty() {
+                reasons.push(format!(
+                    "{label} : participants : une partie terminée réunit tous les participants du match ; absents : {}.",
+                    missing.join(", ")
+                ));
+            } else {
+                match settle(&ranked) {
+                    Ok(scores) => settled = scores,
+                    Err(problem) => reasons.push(format!("{label} : participants : {problem}")),
+                }
             }
         }
+        games.push(MatchGame {
+            id: Uuid::new_v4(),
+            match_id: Uuid::nil(),
+            number: i32::try_from(index + 1).unwrap_or(i32::MAX),
+            status: game_status,
+            attributes: Value::Null,
+            started_at: None,
+            ended_at: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            participants: settled
+                .into_iter()
+                .map(|score| MatchGameParticipant {
+                    participant_id: score.participant_id,
+                    stats: score.stats,
+                    points: score.points,
+                    rank: score.rank,
+                    result: score.result,
+                })
+                .collect(),
+        });
         if let Some(attributes) = &game.attributes {
-            let resolved = resolve_attributes(attributes, &|who| placeholders.get(who).copied());
+            let resolved = resolve_attributes(attributes, &|who| members.get(who).copied());
             match resolved {
                 Err(problem) => reasons.push(format!("{label} : attributes : {problem}")),
                 Ok(resolved) => {
                     let designated: HashSet<Uuid> =
-                        placeholders.values().copied().chain(players).collect();
+                        members.values().copied().chain(players).collect();
                     if let Err(problem) = schema.check_attributes(&resolved, &designated) {
                         reasons.push(format!("{label} : attributes : {problem}"));
                     }
@@ -431,6 +504,57 @@ fn game_problems(
             }
         }
     }
+    (reasons, games)
+}
+
+/// Ce qui oppose le résultat d'un match à celui de ses parties (déjà valides) : comme en
+/// direct, la série se termine dès qu'elle est décidée, et le vainqueur du match est celui des
+/// parties. `settled` donne les résultats du match s'il est terminé.
+fn series_problems(
+    best_of: i32,
+    status: MatchStatus,
+    games: &[MatchGame],
+    settled: Option<&[MatchScore]>,
+    members: &HashMap<Who, Uuid>,
+) -> Vec<String> {
+    let decided = is_decided(best_of, games);
+    if status != MatchStatus::Finished {
+        return if decided {
+            vec![
+                "games : les parties terminées décident déjà la série : le match est `finished`."
+                    .to_string(),
+            ]
+        } else {
+            Vec::new()
+        };
+    }
+    if !decided {
+        return vec![format!(
+            "games : les parties terminées ne décident pas la série de {best_of} (majorité des parties ou série complète)."
+        )];
+    }
+    let Some(settled) = settled else {
+        return Vec::new();
+    };
+    let ids: Vec<Uuid> = members.values().copied().collect();
+    let Ok(expected) = settle(&aggregate(games, &ids, &HashMap::new())) else {
+        return Vec::new();
+    };
+    let mut reasons: Vec<String> = members
+        .iter()
+        .filter_map(|(who, id)| {
+            let wanted = expected.iter().find(|s| s.participant_id == *id)?.result?;
+            let declared = settled.iter().find(|s| s.participant_id == *id)?.result?;
+            (wanted != declared).then(|| {
+                format!(
+                    "participants : le résultat de {who} (`{}`) contredit ses parties (`{}` d'après les parties gagnées).",
+                    declared.as_str(),
+                    wanted.as_str()
+                )
+            })
+        })
+        .collect();
+    reasons.sort();
     reasons
 }
 
@@ -826,6 +950,7 @@ mod tests {
             match_type,
             group_size: 4,
             groups: HashMap::from([(1, group(&["ann", "bob", "cat"])), (2, group(&["dan"]))]),
+            team_players: HashMap::new(),
         }
     }
 
@@ -1048,6 +1173,92 @@ mod tests {
             let found = problems_of(&pool, vec![value]);
             assert!(found.contains(expected), "{expected}: {found}");
         }
+    }
+
+    /// Partie terminée d'un duel ann/bob gagnée par `winner`.
+    fn duel_game(winner: &str) -> Value {
+        let loser = if winner == "ann" { "bob" } else { "ann" };
+        json!({ "status": "finished", "participants": [
+            { "user": winner, "stats": { "kills": 3 }, "rank": 1 },
+            { "user": loser, "stats": { "kills": 1 }, "rank": 2 },
+        ] })
+    }
+
+    fn series_match(status: &str, winner: Option<&str>, games: Vec<Value>) -> Value {
+        let participants = match winner {
+            Some(winner) => {
+                let loser = if winner == "ann" { "bob" } else { "ann" };
+                json!([
+                    { "user": winner, "stats": { "kills": 6 }, "rank": 1 },
+                    { "user": loser, "stats": { "kills": 2 }, "rank": 2 },
+                ])
+            }
+            None => json!([{ "user": "ann" }, { "user": "bob" }]),
+        };
+        json!({ "group": 1, "best_of": 3, "status": status,
+                "participants": participants, "games": games })
+    }
+
+    #[test]
+    fn an_imported_series_agrees_with_its_games() {
+        let duel = scope(MatchType::Duel, StepFormat::Pool);
+        let won = vec![duel_game("ann"), duel_game("ann")];
+        assert_eq!(
+            problems_of(
+                &duel,
+                vec![series_match("finished", Some("ann"), won.clone())]
+            ),
+            ""
+        );
+        // Ann gagne deux parties : le match ne peut pas annoncer Bob vainqueur.
+        let found = problems_of(
+            &duel,
+            vec![series_match("finished", Some("bob"), won.clone())],
+        );
+        assert!(found.contains("contredit ses parties"), "{found}");
+        // Une partie terminée ne décide pas un BO3.
+        let found = problems_of(
+            &duel,
+            vec![series_match(
+                "finished",
+                Some("ann"),
+                vec![duel_game("ann")],
+            )],
+        );
+        assert!(found.contains("ne décident pas"), "{found}");
+        // Une série décidée ne laisse pas le match en cours.
+        let found = problems_of(&duel, vec![series_match("ongoing", None, won)]);
+        assert!(found.contains("décident déjà"), "{found}");
+    }
+
+    #[test]
+    fn a_finished_game_has_every_participant_of_the_match() {
+        let duel = scope(MatchType::Duel, StepFormat::Pool);
+        let alone = json!({ "status": "finished", "participants": [
+            { "user": "ann", "stats": { "kills": 3 }, "rank": 1 },
+        ] });
+        let found = problems_of(&duel, vec![series_match("ongoing", None, vec![alone])]);
+        assert!(found.contains("absents"), "{found}");
+    }
+
+    #[test]
+    fn an_mvp_player_belongs_to_the_team_he_details() {
+        let member = Uuid::new_v4();
+        let stranger = Uuid::new_v4();
+        let mut teams = scope(MatchType::Duel, StepFormat::Pool);
+        teams.groups = HashMap::from([(1, HashSet::from([Who::Team(0), Who::Team(1)]))]);
+        teams.team_players = HashMap::from([(0, HashSet::from([member]))]);
+        let with_mvp = |mvp: Uuid| {
+            let stats = json!({ "total": { "kills": 2 },
+                "players": { member.to_string(): { "kills": 1 }, stranger.to_string(): { "kills": 1 } } });
+            json!({ "group": 1, "best_of": 3, "status": "ongoing",
+                "participants": [{ "team": 0 }, { "team": 1 }],
+                "games": [{ "attributes": { "mvp": mvp.to_string() },
+                            "participants": [{ "team": 0, "stats": stats }, { "team": 1 }] }] })
+        };
+        assert_eq!(problems_of(&teams, vec![with_mvp(member)]), "");
+        let found = problems_of(&teams, vec![with_mvp(stranger)]);
+        assert!(found.contains("attributes"), "{found}");
     }
 
     #[test]

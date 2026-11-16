@@ -129,6 +129,21 @@ pub struct FileScope {
     pub users: HashSet<String>,
     /// Rangs (dans `teams`) des équipes inscrites seules.
     pub teams: HashSet<usize>,
+    /// Comptes (propriétaire et membres) de chaque équipe du tournoi, par rang dans `teams` :
+    /// seuls eux peuvent être désignés comme joueurs de l'équipe (MVP d'une partie).
+    pub team_players: HashMap<usize, HashSet<Uuid>>,
+}
+
+/// Noms d'utilisateur (propriétaire et membres) d'une équipe du fichier, tels qu'écrits.
+fn team_usernames(team: &Value) -> Vec<&str> {
+    let owner = team.get("owner").and_then(Value::as_str);
+    let members = team
+        .get("members")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|member| member.get("username").and_then(Value::as_str));
+    owner.into_iter().chain(members).collect()
 }
 
 /// Tant qu'un niveau n'est pas branché : rien à exporter, rien d'accepté.
@@ -543,10 +558,12 @@ impl Lookups {
             }
         }
         let mut users: HashMap<String, Option<Uuid>> = HashMap::new();
-        for name in tournaments
-            .iter()
-            .flat_map(|t| t.participants.iter().filter_map(|p| p.user.as_deref()))
-        {
+        for name in tournaments.iter().flat_map(|t| {
+            t.participants
+                .iter()
+                .filter_map(|p| p.user.as_deref())
+                .chain(t.teams.iter().flat_map(team_usernames))
+        }) {
             let key = name.trim().to_lowercase();
             if let Entry::Vacant(slot) = users.entry(key) {
                 let id = store
@@ -653,6 +670,24 @@ async fn prepare(
                 .iter()
                 .filter(|p| p.user.is_none())
                 .filter_map(|p| p.team)
+                .collect(),
+            team_players: tournament
+                .teams
+                .iter()
+                .enumerate()
+                .map(|(rank, team)| {
+                    let ids = team_usernames(team)
+                        .into_iter()
+                        .filter_map(|name| {
+                            lookups
+                                .users
+                                .get(&name.trim().to_lowercase())
+                                .copied()
+                                .flatten()
+                        })
+                        .collect();
+                    (rank, ids)
+                })
                 .collect(),
         };
         if let Some(game_id) = game_id {

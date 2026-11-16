@@ -306,7 +306,8 @@ async fn save_game_results(
     }
     if let Some(attributes) = &request.attributes {
         // Un MVP désigne un participant du match ou un joueur détaillé dans les statistiques
-        // de la partie (celles qui viennent d'être envoyées, sinon celles déjà enregistrées).
+        // de la partie (celles qui viennent d'être envoyées, sinon celles déjà enregistrées),
+        // à condition qu'il soit membre de l'équipe dont il détaille les statistiques.
         let mut designated: HashSet<Uuid> =
             game.participants.iter().map(|p| p.participant_id).collect();
         for member in &game.participants {
@@ -314,7 +315,12 @@ async fn save_game_results(
                 .iter()
                 .find(|s| s.participant_id == member.participant_id)
                 .map_or(&member.stats, |s| &s.stats);
-            designated.extend(players_of(current_stats));
+            let roster = roster_of(&state, member.participant_id).await?;
+            designated.extend(
+                players_of(current_stats)
+                    .into_iter()
+                    .filter(|player| roster.contains(player)),
+            );
         }
         if let Err(problem) = schema.check_attributes(attributes, &designated) {
             errors.push(("attributes", problem));
@@ -526,6 +532,29 @@ async fn find_game(state: &AppState, match_id: Uuid, number: i32) -> Result<Matc
         .into_iter()
         .find(|g| g.number == number)
         .ok_or(ApiError::NotFound)
+}
+
+/// Comptes de l'équipe d'un inscrit (aucun pour un joueur seul) : seuls eux peuvent être
+/// désignés comme joueur dans ses statistiques.
+async fn roster_of(state: &AppState, participant_id: Uuid) -> Result<HashSet<Uuid>, ApiError> {
+    let Some(team_id) = state
+        .store
+        .find_participant(participant_id)
+        .await
+        .map_err(ApiError::internal)?
+        .and_then(|participant| participant.tournament_team_id)
+    else {
+        return Ok(HashSet::new());
+    };
+    Ok(state
+        .store
+        .list_tournament_team_members(team_id)
+        .await
+        .map_err(ApiError::internal)?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|member| member.user_id)
+        .collect())
 }
 
 fn game_participant(score: MatchScore) -> MatchGameParticipant {

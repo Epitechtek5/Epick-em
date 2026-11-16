@@ -1316,7 +1316,8 @@ pub(crate) fn points_of(
 
 /// Résultats définitifs d'un match qui se termine : chaque participant a des statistiques ou un
 /// rang ; sans aucun rang, ils sont déduits des points (les égalités le partagent) ; un résultat
-/// absent vaut `win` pour la première place, `draw` si elle est partagée, `loss` sinon.
+/// absent vaut `win` pour la première place, `draw` si elle est partagée, `loss` sinon. Un
+/// résultat fourni doit être celui-là : sinon, le match est refusé.
 pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, String> {
     let empty =
         |m: &MatchParticipant| m.rank.is_none() && m.stats.as_object().is_none_or(|o| o.is_empty());
@@ -1351,21 +1352,43 @@ pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, St
         return Err("Tous les participants ont un rang, ou aucun.".to_string());
     };
     let leaders = ranks.values().filter(|rank| **rank == 1).count();
+    let derived = |rank: Option<i32>| match rank {
+        Some(1) if leaders == 1 => MatchResult::Win,
+        Some(1) => MatchResult::Draw,
+        _ => MatchResult::Loss,
+    };
+    // Le résultat découle du rang : un résultat explicite qui le contredit (premier mais
+    // `loss`, deuxième mais `win`) ferait gagner le mauvais participant.
+    let contradictions: Vec<String> = members
+        .iter()
+        .filter_map(|m| {
+            let expected = derived(ranks.get(&m.participant_id).copied());
+            m.result.filter(|result| *result != expected).map(|result| {
+                format!(
+                    "{} : `{}` contredit son rang (`{}` attendu)",
+                    m.participant_id,
+                    result.as_str(),
+                    expected.as_str()
+                )
+            })
+        })
+        .collect();
+    if !contradictions.is_empty() {
+        return Err(format!(
+            "Résultats contradictoires : {}.",
+            contradictions.join(", ")
+        ));
+    }
     Ok(members
         .iter()
         .map(|m| {
             let rank = ranks.get(&m.participant_id).copied();
-            let derived = match rank {
-                Some(1) if leaders == 1 => MatchResult::Win,
-                Some(1) => MatchResult::Draw,
-                _ => MatchResult::Loss,
-            };
             MatchScore {
                 participant_id: m.participant_id,
                 stats: m.stats.clone(),
                 points: m.points,
                 rank,
-                result: Some(m.result.unwrap_or(derived)),
+                result: Some(derived(rank)),
             }
         })
         .collect())
@@ -1394,6 +1417,21 @@ mod tests {
             rank,
             result: None,
         }
+    }
+
+    #[test]
+    fn a_result_that_contradicts_the_rank_is_refused() {
+        let mut first = member(json!({ "kills": 3 }), 0.0, Some(1));
+        let mut second = member(json!({ "kills": 1 }), 0.0, Some(2));
+        first.result = Some(MatchResult::Loss);
+        second.result = Some(MatchResult::Win);
+        let error = settle(&[first.clone(), second.clone()]).unwrap_err();
+        assert!(error.contains("contredit"), "{error}");
+        // Les mêmes résultats, cohérents avec les rangs, passent.
+        first.result = Some(MatchResult::Win);
+        second.result = Some(MatchResult::Loss);
+        let scores = settle(&[first, second]).unwrap();
+        assert_eq!(scores[0].result, Some(MatchResult::Win));
     }
 
     #[test]

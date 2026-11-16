@@ -1039,3 +1039,108 @@ async fn games_and_mvp_survive_a_tournament_export_and_import() {
     let (status, _) = import_file(&app, &s.admin, "json", broken.to_string()).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[actix_web::test]
+async fn contradictory_game_results_and_foreign_mvps_are_refused() {
+    let (app, s) = setup().await;
+    let series = series(&app, &s, "pool").await;
+    let match_id = new_match(&app, &s, &series, 3).await;
+    let games = format!("{}/{match_id}/games", series.matches());
+    let (status, _) = post(&app, &games, &s.admin, json!({})).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let results = format!("{games}/1/results");
+
+    // Le premier annoncé perdant, le second gagnant : la partie ne se termine pas.
+    let (status, saved) = put(
+        &app,
+        &results,
+        &s.admin,
+        json!({ "results": [
+            { "participant_id": series.ids[0], "stats": { "kills": 4 }, "rank": 1, "result": "loss" },
+            { "participant_id": series.ids[1], "stats": { "kills": 1 }, "rank": 2, "result": "win" },
+        ] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, error) = post(&app, &format!("{games}/1/finish"), &s.admin, json!({})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["errors"]["results"]
+            .as_str()
+            .unwrap()
+            .contains("contredit")
+    );
+
+    // Un joueur ajouté aux statistiques d'un inscrit seul n'est pas un joueur de son équipe :
+    // il ne peut pas être MVP.
+    let stranger = Uuid::new_v4().to_string();
+    let (status, error) = put(
+        &app,
+        &results,
+        &s.admin,
+        json!({
+            "attributes": { "mvp": stranger },
+            "results": [{ "participant_id": series.ids[0],
+                          "stats": { "total": { "kills": 4 }, "players": { stranger.clone(): { "kills": 4 } } } }],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(error["errors"]["attributes"].is_string(), "{error}");
+}
+
+#[actix_web::test]
+async fn an_import_never_changes_the_nature_of_a_stat() {
+    let (app, s) = setup().await;
+    let import = |path: &'static str, body: Value| {
+        let (app, admin) = (&app, s.admin.clone());
+        async move {
+            call(
+                app,
+                request(TestRequest::post(), path, Some(&admin)).set_payload(body.to_string()),
+            )
+            .await
+        }
+    };
+    // `kills` est numérique : ni l'import des statistiques ni celui des jeux n'en fait un MVP.
+    let (status, error) = import(
+        "/stats/import?format=json",
+        json!({ "version": 1, "stats": [
+            { "name": "Kills", "key": "kills", "type": "mvp", "scope": "match", "games": [] },
+        ] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["errors"]["file"]
+            .as_str()
+            .unwrap()
+            .contains("`kills` est `flat`"),
+        "{error}"
+    );
+    let (status, error) = import(
+        "/games/import?format=json",
+        json!({ "version": 1, "games": [{ "name": "TFT", "description": "", "images": [],
+            "stats": [{ "name": "Kills", "key": "kills", "type": "select", "options": [] }] }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["errors"]["file"]
+            .as_str()
+            .unwrap()
+            .contains("`kills` est `flat`"),
+        "{error}"
+    );
+    let (_, stat) = get(&app, &format!("/stats/{}", s.kills), &s.admin).await;
+    assert_eq!(stat["type"], "flat");
+    // Changer seulement de nom reste possible.
+    let (status, report) = import(
+        "/stats/import?format=json",
+        json!({ "version": 1, "stats": [
+            { "name": "Éliminations", "key": "kills", "type": "flat", "games": ["TFT"] },
+        ] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+}
