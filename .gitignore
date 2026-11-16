@@ -16,3 +16,7 @@ node_modules/
 .idea/
 .vscode/
 .DS_Store
+
+# Données locales de démonstration (make demo)
+.demo/
+__pycache__/

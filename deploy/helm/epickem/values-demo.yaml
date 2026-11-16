@@ -1,0 +1,8 @@
+# Environnement de démonstration en ligne : données de démo rejouables (seed_demo.py, lancé par
+# le workflow de déploiement), base distincte de la production.
+environment: demo
+publicUrl: https://demo.epickem.example.org
+ingress:
+  host: demo.epickem.example.org
+secrets:
+  existingSecret: epickem-demo-secrets

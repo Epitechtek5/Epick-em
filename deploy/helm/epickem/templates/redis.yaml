@@ -1,0 +1,64 @@
+{{- $c := dict "root" . "component" "redis" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "epickem.host" $c }}
+  labels: {{- include "epickem.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "epickem.selector" $c | nindent 4 }}
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "epickem.host" $c }}
+  labels: {{- include "epickem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  serviceName: {{ include "epickem.host" $c }}
+  replicas: 1
+  selector:
+    matchLabels: {{- include "epickem.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "epickem.selector" $c | nindent 8 }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          # Redis porte le flux d'événements (ADR-002) et les tournois importés, pas seulement
+          # du cache : journal AOF sur disque pour survivre à un redémarrage. Mémoire pleine :
+          # seules les clés à durée de vie (cache, imports reconstruits par la synchronisation)
+          # sont évincées, jamais le flux d'événements, qui n'en a pas.
+          args:
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --maxmemory
+            - {{ .Values.redis.maxmemory | quote }}
+            - --maxmemory-policy
+            - volatile-lru
+          ports:
+            - { name: redis, containerPort: 6379 }
+          readinessProbe:
+            exec: { command: [redis-cli, ping] }
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 6379 }
+            periodSeconds: 20
+          resources: {{- toYaml .Values.redis.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations: { helm.sh/resource-policy: keep }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.redis.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests: { storage: {{ .Values.redis.storage }} }

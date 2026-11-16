@@ -4,15 +4,15 @@ Plateforme de tournois et de pronostics (Pick'em) en temps réel.
 
 ## Démarrage rapide
 
-Prérequis : Docker (avec Compose v2), et Rust stable pour lancer les tests hors conteneur.
+Prérequis : Docker (avec Compose v2), `make`, `curl` et `python3` ; Rust stable et Node.js 24 pour lancer les tests.
 
 ```sh
 git clone <url-du-dépôt> epickem && cd epickem
-make up      # crée .env depuis .env.example puis lance toute la plateforme
-make test    # lance tous les tests
+make demo    # crée .env, lance toute la plateforme et la remplit de données de démonstration
+make test    # lance tous les tests (backend, web, mobile)
 ```
 
-L'API publique répond ensuite sur http://localhost:8080 (routes et authentification : [`docs/api-public.md`](docs/api-public.md)).
+Le site répond ensuite sur http://localhost:3000 et l'API publique sur http://localhost:8080 (routes et authentification : [`docs/api-public.md`](docs/api-public.md)). Comptes de démonstration : `seed_admin@example.test` (administrateur), `alice_test@example.test`…, mot de passe `Password1234!`. Détails, autres commandes (`make reset`, `make logs`…) et dépannage : [`docs/demarrage.md`](docs/demarrage.md).
 
 ## Organisation du dépôt
 
@@ -34,6 +34,10 @@ Chaque service est publié comme image Docker indépendante sur GHCR, taguée av
 ## CI
 
 Le workflow [`ci.yml`](.github/workflows/ci.yml) détecte les composants modifiés et ne lance que leurs workflows. Le job **`ci-ok`** agrège le résultat : c'est le seul check obligatoire pour merger dans `main`. Le job **`gitleaks`** analyse tout l'historique à chaque PR et bloque le merge si un secret est détecté.
+
+## Déploiement
+
+Chaque merge sur `main` dont la CI est verte est déployé automatiquement sur la démo en ligne, puis, après approbation, en production (k3s + Helm, workflow [`cd.yml`](.github/workflows/cd.yml)). Mise en place du serveur, secrets, retour arrière : [`docs/exploitation/deploiement.md`](docs/exploitation/deploiement.md).
 
 ## Versions
 

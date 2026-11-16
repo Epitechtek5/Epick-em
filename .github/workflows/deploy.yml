@@ -9,7 +9,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - run: helm lint deploy/helm/epickem
+        with: { version: v3.19.0 }
+      - run: helm lint deploy/helm/epickem --set image.tag=0000000000000000000000000000000000000000
+      # Rend le chart pour chaque environnement et valide les manifestes contre les schémas
+      # Kubernetes (les CRD inconnues, comme celles de cert-manager, sont ignorées).
+      - name: Rendu et validation des manifestes
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          for env in demo production; do
+            helm template epickem deploy/helm/epickem -f "deploy/helm/epickem/values-$env.yaml" \
+              --set image.tag=0000000000000000000000000000000000000000 \
+              | ./kubeconform -strict -summary -ignore-missing-schemas
+          done
+      - name: Le tag d'image est obligatoire (jamais `latest` implicite)
+        run: "! helm template epickem deploy/helm/epickem >/dev/null 2>&1"
+      - run: bash -n scripts/deploy/deploy.sh
 
   ansible:
     runs-on: ubuntu-latest

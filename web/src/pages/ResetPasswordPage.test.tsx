@@ -10,7 +10,7 @@ import { tokenStore } from '@/lib/auth/token-store'
 import { makeJwt } from '@/test/jwt'
 import { jsonResponse, routeFetch } from '@/test/render'
 
-const TOKEN = 'a3f1c0ffee5eed0123456789abcdef0123456789abcdef0123456789abcdef01'
+const TOKEN = 'test-reset-token'
 
 function LocationProbe() {
   const location = useLocation()

@@ -40,13 +40,13 @@ Composants à déployer : api-public, api-internal, front web, PostgreSQL, Redis
 ### Local : Docker Compose
 
 - `docker compose up` lance PostgreSQL, Redis, les migrations (service one-shot, voir ADR-006), api-public, api-internal et le web.
-- `docker compose --profile demo up` ajoute le simulateur, qui joue un tournoi `quick`.
+- `make demo` lance la plateforme puis le script de démonstration `seed_demo.py` (comptes, jeux, tournois, matchs joués) ; le profil Compose `demo` du simulateur prévu initialement est remplacé par ce script (voir Conséquences).
 - Les images sont buildées localement depuis le monorepo ; aucune image privée ni secret requis.
 
 ### En ligne : k3s + Helm + Ansible
 
 - **Hébergement :** une VM de l'offre gratuite d'un fournisseur cloud (cible : Oracle Cloud Always Free, instance ARM), avec k3s en nœud unique.
-- **Helm :** un chart `deploy/helm/epickem` contenant api-public (Deployment + HPA possible), api-internal, web, PostgreSQL, Redis, Job de migration (hook `pre-install` / `pre-upgrade`), Ingress avec TLS (cert-manager + Let's Encrypt).
+- **Helm :** un chart `deploy/helm/epickem` contenant api-public (Deployment + HPA possible), api-internal, web, PostgreSQL, Redis, Job de migration (hook `post-install` / `pre-upgrade` : la base fait partie de la release, elle n'existe pas encore avant la première installation), Ingress avec TLS (cert-manager + Let's Encrypt).
 - **Ansible :** provisioning reproductible de la VM (durcissement, pare-feu, k3s, cert-manager) et rôle de déploiement qui exécute `helm upgrade --install` avec les valeurs de l'environnement.
 - **Images :** publiées sur GitHub Container Registry, taggées par SHA de commit et par version semver.
 
@@ -69,6 +69,7 @@ Composants à déployer : api-public, api-internal, front web, PostgreSQL, Redis
 
 - **Positives :** onboarding simple ; déploiement reproductible et automatisé ; partie devops démontrable en soutenance.
 - **Négatives / coûts acceptés :** cohérence Compose / Helm à surveiller (mêmes variables d'environnement, documentées dans `.env.example`) ; dépendance à une offre gratuite (plan B : autre fournisseur avec les mêmes playbooks).
+- **Mise en œuvre (issue #176) :** chart complet, playbook (`base`, `k3s`, `cert_manager`, `environments`), workflow `cd.yml` (démo puis production approuvée, même SHA), script `scripts/deploy/deploy.sh`. Le simulateur de démonstration est le script `seed_demo.py` (idempotent), joué par le CD sur la démo uniquement. Images amd64 par défaut, arm64 en option (`IMAGE_PLATFORMS`). Procédure : [`docs/exploitation/deploiement.md`](../exploitation/deploiement.md).
 - **Actions à mener :**
   - Créer la VM, écrire le playbook de provisioning.
   - Écrire le chart et le valider avec `helm lint` et `helm template` en CI.

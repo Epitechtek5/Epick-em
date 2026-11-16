@@ -1,0 +1,11 @@
+# Production : jamais de données de démonstration ni de réinitialisation.
+environment: production
+publicUrl: https://epickem.example.org
+ingress:
+  host: epickem.example.org
+secrets:
+  existingSecret: epickem-secrets
+apiPublic:
+  replicas: 2
+postgres:
+  storage: 20Gi

@@ -1,0 +1,51 @@
+- name: Paquets de base
+  ansible.builtin.apt:
+    name: [curl, ufw, unattended-upgrades, open-iscsi]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Mises à jour de sécurité automatiques
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: "0644"
+
+- name: SSH par clé uniquement, pas de root
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-epickem.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+    mode: "0644"
+  notify: Recharger sshd
+
+- name: Pare-feu — ports publics
+  ansible.builtin.command: ufw allow {{ item }}/tcp
+  loop: "{{ firewall_public_ports }}"
+  register: ufw_public
+  changed_when: "'Skipping' not in ufw_public.stdout"
+
+- name: Pare-feu — API Kubernetes réservée aux adresses autorisées
+  ansible.builtin.command: ufw allow from {{ item }} to any port 6443 proto tcp
+  loop: "{{ kube_api_allowed_cidrs }}"
+  register: ufw_api
+  changed_when: "'Skipping' not in ufw_api.stdout"
+
+- name: Pare-feu — trafic interne du cluster k3s (pods et services)
+  ansible.builtin.command: ufw allow from {{ item }}
+  loop: [10.42.0.0/16, 10.43.0.0/16]
+  register: ufw_cluster
+  changed_when: "'Skipping' not in ufw_cluster.stdout"
+
+- name: État du pare-feu
+  ansible.builtin.command: ufw status
+  register: ufw_status
+  changed_when: false
+
+- name: Pare-feu — activé, entrant refusé par défaut
+  when: "'inactive' in ufw_status.stdout"
+  ansible.builtin.command: ufw --force enable
+  changed_when: true

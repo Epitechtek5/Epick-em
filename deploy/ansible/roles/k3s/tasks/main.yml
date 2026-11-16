@@ -1,0 +1,30 @@
+# Nœud unique. Réinstalle seulement si la version épinglée change.
+- name: Version de k3s installée
+  ansible.builtin.command: k3s --version
+  register: k3s_installed
+  changed_when: false
+  failed_when: false
+
+- name: Installation de k3s {{ k3s_version }}
+  when: k3s_version not in (k3s_installed.stdout | default(''))
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    curl -sfL https://get.k3s.io |
+    INSTALL_K3S_VERSION={{ k3s_version | quote }} sh -s - server --write-kubeconfig-mode 0600
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: k3s démarré
+  ansible.builtin.service:
+    name: k3s
+    state: started
+    enabled: true
+
+- name: Helm {{ helm_version }}
+  ansible.builtin.unarchive:
+    src: https://get.helm.sh/helm-{{ helm_version }}-linux-{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}.tar.gz
+    dest: /usr/local/bin
+    remote_src: true
+    extra_opts: [--strip-components=1, --wildcards, "*/helm"]
+    creates: /usr/local/bin/helm
