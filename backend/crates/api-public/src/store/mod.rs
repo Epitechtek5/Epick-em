@@ -4,6 +4,7 @@
 //! [`MemoryStore`] sert aux tests sans base.
 
 mod games;
+mod imported;
 mod matches;
 mod memory;
 mod postgres;
@@ -14,6 +15,7 @@ mod teams;
 mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
+pub use self::imported::{ImportedSummary, ImportedTournament, Imports};
 pub use self::matches::{
     Bracket, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchResult,
     MatchScore, MatchStatus, MatchUpdate,
@@ -673,15 +675,35 @@ pub trait AuthStore: Send + Sync {
         tournaments: Vec<TournamentImport>,
     ) -> Result<Vec<(Tournament, bool)>, StoreError>;
 
-    /// Reporte un tournoi importé dans le modèle local, en une transaction : statut du tournoi,
-    /// inscrits importés, étapes, groupes, matchs et résultats, mis à jour par leur identifiant
-    /// chez la source (les identifiants locaux restent stables d'une synchronisation à l'autre),
-    /// ce qui a disparu de la source étant supprimé. `false` si le tournoi n'existe pas.
+    /// Modèles des tournois importés, servis par les lectures à la place de la base.
+    fn imports(&self) -> &Imports;
+
+    /// Reporte un tournoi importé dans le modèle local : statut, inscrits importés, étapes,
+    /// groupes, matchs et résultats, rangés dans le cache ([`Imports`]) et jamais en base. Les
+    /// identifiants locaux restent stables d'une synchronisation à l'autre ; ce qui a disparu
+    /// de la source disparaît du modèle. `false` si le tournoi n'existe pas.
     async fn project_external(
         &self,
         tournament_id: Uuid,
         projection: Projection,
-    ) -> Result<bool, StoreError>;
+    ) -> Result<bool, StoreError> {
+        let previous = self.imports().tournament(tournament_id).await;
+        // Le jeu ne change pas : seul le premier report lit la ligne du tournoi.
+        let game_id = match &previous {
+            Some(model) => model.game_id,
+            None => match self.find_tournament(tournament_id).await? {
+                Some(tournament) => tournament.game_id,
+                None => return Ok(false),
+            },
+        };
+        let model =
+            ImportedTournament::build(tournament_id, game_id, previous.as_ref(), projection);
+        self.imports()
+            .save(&model)
+            .await
+            .map_err(StoreError::Other)?;
+        Ok(true)
+    }
 
     /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
     /// et les équipes existent, et les équipes sont celles du tournoi.

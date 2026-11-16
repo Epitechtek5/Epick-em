@@ -3,22 +3,22 @@
 //!
 //! - **Identité :** une source est unique par `(fournisseur, identifiant externe)` : importer
 //!   deux fois le même tournoi renvoie l'enregistrement existant ;
-//! - **une seule synchronisation à la fois** par source : un bail (`lease`) est pris en base
-//!   avant d'appeler la source, et relâché à la fin ;
+//! - **une seule synchronisation à la fois** par source : un bail (`lease`) est pris avant
+//!   d'appeler la source, et relâché à la fin ;
 //! - **incrémental** quand la source le permet (curseur persistant), sinon instantané complet ;
 //!   le résultat est fusionné dans le dernier instantané réussi ([`apply_delta`]) ;
 //! - **panne :** l'instantané précédent est conservé et reste servi ; l'échec est daté et la
 //!   prochaine tentative est repoussée (backoff) ; la reprise est automatique ;
 //! - **résultats :** chaque match terminé, corrigé ou rouvert chez la source produit un
-//!   [`ChangeEvent`] enregistré dans la même transaction que l'instantané (boîte d'envoi
-//!   `external_sync_events`) : les recalculs en aval les consomment exactement une fois, comme
+//!   [`ChangeEvent`] enregistré atomiquement avec l'instantané (boîte d'envoi) : les recalculs
+//!   en aval les consomment exactement une fois, comme
 //!   une saisie interne (ADR-002). Rejouer la même synchronisation ne produit aucun événement.
 
 mod memory;
-mod postgres;
+mod redis;
 
 pub use self::memory::MemorySyncStore;
-pub use self::postgres::PgSyncStore;
+pub use self::redis::RedisSyncStore;
 
 use crate::connector::{ConnectorError, TournamentConnector};
 use crate::model::{
@@ -133,7 +133,8 @@ impl From<sqlx::Error> for StoreError {
     }
 }
 
-/// Persistance des sources.
+/// Persistance des sources : [`RedisSyncStore`] en production (seul le lien source ↔ tournoi
+/// est en base), [`MemorySyncStore`] pour les tests.
 #[async_trait]
 pub trait SyncStore: Send + Sync {
     /// Enregistre la source, ou renvoie celle qui existe déjà pour `(fournisseur, id)` avec

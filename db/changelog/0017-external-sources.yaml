@@ -12,80 +12,12 @@ databaseChangeLog:
                 reference jsonb NOT NULL,
                 event_ids text[] NOT NULL DEFAULT '{}',
                 tournament_id uuid UNIQUE REFERENCES tournaments(id) ON DELETE SET NULL,
-                capabilities jsonb NOT NULL DEFAULT '{}',
-                snapshot jsonb,
-                cursor bigint,
-                last_attempt_at timestamptz,
-                last_success_at timestamptz,
-                last_error text,
-                consecutive_failures integer NOT NULL DEFAULT 0,
-                next_sync_at timestamptz NOT NULL DEFAULT now(),
-                lease_until timestamptz,
                 created_at timestamptz NOT NULL DEFAULT now(),
                 CONSTRAINT external_sources_provider_external_id_key UNIQUE (provider, external_id)
               );
               COMMENT ON TABLE external_sources IS
-                'Tournois importés d''une source externe (start.gg…) : identité, dernier instantané, curseur et état de synchronisation';
-              CREATE INDEX external_sources_due ON external_sources(next_sync_at);
-
-              CREATE TABLE external_sync_events (
-                id bigserial PRIMARY KEY,
-                source_id uuid NOT NULL REFERENCES external_sources(id) ON DELETE CASCADE,
-                kind varchar(32) NOT NULL,
-                event_id varchar(128),
-                match_id varchar(128),
-                payload jsonb NOT NULL DEFAULT '{}',
-                created_at timestamptz NOT NULL DEFAULT now(),
-                processed_at timestamptz
-              );
-              COMMENT ON TABLE external_sync_events IS
-                'Boîte d''envoi des changements de résultats détectés chez la source, pour les recalculs en aval';
-              CREATE INDEX external_sync_events_pending ON external_sync_events(id) WHERE processed_at IS NULL;
+                'Tournois importés d''une source externe (start.gg…) : lien entre la source et le tournoi local. Instantanés, état de synchronisation et tournoi importé vivent dans Redis';
       rollback:
         - sql:
             sql: |
-              DROP TABLE external_sync_events;
               DROP TABLE external_sources;
-  - changeSet:
-      id: 0017-external-sources-projection
-      author: epickem
-      comment: >-
-        Projection d'un tournoi importé dans le modèle local : inscrits « importés » (sans compte,
-        nommés par la source) et identifiants de la source sur les inscrits, étapes, groupes et
-        matchs, pour les mettre à jour à chaque synchronisation sans changer leurs identifiants.
-      changes:
-        - sql:
-            sql: |
-              ALTER TABLE tournament_participant
-                ADD COLUMN external_id varchar(128),
-                ADD COLUMN display_name varchar(255),
-                DROP CONSTRAINT tournament_participant_who_check,
-                ADD CONSTRAINT tournament_participant_who_check
-                  CHECK (user_id IS NOT NULL OR tournament_team_id IS NOT NULL OR external_id IS NOT NULL),
-                ADD CONSTRAINT tournament_participant_imported_check
-                  CHECK (external_id IS NULL OR (display_name IS NOT NULL AND user_id IS NULL AND tournament_team_id IS NULL)),
-                ADD CONSTRAINT tournament_participant_external_key UNIQUE (tournament_id, external_id);
-              COMMENT ON COLUMN tournament_participant.external_id IS
-                'Inscrit importé d''une source externe (sans compte local) : identifiant chez la source';
-              COMMENT ON COLUMN tournament_participant.display_name IS
-                'Nom affiché d''un inscrit importé';
-              ALTER TABLE step ADD COLUMN external_id varchar(128),
-                ADD CONSTRAINT step_external_key UNIQUE (tournament_id, external_id);
-              ALTER TABLE step_group ADD COLUMN external_id varchar(128),
-                ADD CONSTRAINT step_group_external_key UNIQUE (step_id, external_id);
-              ALTER TABLE match ADD COLUMN external_id varchar(128),
-                ADD CONSTRAINT match_external_key UNIQUE (step_id, external_id);
-      rollback:
-        - sql:
-            sql: |
-              ALTER TABLE match DROP COLUMN external_id;
-              ALTER TABLE step_group DROP COLUMN external_id;
-              ALTER TABLE step DROP COLUMN external_id;
-              DELETE FROM tournament_participant WHERE external_id IS NOT NULL;
-              ALTER TABLE tournament_participant
-                DROP CONSTRAINT tournament_participant_imported_check,
-                DROP CONSTRAINT tournament_participant_who_check,
-                DROP COLUMN display_name,
-                DROP COLUMN external_id,
-                ADD CONSTRAINT tournament_participant_who_check
-                  CHECK (user_id IS NOT NULL OR tournament_team_id IS NOT NULL);

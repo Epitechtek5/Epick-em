@@ -4,7 +4,7 @@
 
 use api_public::projection::StoreProjector;
 use api_public::store::PgStore;
-use connectors::sync::{PgSyncStore, SyncPolicy, SyncService};
+use connectors::sync::{RedisSyncStore, SyncPolicy, SyncService};
 use std::error::Error;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -33,12 +33,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
         eprintln!("api-internal : aucune source externe configurée (STARTGG_TOKEN absente)");
     }
     // Les synchronisations planifiées reportent elles aussi chaque instantané dans le tournoi
-    // local (inscrits importés, étapes, matchs et résultats).
+    // local (inscrits importés, étapes, matchs et résultats). L'état de synchronisation et le
+    // tournoi importé vivent dans Redis ; la base ne garde que le lien source ↔ tournoi.
+    let redis = infra::RedisCache::connect(&config.redis_url).await?;
     let projector = StoreProjector::new(Arc::new(PgStore::new(db.clone())));
     let sync = Arc::new(
         SyncService::new(
             registry,
-            Arc::new(PgSyncStore::new(db.pool().clone())),
+            Arc::new(RedisSyncStore::new(db.clone(), redis.connection())),
             SyncPolicy::default(),
         )
         .with_projector(Arc::new(projector)),

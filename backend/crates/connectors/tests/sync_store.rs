@@ -1,17 +1,21 @@
-//! Contrat commun des [`SyncStore`] : le même parcours sur le store en mémoire et sur
-//! PostgreSQL.
+//! Contrat commun des [`SyncStore`] : le même parcours sur le store en mémoire et sur Redis
+//! (lien source ↔ tournoi en PostgreSQL).
 //!
-//! Le test PostgreSQL est ignoré par défaut ; il lui faut une base migrée par Liquibase :
-//! `DATABASE_URL=postgres://… cargo test -p connectors --test sync_store -- --ignored`.
+//! Le test Redis est ignoré par défaut ; il lui faut Redis et une base migrée par Liquibase :
+//! `DATABASE_URL=postgres://… REDIS_URL=redis://… cargo test -p connectors --test sync_store
+//! -- --ignored`.
 
 use connectors::model::{
     Capabilities, CompetitionState, ExternalTournament, ExternalTournamentRef, SyncCursor,
 };
 use connectors::sync::{
-    ChangeEvent, ChangeKind, MemorySyncStore, NewSource, PgSyncStore, StoreError, Success,
+    ChangeEvent, ChangeKind, MemorySyncStore, NewSource, RedisSyncStore, StoreError, Success,
     SyncStore,
 };
+use infra::{CachedDb, MemoryCache, RedisCache};
+use redis::AsyncCommands;
 use serde_json::json;
+use std::sync::Arc;
 use uuid::Uuid;
 
 fn reference(external_id: &str) -> ExternalTournamentRef {
@@ -243,11 +247,24 @@ async fn memory_store_honours_the_contract() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
-async fn postgres_store_honours_the_contract() {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+#[ignore = "nécessite Redis et PostgreSQL migré (REDIS_URL, DATABASE_URL)"]
+async fn redis_store_honours_the_contract() {
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .await
+        .unwrap();
+    let redis = RedisCache::connect(&std::env::var("REDIS_URL").expect("REDIS_URL"))
+        .await
+        .unwrap();
     let tag = Uuid::new_v4().simple().to_string();
+    let prefix = format!("test-sync-{tag}");
+    let store = |cache: Arc<dyn infra::Cache>| {
+        RedisSyncStore::with_prefix(
+            CachedDb::new(pool.clone(), cache),
+            redis.connection(),
+            &prefix,
+        )
+    };
+    let shared: Arc<dyn infra::Cache> = Arc::new(redis.clone());
     // Un tournoi local auquel lier la source (clé étrangère).
     let game: Uuid = sqlx::query_scalar("INSERT INTO games (name) VALUES ($1) RETURNING id")
         .bind(format!("Jeu {tag}"))
@@ -263,10 +280,11 @@ async fn postgres_store_honours_the_contract() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    contract(&PgSyncStore::new(pool.clone()), &tag, Some(tournament)).await;
+    contract(&store(shared.clone()), &tag, Some(tournament)).await;
 
-    // Supprimer le tournoi local délie la source sans la perdre.
-    let (source, _) = PgSyncStore::new(pool.clone())
+    // La base ne garde que le lien : l'instantané, le bail et les événements sont dans Redis.
+    let redis_store = store(shared.clone());
+    let (source, _) = redis_store
         .register(
             NewSource {
                 reference: reference(&format!("c-{tag}")),
@@ -277,17 +295,100 @@ async fn postgres_store_honours_the_contract() {
         )
         .await
         .unwrap();
+    let claimed = redis_store.claim(source.id, 10, 600).await.unwrap();
+    assert!(claimed.is_some());
+    redis_store
+        .save_success(
+            source.id,
+            610,
+            Success {
+                snapshot: snapshot("c"),
+                capabilities: Capabilities::default(),
+                cursor: SyncCursor::default(),
+                now: 10,
+                next_sync_at: 1_000,
+            },
+            &[change("m9")],
+        )
+        .await
+        .unwrap();
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name::text FROM information_schema.columns \
+         WHERE table_name = 'external_sources' ORDER BY column_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        columns,
+        [
+            "created_at",
+            "event_ids",
+            "external_id",
+            "id",
+            "provider",
+            "reference",
+            "tournament_id"
+        ]
+    );
+    let state: Option<String> = redis
+        .connection()
+        .get(format!("{prefix}:state:{}", source.id))
+        .await
+        .unwrap();
+    assert!(state.unwrap().contains("\"snapshot\""));
+
+    // État perdu par Redis (vidé, éviction) : la source redevient due, sans instantané, et la
+    // prochaine synchronisation en refait un complet.
+    let _: () = redis
+        .connection()
+        .del(format!("{prefix}:state:{}", source.id))
+        .await
+        .unwrap();
+    let lost = redis_store.find(source.id).await.unwrap().unwrap();
+    assert!(lost.snapshot.is_none());
+    assert_eq!(lost.next_sync_at, 0);
+    assert!(
+        redis_store
+            .claim_due(20, 50, 600)
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.id == source.id)
+    );
+
+    // Supprimer le tournoi local délie la source sans la perdre (lien relu en base, une fois
+    // l'entrée en cache expirée).
     sqlx::query("DELETE FROM tournaments WHERE id = $1")
         .bind(tournament)
         .execute(&pool)
         .await
         .unwrap();
-    let store = PgSyncStore::new(pool.clone());
+    let uncached = store(Arc::new(MemoryCache::new()));
     assert_eq!(
-        store.find(source.id).await.unwrap().unwrap().tournament_id,
+        uncached
+            .find(source.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .tournament_id,
         None
     );
-    store.delete(source.id).await.unwrap();
+    assert!(redis_store.delete(source.id).await.unwrap());
+    let gone: Option<String> = redis
+        .connection()
+        .get(format!("{prefix}:state:{}", source.id))
+        .await
+        .unwrap();
+    assert!(gone.is_none());
+    assert!(
+        !redis_store
+            .pending_changes(1000)
+            .await
+            .unwrap()
+            .iter()
+            .any(|(_, s, _)| *s == source.id)
+    );
     sqlx::query("DELETE FROM games WHERE id = $1")
         .bind(game)
         .execute(&pool)

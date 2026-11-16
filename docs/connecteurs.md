@@ -35,7 +35,7 @@ Un connecteur **ne fait que lire sa source et la traduire** dans le modèle cano
 | Planification, bail, backoff, état « périmé » | `sync` | rien |
 | Fusion des mises à jour, détection des résultats modifiés | `sync::apply_delta`, `sync::diff` | renvoyer un `ExternalDelta` cohérent |
 | Lecture seule des tournois importés | api-public (`external.rs`) | rien |
-| Persistance | `sync::PgSyncStore` | rien |
+| Persistance (Redis ; seul le lien source ↔ tournoi est en base) | `sync::RedisSyncStore` | rien |
 
 ## L'interface
 
@@ -213,7 +213,7 @@ POST /api/external-tournaments      { "url": "jsonfile://ligue-locale", "event_i
 ```
 
 Modifiez le score de `m1` dans le fichier puis `POST /api/external-tournaments/{id}/sync` :
-un événement `result_corrected` est enregistré dans `external_sync_events`.
+un événement `result_corrected` est enregistré dans la boîte d'envoi (`sync:events` dans Redis).
 
 ## start.gg en détail
 
@@ -247,14 +247,28 @@ un événement `result_corrected` est enregistré dans `external_sync_events`.
 - **Panne :** les données servies restent celles du dernier instantané réussi (`stale: true`,
   `last_error`, `last_success_at` dans `GET /external-tournaments/{id}`) ; la reprise est
   automatique au retour de la source.
-- **Tables :** `external_sources` (une ligne par tournoi importé) et `external_sync_events`
-  (changements de résultats à consommer, `processed_at` nul tant qu'ils ne l'ont pas été).
+- **Stockage :** les données de start.gg n'atteignent jamais PostgreSQL. La table
+  `external_sources` ne garde que le **lien** : identité chez la source, épreuves importées,
+  tournoi local. Ses lectures passent par le cache (`sync:link:*`, `sync:links`, 1 h, invalidés
+  à l'enregistrement et à la suppression) : en régime établi, synchronisations et lectures ne
+  touchent pas la base. Tout le reste est dans Redis, sans expiration (`sync::RedisSyncStore`) :
+  - `sync:state:{source}` : dernier instantané, capacités, curseur, fraîcheur, prochaine échéance ;
+  - `sync:lease:{source}` : bail de la synchronisation en cours, pris atomiquement (script Lua)
+    et qui expire de lui-même si son détenteur meurt ;
+  - `sync:events` (+ `sync:events:seq`) : changements de résultats à consommer, triés par
+    numéro d'ordre ; `mark_processed` les retire.
+
+  L'instantané, ses événements et la libération du bail sont écrits par un seul script Lua,
+  seulement si la synchronisation tient toujours le bail. Une source dont l'état a disparu de
+  Redis (base vidée, éviction) redevient due et la synchronisation suivante refait un
+  instantané complet.
 
 ## Report dans le tournoi local
 
 Après chaque instantané enregistré (import compris), `SyncService` appelle son `Projector`
-(`api_public::projection::StoreProjector`, branché dans api-public et api-internal), qui reporte
-tout l'instantané dans le tournoi local en une transaction :
+(`api_public::projection::StoreProjector`, branché dans api-public et api-internal), qui traduit
+tout l'instantané en modèle local et le range **dans Redis**, jamais en base
+(`api_public::store::Imports`) :
 
 - **Inscrits importés :** les inscrits de la source n'ont pas de compte. Ils deviennent des
   inscrits sans `user_id` ni équipe, avec `external_id` (`<épreuve>:<inscrit>`) et
@@ -271,16 +285,33 @@ tout l'instantané dans le tournoi local en une transaction :
   vainqueur.
 - **Statut du tournoi :** `draft` avant le début, `ongoing` pendant, `finished` après.
 
-Tout est retrouvé par son identifiant chez la source (`external_id` des inscrits, étapes,
-groupes et matchs) : les identifiants locaux restent stables d'une synchronisation à l'autre, ce
-qui a disparu de la source est supprimé. Le report n'a lieu que si la synchronisation tient
-encore son bail ; un report échoué compte comme un échec de synchronisation et, l'instantané
-complet étant reporté à chaque fois, il est rattrapé au passage suivant. Le tournoi reste en
-lecture seule pour l'API (`409 externally_managed`).
+Les identifiants locaux sont dérivés de l'identifiant chez la source (UUID v5 dans l'espace du
+tournoi) : ils restent stables d'une synchronisation à l'autre, et ce qui a disparu de la source
+disparaît du modèle. Le report n'a lieu que si la synchronisation tient encore son bail ; un
+report échoué compte comme un échec de synchronisation et, l'instantané complet étant reporté à
+chaque fois, il est rattrapé au passage suivant. Le tournoi reste en lecture seule pour l'API
+(`409 externally_managed`).
+
+- **Clés :** `import:tournament:{tournoi}` (le modèle entier), `import:summary:{tournoi}` (statut
+  et nombre d'inscrits, pour les listes) et `import:owner:{élément}` (d'un inscrit, d'une étape
+  ou d'un match vers son tournoi). Elles sont réécrites à chaque synchronisation et expirent au
+  bout de 30 jours sans synchronisation ; supprimer le tournoi les efface.
+- **Lectures :** `PgStore` et `MemoryStore` servent ce modèle pour un tournoi importé (inscrits,
+  points, étapes, groupes, membres, matchs et leurs participants) sans requête en base. La ligne
+  du tournoi reste en base telle que créée à l'import : son statut et sa capacité sont lus dans
+  `import:summary`. Pour filtrer la liste des tournois par statut, les tournois importés passent
+  le filtre SQL puis sont filtrés sur leur statut importé : une page peut être plus courte que
+  `limit`.
+- **Redis perd le modèle** (base vidée, éviction) : le tournoi importé paraît vide jusqu'à la
+  synchronisation suivante (2 min pendant le tournoi, 6 h après), qui le réécrit à l'identique.
+  En production, réglez Redis en `maxmemory-policy noeviction` (ou sans limite de mémoire) et
+  activez sa persistance (AOF ou RDB) pour éviter ce trou.
 
 ## Limites connues
 
-- `external_sync_events` reste une boîte d'envoi pour les consommateurs en aval (pronostics…) :
-  le modèle local, lui, est recalculé depuis l'instantané à chaque synchronisation.
+- La boîte d'envoi `sync:events` reste pour les consommateurs en aval (pronostics…) : le modèle
+  local, lui, est recalculé depuis l'instantané à chaque synchronisation.
+- Redis devient la seule copie des données importées : sans persistance Redis, un redémarrage
+  les efface et elles sont reconstruites depuis start.gg au fil des synchronisations dues.
 - La limite de requêtes est tenue par processus et par jeton : api-public et api-internal ont
   chacun leur seau.

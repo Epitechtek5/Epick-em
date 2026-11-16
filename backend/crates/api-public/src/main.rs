@@ -6,7 +6,7 @@ use api_public::mail::{MailConfig, ResendMailer};
 use api_public::projection::StoreProjector;
 use api_public::store::PgStore;
 use api_public::{AppState, app};
-use connectors::sync::{PgSyncStore, SyncPolicy, SyncService};
+use connectors::sync::{RedisSyncStore, SyncPolicy, SyncService};
 use std::error::Error;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -32,10 +32,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let registry = connectors::registry_from_env(Some(cache.clone()))?;
     let store = Arc::new(PgStore::new(db.clone()));
     // Chaque instantané importé est reporté dans le tournoi local (inscrits, étapes, matchs).
+    // L'état de synchronisation et le tournoi importé vivent dans Redis ; la base ne garde que
+    // le lien source ↔ tournoi.
+    let redis = infra::RedisCache::connect(&config.redis_url).await?;
     let sync = Arc::new(
         SyncService::new(
             registry,
-            Arc::new(PgSyncStore::new(db.pool().clone())),
+            Arc::new(RedisSyncStore::new(db.clone(), redis.connection())),
             SyncPolicy::default(),
         )
         .with_projector(Arc::new(StoreProjector::new(store.clone()))),

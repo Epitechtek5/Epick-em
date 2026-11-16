@@ -16,7 +16,7 @@ use connectors::model::{
     ExternalEventRef, ExternalGroup, ExternalMatch, ExternalPhase, ExternalSlot, ExternalStanding,
     ExternalTournament, ExternalTournamentRef, MatchState,
 };
-use connectors::sync::{MemorySyncStore, PgSyncStore, SyncPolicy, SyncService, SyncStore};
+use connectors::sync::{MemorySyncStore, RedisSyncStore, SyncPolicy, SyncService, SyncStore};
 use connectors::{ConnectorError, ConnectorRegistry, TournamentConnector};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -631,21 +631,26 @@ async fn deleting_an_external_tournament_removes_the_local_copy() {
     import(&app, &s).await;
 }
 
-/// Le parcours principal sur PostgreSQL (`PgStore` + `PgSyncStore`), ignoré par défaut :
-/// `DATABASE_URL=… cargo test -p api-public --test external -- --ignored`.
+/// Le parcours principal sur PostgreSQL et Redis (`PgStore` + `RedisSyncStore`), ignoré par
+/// défaut : `DATABASE_URL=… REDIS_URL=… cargo test -p api-public --test external -- --ignored`.
 #[actix_web::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+#[ignore = "nécessite Redis et PostgreSQL migré (REDIS_URL, DATABASE_URL)"]
 async fn import_sync_and_delete_on_postgres() {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
     let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    let redis = infra::RedisCache::connect(&std::env::var("REDIS_URL").expect("REDIS_URL"))
+        .await
+        .unwrap();
     let root = format!("root{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     let admin_pool = pool.clone();
+    let db = infra::CachedDb::new(pool.clone(), Arc::new(redis.clone()));
     let (app, s) = build(
-        Arc::new(PgStore::new(infra::CachedDb::new(
-            pool.clone(),
-            Arc::new(infra::MemoryCache::new()),
-        ))),
-        Arc::new(PgSyncStore::new(pool.clone())),
+        Arc::new(PgStore::new(db.clone())),
+        Arc::new(RedisSyncStore::with_prefix(
+            db,
+            redis.connection(),
+            &format!("test-{root}"),
+        )),
         &root,
         |name| async move {
             sqlx::query("UPDATE users SET role = 'admin' WHERE username = $1")
@@ -673,8 +678,36 @@ async fn import_sync_and_delete_on_postgres() {
     let id = source["id"].as_str().unwrap().to_string();
     let tournament = source["tournament_id"].as_str().unwrap().to_string();
     assert_eq!(source["snapshot"]["events"][0]["external_id"], "main");
-    // Inscrits importés, tableau et résultats reportés dans PostgreSQL, mis à jour sur place.
+    // Inscrits importés, tableau et résultats reportés et mis à jour sur place, servis depuis
+    // Redis : la base n'en contient rien.
     check_projection(&app, &s, &source).await;
+    for table in ["tournament_participant", "step"] {
+        let rows: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM {table} WHERE tournament_id = $1::uuid"
+        ))
+        .bind(&tournament)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0, "{table}");
+    }
+    let (_, local) = get(&app, &format!("/tournaments/{tournament}"), &s.player).await;
+    assert_eq!(local["status"], "finished", "statut lu dans Redis");
+    let stored: String = sqlx::query_scalar("SELECT status FROM tournaments WHERE id = $1::uuid")
+        .bind(&tournament)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, "draft", "la base garde la ligne telle que créée");
+    let (_, listed) = get(&app, "/tournaments?status=finished&limit=200", &s.player).await;
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"] == tournament.as_str()),
+        "filtre sur le statut importé"
+    );
     let (_, source) = get(&app, &format!("/external-tournaments/{id}"), &s.admin).await;
 
     let (status, body) = send(

@@ -219,7 +219,8 @@ Un administrateur importe un tournoi d'une source externe (start.gg, voir ADR-00
 
 - **Lecture seule :** toute écriture sur un tournoi importé (`/tournaments/{id}/…`, ses équipes `/tournament-teams/{id}/…`, l'import de fichier qui le viserait) renvoie `409 externally_managed` ; il se supprime avec `DELETE /external-tournaments/{id}`.
 - **Synchronisation :** api-internal resynchronise les sources dues (toutes les 2 min pendant le tournoi, 30 min avant, 6 h après), en incrémental quand la source le permet. Si la source ne répond pas, le dernier instantané reste servi avec `stale: true`, l'erreur et la prochaine tentative (backoff de 1 min doublé jusqu'à 1 h) ; la reprise est automatique.
-- **Changements de résultats :** chaque match terminé, corrigé ou rouvert chez la source est enregistré dans `external_sync_events`, en même temps que l'instantané, pour les recalculs en aval.
+- **Changements de résultats :** chaque match terminé, corrigé ou rouvert chez la source est enregistré dans la boîte d'envoi (Redis), en même temps que l'instantané, pour les recalculs en aval.
+- **Stockage :** les données de la source n'atteignent jamais la base. PostgreSQL garde la ligne du tournoi et son lien vers la source (`external_sources`) ; l'instantané, l'état de synchronisation et le tournoi importé (inscrits, étapes, matchs, résultats) vivent dans Redis, et les routes du tournoi les y lisent (détails dans `docs/connecteurs.md`).
 
 ### Erreurs
 

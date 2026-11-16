@@ -2,12 +2,12 @@
 
 use super::teams::now_rfc3339;
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
+    AuthStore, Game, GameInput, GameUpdate, Imports, Match, MatchFinish, MatchImport, MatchInput,
     MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
-    ParticipantStatus, Projection, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput,
-    Stat, StatInput, StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput,
-    StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Team, TeamImport,
-    TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput,
+    ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
+    StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
+    StepParticipantStatus, StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput,
+    TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput,
     TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
     TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
@@ -61,13 +61,13 @@ struct State {
     verification_limits: HashMap<String, (Instant, u32)>,
     verification: HashMap<String, (Uuid, String, Instant, VerificationStatus)>,
     reset_tokens: HashMap<String, ResetToken>,
-    /// Identifiant chez la source des étapes, groupes et matchs importés (par identifiant local).
-    external_keys: HashMap<Uuid, String>,
 }
 
 #[derive(Default)]
 pub struct MemoryStore {
     state: Mutex<State>,
+    /// Tournois importés, dans un cache en mémoire.
+    imports: Imports,
 }
 
 impl MemoryStore {
@@ -104,6 +104,10 @@ impl MemoryStore {
 
 #[async_trait]
 impl AuthStore for MemoryStore {
+    fn imports(&self) -> &Imports {
+        &self.imports
+    }
+
     async fn create_user_with_token(
         &self,
         username: &str,
@@ -1125,9 +1129,14 @@ impl AuthStore for MemoryStore {
             .tournaments
             .iter()
             .filter(|t| game_id.is_none_or(|id| t.game_id == id))
-            .filter(|t| status.is_none_or(|status| t.status == status))
             .cloned()
             .collect();
+        for tournament in &mut tournaments {
+            if let Some(summary) = self.imports.summary(tournament.id).await {
+                summary.apply(tournament);
+            }
+        }
+        tournaments.retain(|t| status.is_none_or(|status| t.status == status));
         tournaments.sort_by_key(|t| (t.start_date.clone(), t.id));
         Ok(tournaments
             .into_iter()
@@ -1137,12 +1146,19 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_tournament(&self, id: Uuid) -> Result<Option<Tournament>, StoreError> {
-        Ok(self
+        let found = self
             .state()
             .tournaments
             .iter()
             .find(|t| t.id == id)
-            .cloned())
+            .cloned();
+        let Some(mut tournament) = found else {
+            return Ok(None);
+        };
+        if let Some(summary) = self.imports.summary(id).await {
+            summary.apply(&mut tournament);
+        }
+        Ok(Some(tournament))
     }
 
     async fn create_tournament(&self, input: TournamentInput) -> Result<Tournament, StoreError> {
@@ -1243,6 +1259,7 @@ impl AuthStore for MemoryStore {
     }
 
     async fn delete_tournament(&self, id: Uuid) -> Result<bool, StoreError> {
+        self.imports.forget(id).await;
         let mut state = self.state();
         let before = state.tournaments.len();
         state.remove_tournament(id);
@@ -1346,6 +1363,9 @@ impl AuthStore for MemoryStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TournamentParticipant>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.participants(limit, offset));
+        }
         let mut participants: Vec<TournamentParticipant> = self
             .state()
             .participants
@@ -1365,6 +1385,9 @@ impl AuthStore for MemoryStore {
         &self,
         id: Uuid,
     ) -> Result<Option<TournamentParticipant>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.participant(id)) {
+            return Ok(Some(found));
+        }
         Ok(self
             .state()
             .participants
@@ -1447,6 +1470,9 @@ impl AuthStore for MemoryStore {
         &self,
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.points());
+        }
         let state = self.state();
         let mut points: HashMap<Uuid, f64> = state
             .participants
@@ -1471,6 +1497,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.steps);
+        }
         let mut steps: Vec<Step> = self
             .state()
             .steps
@@ -1483,6 +1512,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.step(id)) {
+            return Ok(Some(found));
+        }
         Ok(self.state().steps.iter().find(|s| s.id == id).cloned())
     }
 
@@ -1565,6 +1597,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.groups(step_id));
+        }
         let mut groups: Vec<StepGroup> = self
             .state()
             .step_groups
@@ -1580,6 +1615,9 @@ impl AuthStore for MemoryStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<StepParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.step_participants(step_id));
+        }
         let state = self.state();
         let index_of = |group_id: Uuid| {
             state
@@ -1662,6 +1700,9 @@ impl AuthStore for MemoryStore {
         group_id: Option<Uuid>,
         status: Option<MatchStatus>,
     ) -> Result<Vec<Match>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.matches(step_id, group_id, status));
+        }
         let state = self.state();
         let index_of = |group: Option<Uuid>| {
             state
@@ -1684,6 +1725,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_match(&self, id: Uuid) -> Result<Option<Match>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.find_match(id)) {
+            return Ok(Some(found));
+        }
         Ok(self.state().matches.iter().find(|m| m.id == id).cloned())
     }
 
@@ -1691,6 +1735,9 @@ impl AuthStore for MemoryStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<MatchParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.match_participants(step_id));
+        }
         let state = self.state();
         let in_step = |match_id: Uuid| {
             state
@@ -2010,243 +2057,6 @@ impl AuthStore for MemoryStore {
                 display_name: None,
             }));
         Ok(())
-    }
-
-    async fn project_external(
-        &self,
-        tournament_id: Uuid,
-        projection: Projection,
-    ) -> Result<bool, StoreError> {
-        let mut guard = self.state();
-        let state = &mut *guard;
-        let now = now_rfc3339();
-        let count = i32::try_from(projection.participants.len()).unwrap_or(i32::MAX);
-        let Some(tournament) = state.tournaments.iter_mut().find(|t| t.id == tournament_id) else {
-            return Ok(false);
-        };
-        tournament.status = projection.status;
-        tournament.max_participants = tournament.max_participants.max(count).max(1);
-        tournament.updated_at = now.clone();
-        let game_id = tournament.game_id;
-
-        // Inscrits importés, mis à jour par leur identifiant chez la source.
-        let doomed: Vec<Uuid> = state
-            .participants
-            .iter()
-            .filter(|p| p.tournament_id == tournament_id)
-            .filter(|p| {
-                !projection
-                    .participants
-                    .iter()
-                    .any(|q| p.external_id.as_deref() == Some(q.external_id.as_str()))
-            })
-            .map(|p| p.id)
-            .collect();
-        state.participants.retain(|p| !doomed.contains(&p.id));
-        state
-            .step_participants
-            .retain(|p| !doomed.contains(&p.participant_id));
-        state
-            .match_participants
-            .retain(|p| !doomed.contains(&p.participant_id));
-        let mut participants: HashMap<String, Uuid> = HashMap::new();
-        for projected in projection.participants {
-            let existing = state.participants.iter_mut().find(|p| {
-                p.tournament_id == tournament_id
-                    && p.external_id.as_deref() == Some(projected.external_id.as_str())
-            });
-            let id = match existing {
-                Some(p) => {
-                    p.display_name = Some(projected.display_name);
-                    p.status = projected.status;
-                    p.id
-                }
-                None => {
-                    let id = Uuid::new_v4();
-                    state.participants.push(TournamentParticipant {
-                        id,
-                        tournament_id,
-                        user_id: None,
-                        tournament_team_id: None,
-                        status: projected.status,
-                        registered_at: now.clone(),
-                        external_id: Some(projected.external_id.clone()),
-                        display_name: Some(projected.display_name),
-                    });
-                    id
-                }
-            };
-            participants.insert(projected.external_id, id);
-        }
-
-        // Étapes, groupes et matchs : retrouvés par leur identifiant chez la source.
-        let existing_steps: Vec<(Uuid, Option<String>)> = state
-            .steps
-            .iter()
-            .filter(|s| s.tournament_id == tournament_id)
-            .map(|s| (s.id, state.external_keys.get(&s.id).cloned()))
-            .collect();
-        for (id, key) in existing_steps {
-            if !key.is_some_and(|k| projection.steps.iter().any(|s| s.external_id == k)) {
-                state.remove_step(id);
-            }
-        }
-        for step in projection.steps {
-            let found = state.steps.iter().position(|s| {
-                s.tournament_id == tournament_id
-                    && state.external_keys.get(&s.id) == Some(&step.external_id)
-            });
-            let d = step.definition;
-            let step_id = match found {
-                Some(i) => state.steps[i].id,
-                None => Uuid::new_v4(),
-            };
-            let record = Step {
-                id: step_id,
-                tournament_id,
-                position: d.position,
-                format: d.format,
-                match_type: d.match_type,
-                group_count: d.group_count,
-                group_size: d.group_size,
-                matches_per_group: d.matches_per_group,
-                advance_per_group: d.advance_per_group,
-                tiebreak: d.tiebreak,
-                status: step.status,
-                created_at: found
-                    .map(|i| state.steps[i].created_at.clone())
-                    .unwrap_or_else(|| now.clone()),
-                updated_at: now.clone(),
-            };
-            match found {
-                Some(i) => state.steps[i] = record,
-                None => {
-                    state.steps.push(record);
-                    state.external_keys.insert(step_id, step.external_id);
-                }
-            }
-            state.step_participants.retain(|p| p.step_id != step_id);
-            let old_groups: Vec<(Uuid, Option<String>)> = state
-                .step_groups
-                .iter()
-                .filter(|g| g.step_id == step_id)
-                .map(|g| (g.id, state.external_keys.get(&g.id).cloned()))
-                .collect();
-            let mut doomed_matches: Vec<Uuid> = Vec::new();
-            for (id, key) in old_groups {
-                if !key.is_some_and(|k| step.groups.iter().any(|g| g.external_id == k)) {
-                    state.step_groups.retain(|g| g.id != id);
-                    doomed_matches.extend(
-                        state
-                            .matches
-                            .iter()
-                            .filter(|m| m.group_id == Some(id))
-                            .map(|m| m.id),
-                    );
-                }
-            }
-            for (index, group) in step.groups.into_iter().enumerate() {
-                let index = i32::try_from(index + 1).unwrap_or(i32::MAX);
-                let group_id = match state.step_groups.iter_mut().find(|g| {
-                    g.step_id == step_id
-                        && state.external_keys.get(&g.id) == Some(&group.external_id)
-                }) {
-                    Some(g) => {
-                        g.index = index;
-                        g.id
-                    }
-                    None => {
-                        let id = Uuid::new_v4();
-                        state.step_groups.push(StepGroup { id, step_id, index });
-                        state.external_keys.insert(id, group.external_id.clone());
-                        id
-                    }
-                };
-                for member in group.members {
-                    if let Some(&participant_id) = participants.get(&member.participant) {
-                        if state
-                            .step_participants
-                            .iter()
-                            .any(|p| p.step_id == step_id && p.participant_id == participant_id)
-                        {
-                            continue;
-                        }
-                        state.step_participants.push(StepParticipant {
-                            step_id,
-                            participant_id,
-                            group_id,
-                            points: member.points,
-                            final_rank: member.final_rank,
-                            status: member.status,
-                        });
-                    }
-                }
-                doomed_matches.extend(
-                    state
-                        .matches
-                        .iter()
-                        .filter(|m| m.step_id == step_id && m.group_id == Some(group_id))
-                        .filter(|m| {
-                            !state
-                                .external_keys
-                                .get(&m.id)
-                                .is_some_and(|k| group.matches.iter().any(|p| &p.external_id == k))
-                        })
-                        .map(|m| m.id),
-                );
-                for projected in group.matches {
-                    let found = state.matches.iter().position(|m| {
-                        m.step_id == step_id
-                            && state.external_keys.get(&m.id) == Some(&projected.external_id)
-                    });
-                    let match_id = found
-                        .map(|i| state.matches[i].id)
-                        .unwrap_or_else(Uuid::new_v4);
-                    let record = Match {
-                        id: match_id,
-                        game_id,
-                        step_id,
-                        group_id: Some(group_id),
-                        round: projected.round,
-                        bracket: projected.bracket,
-                        next_match_id: None,
-                        scheduled_at: None,
-                        started_at: projected.started_at,
-                        ended_at: projected.ended_at,
-                        status: projected.status,
-                        created_at: found
-                            .map(|i| state.matches[i].created_at.clone())
-                            .unwrap_or_else(|| now.clone()),
-                        updated_at: now.clone(),
-                    };
-                    match found {
-                        Some(i) => state.matches[i] = record,
-                        None => {
-                            state.matches.push(record);
-                            state.external_keys.insert(match_id, projected.external_id);
-                        }
-                    }
-                    state.match_participants.retain(|p| p.match_id != match_id);
-                    for entry in projected.entries {
-                        if let Some(&participant_id) = participants.get(&entry.participant) {
-                            state.match_participants.push(MatchParticipant {
-                                match_id,
-                                participant_id,
-                                stats: entry.stats,
-                                points: entry.points,
-                                rank: entry.rank,
-                                result: entry.result,
-                            });
-                        }
-                    }
-                }
-            }
-            state.matches.retain(|m| !doomed_matches.contains(&m.id));
-            state
-                .match_participants
-                .retain(|p| !doomed_matches.contains(&p.match_id));
-        }
-        Ok(true)
     }
 
     async fn insert_password_reset_token(
