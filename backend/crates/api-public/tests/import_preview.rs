@@ -387,9 +387,7 @@ async fn a_later_step_follows_the_qualifications_recomputed_from_results() {
     let (app, s) = setup().await;
     // Le fichier qualifie player0 et player1, mais le match de l'étape 1 qualifie player2 et
     // player3 : l'étape 2, déjà lancée avec player0 et player1, est refusée.
-    let member = |user: &str, rank: i32, status: &str| {
-        json!({ "user": user, "final_rank": rank, "status": status })
-    };
+    let member = |user: &str, rank: i32, status: &str| json!({ "user": user, "final_rank": rank, "status": status });
     let mut t = bracket("Qualifs");
     t["steps"] = json!([
         {
