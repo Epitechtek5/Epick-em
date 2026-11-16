@@ -358,6 +358,15 @@ async fn add_member(
         .await
         .map_err(|err| roster_error(err, role))?
         .ok_or_else(|| ApiError::Validation(vec![("user_id", "Compte introuvable.".into())]))?;
+    crate::notifications::emit(
+        &state,
+        crate::notifications::team_member_added(
+            team.id,
+            &team.name,
+            user_id,
+            &crate::store::now_rfc3339(),
+        ),
+    );
     Ok(HttpResponse::Created().json(member))
 }
 
@@ -440,6 +449,15 @@ async fn remove_member(
         .await
         .map_err(ApiError::internal)?
     {
+        crate::notifications::emit(
+            &state,
+            crate::notifications::team_member_removed(
+                team.id,
+                &team.name,
+                user_id,
+                &crate::store::now_rfc3339(),
+            ),
+        );
         Ok(HttpResponse::NoContent().finish())
     } else {
         Err(ApiError::NotFound)

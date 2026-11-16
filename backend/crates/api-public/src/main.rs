@@ -3,6 +3,7 @@
 use actix_web::HttpServer;
 use api_public::config::AuthConfig;
 use api_public::mail::{MailConfig, ResendMailer};
+use api_public::push::ExpoPush;
 use api_public::store::PgStore;
 use api_public::{AppState, app};
 use std::error::Error;
@@ -35,6 +36,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
         Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
         None => {
             eprintln!("api-public : RESEND_API_KEY absente, les e-mails ne seront pas envoyés");
+            state
+        }
+    };
+
+    let state = match ExpoPush::from_env() {
+        Some(push) => state.with_push(Arc::new(push?)),
+        None => {
+            eprintln!("api-public : PUSH_ENABLED absente, les notifications push seront ignorées");
             state
         }
     };
