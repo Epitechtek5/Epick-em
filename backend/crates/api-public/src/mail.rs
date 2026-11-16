@@ -71,15 +71,18 @@ impl MailConfig {
     /// Variante testable de [`MailConfig::from_env`] : `lookup` renvoie la valeur d'une variable.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Option<Self> {
         let get = |name: &str| lookup(name).filter(|value| !value.is_empty());
+        // Template d'un e-mail : la variable sans suffixe, sinon sa variante française
+        // (`…_FR`), comme dans les `.env` qui déclarent un template par langue.
+        let template = |name: &str| get(name).or_else(|| get(&format!("{name}_FR")));
         Some(MailConfig {
             api_key: get("RESEND_API_KEY")?,
             from: get("MAIL_FROM").unwrap_or_else(|| "Epick'em <onboarding@resend.dev>".into()),
             public_url: get("PUBLIC_URL").unwrap_or_else(|| "http://localhost:3000".into()),
-            verification_template: get("RESEND_EMAIL_VERIFICATION_TEMPLATE")
+            verification_template: template("RESEND_EMAIL_VERIFICATION_TEMPLATE")
                 .unwrap_or_else(|| "email-address-confirmation".into()),
-            welcome_template: get("RESEND_WELCOME_TEMPLATE")
+            welcome_template: template("RESEND_WELCOME_TEMPLATE")
                 .unwrap_or_else(|| "welcome-account".into()),
-            password_reset_template: get("RESEND_PASSWORD_RESET_TEMPLATE")
+            password_reset_template: template("RESEND_PASSWORD_RESET_TEMPLATE")
                 .unwrap_or_else(|| DEFAULT_PASSWORD_RESET_TEMPLATE.into()),
         })
     }
@@ -285,6 +288,28 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(custom.password_reset_template, "custom-reset");
+    }
+
+    #[test]
+    fn localized_template_variables_are_used_as_a_fallback() {
+        let config = config(&[
+            ("RESEND_API_KEY", "re_secret"),
+            (
+                "RESEND_EMAIL_VERIFICATION_TEMPLATE_FR",
+                "email-address-confirmation-fr",
+            ),
+            ("RESEND_WELCOME_TEMPLATE_FR", "welcome-account-fr"),
+            ("RESEND_PASSWORD_RESET_TEMPLATE", "password-reset"),
+            ("RESEND_PASSWORD_RESET_TEMPLATE_FR", "password-reset-fr"),
+        ])
+        .unwrap();
+        assert_eq!(
+            config.verification_template,
+            "email-address-confirmation-fr"
+        );
+        assert_eq!(config.welcome_template, "welcome-account-fr");
+        // La variable sans suffixe reste prioritaire.
+        assert_eq!(config.password_reset_template, "password-reset");
     }
 
     #[test]
