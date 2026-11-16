@@ -130,6 +130,7 @@ Chaque envoi passe l'objet `subject` (= titre) et ces variables, à déclarer da
 | `CATEGORY` | chaîne | catégorie (`tournaments`, `teams`, …) |
 | `LANGUAGE` | chaîne | `fr`, `en` ou `es` |
 | `ACTION_URL` | chaîne | lien absolu (`PUBLIC_URL` + page), vide s'il n'y en a pas |
+| `HAS_ACTION` | booléen | `true` si `ACTION_URL` est renseigné |
 
 Les e-mails de compte utilisent également trois modèles par famille :
 `RESEND_PASSWORD_RESET_TEMPLATE_FR/EN/ES`, `RESEND_EMAIL_VERIFICATION_TEMPLATE_FR/EN/ES`

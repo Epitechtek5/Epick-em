@@ -292,6 +292,7 @@ pub fn notification_variables(mail: &NotificationMail) -> serde_json::Value {
         "CATEGORY": mail.category.as_str(),
         "LANGUAGE": mail.language.as_str(),
         "ACTION_URL": mail.action_url.as_deref().unwrap_or_default(),
+        "HAS_ACTION": mail.action_url.is_some(),
     })
 }
 

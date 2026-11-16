@@ -463,7 +463,7 @@ async fn resend_notifications_use_the_template_of_the_language() {
             json!({
                 "TITLE": "Titre", "BODY": "Corps", "CATEGORY": "teams",
                 "LANGUAGE": language.as_str(),
-                "ACTION_URL": "https://x.test/tournaments/1",
+                "ACTION_URL": "https://x.test/tournaments/1", "HAS_ACTION": true,
             })
         );
     }
