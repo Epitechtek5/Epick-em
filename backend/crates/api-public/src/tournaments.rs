@@ -550,6 +550,18 @@ async fn create_scoring_rule(
         points_table,
     } = body.into_inner();
     let definition = definition(mode, coefficient, points_table)?;
+    if let Some(stat) = state
+        .store
+        .find_stat(stat_id)
+        .await
+        .map_err(ApiError::internal)?
+        && !stat.kind.is_numeric()
+    {
+        return Err(ApiError::Validation(vec![(
+            "stat_id",
+            "Seule une statistique numérique (`flat`, `percent`) entre dans un barème.".to_string(),
+        )]));
+    }
     let rule = state
         .store
         .create_scoring_rule(ScoringRuleInput {

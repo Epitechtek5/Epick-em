@@ -38,6 +38,12 @@ pub trait GameStats: Send + Sync {
     /// Message d'erreur si `stats` est invalide. Appelée avant toute écriture.
     fn validate(&self, stats: &[Value]) -> Option<String>;
 
+    /// Statistiques existantes dont `stats` changerait la nature, un message par statistique.
+    /// Appelée avant toute écriture, après [`Self::validate`].
+    async fn conflicts(&self, _stats: &[Value]) -> Result<Vec<String>, StoreError> {
+        Ok(Vec::new())
+    }
+
     /// Remplace les statistiques du jeu par `stats`, déjà validées.
     async fn import(&self, game_id: Uuid, stats: Vec<Value>) -> Result<(), StoreError>;
 }
@@ -195,7 +201,22 @@ pub(crate) async fn import_games(
     require_admin(&state, &claims).await?;
     let format = query.format.unwrap_or_default();
     let games = decode(format, &body).map_err(file_error)?;
-    let problems = check(&*state.stats, &games);
+    let mut problems = check(&*state.stats, &games);
+    for (index, game) in games.iter().enumerate() {
+        let conflicts = state
+            .stats
+            .conflicts(&game.stats)
+            .await
+            .map_err(ApiError::internal)?;
+        if !conflicts.is_empty() {
+            problems.push(format!(
+                "Jeu {} : stats : {}",
+                index + 1,
+                conflicts.join(" ")
+            ));
+        }
+    }
+    problems.truncate(MAX_REPORTED_ERRORS);
     if !problems.is_empty() {
         return Err(file_error(problems));
     }
