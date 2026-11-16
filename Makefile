@@ -6,7 +6,10 @@ API_URL ?= http://127.0.0.1:$(shell grep -E '^API_PUBLIC_PORT=' .env 2>/dev/null
 WAIT_SECS ?= 300
 
 ## Plateforme complète + données de démonstration, en une commande (voir docs/demarrage.md)
-demo: up seed
+# `up` puis `seed`, dans cet ordre même sous `make -j` : le seed attend que l'API réponde.
+demo:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory seed
 	@echo "Démo prête : web http://localhost:$$(grep -E '^WEB_PORT=' .env | cut -d= -f2), API $(API_URL)"
 	@echo "Comptes : seed_admin@example.test (admin), alice_test@example.test… — mot de passe Password1234!"
 

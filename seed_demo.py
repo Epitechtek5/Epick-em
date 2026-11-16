@@ -470,15 +470,33 @@ def seed_completed_duel(api: Api, admin: str, users: dict[str, dict[str, str]],
     return TournamentData(tid, [step], registrations, game_id)
 
 
+# Every DEMO tournament the seed creates, in creation order. The last one is written last of all:
+# a seed counts as complete only when all of them exist, the final one included.
+DEMO_TOURNAMENTS = (
+    "DEMO - CS2 Teams (active)",
+    "DEMO - TFT FFA (live)",
+    "DEMO - TFT FFA (registration)",
+    "DEMO - Single elimination",
+    "DEMO - Double elimination",
+    "DEMO - Swiss tournament",
+    "DEMO - Completed duel",
+    "DEMO - Cancelled tournament",
+    "DEMO - Draft tournament",
+)
+
+
 def seed_state(api: Api, admin_name: str) -> str:
-    """`fresh`, `seeded` (admin and DEMO tournaments present) or `partial`."""
+    """`fresh`, `seeded` (admin and every DEMO tournament present) or `partial`."""
     try:
         token = api.login(f"{admin_name.lower()}@example.test")
     except ApiFailure as exc:
         # 401 : compte inconnu. Tout autre refus (compte non vérifié…) trahit un seed interrompu.
         return "fresh" if "HTTP 401" in str(exc) else "partial"
     tournaments = api.get("/tournaments?limit=100&offset=0", token)
-    if any(t.get("name", "").startswith("DEMO - ") for t in tournaments):
+    names = {t.get("name", "") for t in tournaments}
+    # An interrupted seed leaves some DEMO tournaments (or one without its steps and matches,
+    # followed by none of the next ones): only the full set, written in order, means done.
+    if all(name in names for name in DEMO_TOURNAMENTS):
         return "seeded"
     return "partial"
 
@@ -515,7 +533,7 @@ def main() -> int:
         return 0
     if state == "partial":
         raise RuntimeError(
-            f"Account {args.admin} exists but the DEMO tournaments are missing: partial seed. "
+            f"Account {args.admin} exists but some DEMO tournaments are missing: partial seed. "
             "Reset the local database (`make reset`) and seed again."
         )
 

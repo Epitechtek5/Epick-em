@@ -54,13 +54,23 @@ jobs:
           echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "SHA invalide : $SHA"; exit 1; }
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
       - name: La CI de ce commit est verte (ci-ok)
+        # CI et Release démarrent ensemble : Release peut finir avant les tests. On attend donc
+        # la conclusion de la dernière exécution de ci-ok pour ce SHA (absente ou en cours :
+        # nouvel essai), sans jamais déployer sur une CI rouge ou inachevée.
+        timeout-minutes: 90
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.sha.outputs.sha }}
         run: |
-          conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?check_name=ci-ok" \
-            --jq '[.check_runs[] | select(.status == "completed")][0].conclusion')
-          [ "$conclusion" = success ] || { echo "ci-ok n'est pas vert pour $SHA ($conclusion)"; exit 1; }
+          while :; do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?check_name=ci-ok" \
+              --jq '.check_runs | sort_by(.started_at) | last | "\(.status) \(.conclusion)"')
+            case "$run" in
+              "completed success") echo "ci-ok vert pour $SHA"; exit 0 ;;
+              completed*) echo "ci-ok n'est pas vert pour $SHA ($run)"; exit 1 ;;
+              *) echo "ci-ok pas encore terminé pour $SHA (${run:-absent}) : nouvel essai dans 30 s"; sleep 30 ;;
+            esac
+          done
       - name: Les images de ce commit sont publiées
         env:
           SHA: ${{ steps.sha.outputs.sha }}
