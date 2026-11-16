@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { ScreenState } from '@/components/ui/feedback';
@@ -32,39 +33,57 @@ export function PublicTournamentsScreen() {
       />
     );
   return (
-    <ScrollView
-      className="flex-1 bg-background"
-      contentContainerClassName="gap-3 p-5"
-    >
-      <Text className="text-2xl font-semibold">
-        {t('tournaments.public.title')}
-      </Text>
-      <Text variant="muted">{t('tournaments.public.help')}</Text>
-      {data.map((tournament) => (
-        <Card key={tournament.id}>
-          <CardContent className="gap-2 pt-5">
-            <Text className="text-lg font-semibold">{tournament.name}</Text>
-            <Text variant="muted">
-              {formatTournamentDate(tournament.start_date, i18n.language)}
-            </Text>
-            <Button
-              onPress={() =>
-                router.push({
-                  pathname: '/tournaments/[tournamentId]',
-                  params: { tournamentId: tournament.id },
-                })
-              }
-            >
-              <Text>{t('tournaments.details')}</Text>
-            </Button>
-          </CardContent>
-        </Card>
-      ))}
-      {!data.length ? <ScreenState message={t('tournaments.empty')} /> : null}
-      <Button variant="outline" onPress={() => router.push('/login')}>
-        <Text>{t('auth.login.submit')}</Text>
-      </Button>
-    </ScrollView>
+    <SafeAreaView className="flex-1 bg-background" edges={['top', 'bottom']}>
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="gap-4 px-5 pb-8"
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-ml-3 self-start"
+          onPress={() => router.replace('/login')}
+          accessibilityLabel={t('tournaments.public.backToLogin')}
+        >
+          <Text>{t('tournaments.public.backToLogin')}</Text>
+        </Button>
+        <View className="gap-1">
+          <Text className="text-2xl font-semibold">
+            {t('tournaments.public.title')}
+          </Text>
+          <Text variant="muted">{t('tournaments.public.help')}</Text>
+        </View>
+        {data.map((tournament) => (
+          <Card key={tournament.id}>
+            <CardContent className="gap-3 pt-5">
+              <View className="gap-1">
+                <Text className="text-lg font-semibold">{tournament.name}</Text>
+                <Text variant="muted">
+                  {formatTournamentDate(tournament.start_date, i18n.language)}
+                </Text>
+              </View>
+              <Button
+                variant="outline"
+                onPress={() =>
+                  router.push({
+                    pathname: '/tournaments/[tournamentId]',
+                    params: { tournamentId: tournament.id },
+                  })
+                }
+                accessibilityLabel={t('tournaments.public.viewDetails', {
+                  name: tournament.name,
+                })}
+              >
+                <Text>{t('tournaments.public.detailsAction')}</Text>
+              </Button>
+            </CardContent>
+          </Card>
+        ))}
+        {!data.length ? (
+          <ScreenState message={t('tournaments.public.empty')} />
+        ) : null}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -103,84 +122,91 @@ export function PublicTournamentDetailsScreen() {
     );
   const { tournament } = data;
   return (
-    <ScrollView
-      className="flex-1 bg-background"
-      contentContainerClassName="gap-4 p-5"
-    >
-      <Button variant="ghost" onPress={() => router.back()}>
-        <Text>{t('common.back')}</Text>
-      </Button>
-      <View className="gap-1">
-        <Text className="text-2xl font-semibold">{tournament.name}</Text>
-        {tournament.description ? (
-          <Text variant="muted">{tournament.description}</Text>
-        ) : null}
-      </View>
-      <Card>
-        <CardContent className="gap-2 pt-5">
-          <Text>
-            {formatTournamentDate(tournament.start_date, i18n.language)} –{' '}
-            {formatTournamentDate(tournament.end_date, i18n.language)}
-          </Text>
-          <Text>
-            {t(`tournaments.mode.${tournament.mode}`)}
-            {tournament.location ? ` · ${tournament.location}` : ''}
-          </Text>
-          {tournament.rules ? (
-            <Text variant="muted">{tournament.rules}</Text>
+    <SafeAreaView className="flex-1 bg-background" edges={['top', 'bottom']}>
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="gap-4 px-5 pb-8"
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-ml-3 self-start"
+          onPress={() => router.replace('/tournaments')}
+        >
+          <Text>{t('common.back')}</Text>
+        </Button>
+        <View className="gap-1">
+          <Text className="text-2xl font-semibold">{tournament.name}</Text>
+          {tournament.description ? (
+            <Text variant="muted">{tournament.description}</Text>
           ) : null}
-        </CardContent>
-      </Card>
-      <Section
-        title={t('tournaments.participants')}
-        empty={!data.participants.length}
-      >
-        {data.participants.map((participant) => (
-          <Text key={participant.id}>
-            {participant.name}
-            {participant.team ? ` · ${participant.team}` : ''}
-          </Text>
-        ))}
-      </Section>
-      <Section
-        title={t('tournaments.ranking')}
-        empty={!data.players.length && !data.teams.length}
-      >
-        {[
-          ...data.players.map((rank) => ({
-            id: rank.participant_id,
-            rank: rank.rank,
-            name: rank.username,
-            points: rank.points,
-          })),
-          ...data.teams.map((rank) => ({
-            id: rank.tournament_team_id,
-            rank: rank.rank,
-            name: rank.name,
-            points: rank.points,
-          })),
-        ].map((rank) => (
-          <Text key={rank.id}>
-            #{rank.rank} {rank.name} ·{' '}
-            {t('tournaments.points', { points: rank.points })}
-          </Text>
-        ))}
-      </Section>
-      <Section title={t('steps.title')} empty={!data.steps.length}>
-        {data.steps.map((step) => (
-          <View key={step.id} className="gap-1">
-            <Text className="font-semibold">
-              {t('steps.position', { position: step.position })}
+        </View>
+        <Card>
+          <CardContent className="gap-2 pt-5">
+            <Text>
+              {formatTournamentDate(tournament.start_date, i18n.language)} –{' '}
+              {formatTournamentDate(tournament.end_date, i18n.language)}
             </Text>
-            <Text variant="muted">
-              {t('tournaments.public.matches', {
-                count: data.matches[step.id]?.length ?? 0,
-              })}
+            <Text>
+              {t(`tournaments.mode.${tournament.mode}`)}
+              {tournament.location ? ` · ${tournament.location}` : ''}
             </Text>
-          </View>
-        ))}
-      </Section>
-    </ScrollView>
+            {tournament.rules ? (
+              <Text variant="muted">{tournament.rules}</Text>
+            ) : null}
+          </CardContent>
+        </Card>
+        <Section
+          title={t('tournaments.participants')}
+          empty={!data.participants.length}
+        >
+          {data.participants.map((participant) => (
+            <Text key={participant.id}>
+              {participant.name}
+              {participant.team ? ` · ${participant.team}` : ''}
+            </Text>
+          ))}
+        </Section>
+        <Section
+          title={t('tournaments.ranking')}
+          empty={!data.players.length && !data.teams.length}
+        >
+          {[
+            ...data.players.map((rank) => ({
+              id: rank.participant_id,
+              rank: rank.rank,
+              name: rank.username,
+              points: rank.points,
+            })),
+            ...data.teams.map((rank) => ({
+              id: rank.tournament_team_id,
+              rank: rank.rank,
+              name: rank.name,
+              points: rank.points,
+            })),
+          ].map((rank) => (
+            <Text key={rank.id}>
+              #{rank.rank} {rank.name} ·{' '}
+              {t('tournaments.points', { points: rank.points })}
+            </Text>
+          ))}
+        </Section>
+        <Section title={t('steps.title')} empty={!data.steps.length}>
+          {data.steps.map((step) => (
+            <View key={step.id} className="gap-1">
+              <Text className="font-semibold">
+                {t('steps.position', { position: step.position })}
+              </Text>
+              <Text variant="muted">
+                {t('tournaments.public.matches', {
+                  count: data.matches[step.id]?.length ?? 0,
+                })}
+              </Text>
+            </View>
+          ))}
+        </Section>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 

@@ -241,6 +241,7 @@ def create_tournament(
     api: Api, admin: str, name: str, game_id: str,
     count: int, kind: str = "solo", size: int | None = None,
     scoring: str = "none", top_n: int | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> str:
     payload = {
         "game_id": game_id,
@@ -251,11 +252,23 @@ def create_tournament(
         "registration_open_at": iso(-24),
         "registration_close_at": iso(24),
         "participant_type": kind,
-        "team_size": size,
         "max_participants": count,
         "team_scoring_mode": scoring,
         "team_scoring_n": top_n,
+        "mode": "online",
+        "visibility": "public",
+        "rules": "Respect opponents, staff decisions and the published schedule.",
+        "registration_policy": "open",
+        "waiting_list_enabled": False,
     }
+    if kind == "team":
+        payload.update({
+            "team_min_starters": size,
+            "team_max_starters": size,
+            "team_max_substitutes": None,
+        })
+    if settings:
+        payload.update(settings)
     tournament = api.post("/tournaments", payload, admin)
     print(f"  tournament: {name}")
     return tournament["id"]
@@ -511,6 +524,115 @@ def seed_completed_duel(api: Api, admin: str, users: dict[str, dict[str, str]],
     return TournamentData(tid, [step], registrations, game_id)
 
 
+def seed_registration_management(
+    api: Api,
+    admin: str,
+    users: dict[str, dict[str, str]],
+    game_id: str,
+) -> TournamentData:
+    """Create every registration state for one-account mobile testing."""
+    tid = create_tournament(
+        api,
+        admin,
+        "DEMO - Registration management",
+        game_id,
+        2,
+        settings={
+            "description": "Public advanced tournament ready for mobile registration management tests.",
+            "mode": "hybrid",
+            "location": "Epick'em Arena · Paris",
+            "registration_policy": "approval_required",
+            "waiting_list_enabled": True,
+            "registration_fields": [
+                {
+                    "key": "ingame_name",
+                    "label": "In-game name",
+                    "field_type": "text",
+                    "required": True,
+                    "options": [],
+                },
+                {
+                    "key": "platform",
+                    "label": "Platform",
+                    "field_type": "select",
+                    "required": True,
+                    "options": ["PC", "PlayStation", "Xbox"],
+                },
+            ],
+            "check_in_open_at": iso(-1),
+            "check_in_close_at": iso(20),
+        },
+    )
+    set_tournament_status(api, admin, tid, "registration")
+
+    registrations: list[str] = []
+    candidates = USERS[:4]
+    for index, username in enumerate(candidates):
+        participant = api.post(
+            f"/tournaments/{tid}/participants",
+            {
+                "responses": {
+                    "ingame_name": f"{username}_ign",
+                    "platform": "PC" if index < 3 else "PlayStation",
+                },
+            },
+            users[username]["token"],
+        )
+        registrations.append(participant["id"])
+
+    for participant_id in registrations[:3]:
+        api.post(
+            f"/tournaments/{tid}/participants/{participant_id}/approve",
+            {},
+            admin,
+        )
+    api.post(
+        f"/tournaments/{tid}/participants/{registrations[3]}/reject",
+        {},
+        admin,
+    )
+
+    # Populate the management screen without requiring another interactive login.
+    api.request(
+        "PUT",
+        f"/tournaments/{tid}/roles/{users['alice_test']['id']}",
+        {"role": "referee"},
+        admin,
+    )
+    api.post(
+        f"/tournaments/{tid}/templates",
+        {"name": "DEMO TEMPLATE - Advanced registration"},
+        admin,
+    )
+    return TournamentData(tid, [], registrations, game_id)
+
+
+def seed_private_access(
+    api: Api,
+    admin: str,
+    users: dict[str, dict[str, str]],
+    game_id: str,
+) -> TournamentData:
+    tid = create_tournament(
+        api,
+        admin,
+        "DEMO - Invitation only",
+        game_id,
+        8,
+        settings={
+            "visibility": "invitation_only",
+            "description": "Visible to the owner when signed in, never in the public catalog.",
+        },
+    )
+    api.request(
+        "PUT",
+        f"/tournaments/{tid}/invitations/{users['bob_test']['id']}",
+        token=admin,
+        expected=(200, 201),
+    )
+    return TournamentData(tid, [], [], game_id)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=os.environ.get("API_URL", "http://127.0.0.1:8080"))
@@ -593,6 +715,12 @@ def main() -> int:
     created["double_elimination"] = seed_elimination(api, admin, users, chess["id"], wins["id"], "double_elim", complete_first=False)
     created["swiss"] = seed_swiss(api, admin, users, chess["id"])
     created["completed"] = seed_completed_duel(api, admin, users, chess["id"], wins["id"])
+    created["registration_management"] = seed_registration_management(
+        api, admin, users, tft["id"]
+    )
+    created["invitation_only"] = seed_private_access(
+        api, admin, users, chess["id"]
+    )
 
     cancelled = create_tournament(api, admin, "DEMO - Cancelled tournament", chess["id"], 4)
     set_tournament_status(api, admin, cancelled, "cancelled")
@@ -618,6 +746,10 @@ def main() -> int:
     print(f"All {len(users)} accounts use the requested development password.")
     print("Email fixtures use example.test: replace and verify an address before testing Resend.")
     print("No push tokens are seeded: sign in on a physical device to register one.")
+    print("Use this single account for the complete mobile test session:")
+    print(f"  email: {users[args.admin]['email']}")
+    print(f"  password: {PASSWORD}")
+    print("All other accounts are fixtures; you do not need to sign in as them.")
     return 0
 
 

@@ -546,6 +546,10 @@
       "title": "Public tournaments",
       "help": "View schedules, participants and rankings without an account.",
       "browse": "Browse public tournaments",
+      "backToLogin": "Back to sign in",
+      "detailsAction": "View tournament",
+      "viewDetails": "View {{name}}",
+      "empty": "No public tournaments are available yet.",
       "matches": "{{count}} matches"
     },
     "scoringMode": {

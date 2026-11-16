@@ -546,6 +546,10 @@
       "title": "Tournois publics",
       "help": "Consultez les calendriers, participants et classements sans compte.",
       "browse": "Voir les tournois publics",
+      "backToLogin": "Retour à la connexion",
+      "detailsAction": "Voir le tournoi",
+      "viewDetails": "Voir {{name}}",
+      "empty": "Aucun tournoi public n’est disponible pour le moment.",
       "matches": "{{count}} matchs"
     },
     "scoringMode": {
