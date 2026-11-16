@@ -39,8 +39,10 @@ beforeEach(() => {
 
 // Texte lu par un lecteur d'écran pour un élément : son libellé, sinon le texte qu'il contient.
 function accessibleName(node: TestInstance): string {
-  if (typeof node.props.accessibilityLabel === 'string') return node.props.accessibilityLabel;
-  if (typeof node.props['aria-label'] === 'string') return node.props['aria-label'];
+  if (typeof node.props.accessibilityLabel === 'string')
+    return node.props.accessibilityLabel;
+  if (typeof node.props['aria-label'] === 'string')
+    return node.props['aria-label'];
   const texts: string[] = [];
   const walk = (n: TestInstance | string) => {
     if (typeof n === 'string') texts.push(n);
@@ -54,7 +56,9 @@ function accessibleName(node: TestInstance): string {
 // l'accessibilité les voit.
 function actionables(root: TestInstance): TestInstance[] {
   return root.queryAll(
-    (n) => typeof n.props.onPress === 'function' || typeof n.props.onClick === 'function',
+    (n) =>
+      typeof n.props.onPress === 'function' ||
+      typeof n.props.onClick === 'function',
   );
 }
 
@@ -66,12 +70,16 @@ function expectAccessible() {
     const name = accessibleName(node);
     if (!role) problems.push(`élément actionnable sans rôle : « ${name} »`);
     if (!name) problems.push(`élément actionnable sans nom (rôle ${role})`);
-    if (node.props.accessible === false) problems.push(`élément actionnable masqué : « ${name} »`);
+    if (node.props.accessible === false)
+      problems.push(`élément actionnable masqué : « ${name} »`);
   }
   const inputs = root.queryAll((n) => n.type === 'TextInput');
   for (const input of inputs) {
     const label = input.props.accessibilityLabel ?? input.props['aria-label'];
-    if (!label) problems.push(`champ sans libellé (placeholder : ${input.props.placeholder ?? '—'})`);
+    if (!label)
+      problems.push(
+        `champ sans libellé (placeholder : ${input.props.placeholder ?? '—'})`,
+      );
   }
   expect(problems).toEqual([]);
   // Garde-fous : les écrans testés ont tous un formulaire et un bouton.
@@ -101,7 +109,12 @@ describe('accessibilité des écrans d’authentification', () => {
     let announced = false;
     while (node) {
       const role = node.props.accessibilityRole ?? node.props.role;
-      if (role === 'alert' || node.props.accessibilityLiveRegion || node.props['aria-live']) announced = true;
+      if (
+        role === 'alert' ||
+        node.props.accessibilityLiveRegion ||
+        node.props['aria-live']
+      )
+        announced = true;
       node = node.parent;
     }
     expect(announced).toBe(true);
