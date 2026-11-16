@@ -9,8 +9,8 @@ use actix_web::test::TestRequest;
 use api_public::config::AuthConfig;
 use api_public::events::{EventKind, MemoryEvents};
 use api_public::store::{
-    AuthStore, MemoryStore, ParticipantInput, ParticipantStatus, Role, TournamentInput,
-    TournamentSettings, no_responses,
+    AuthStore, MemoryStore, ParticipantInput, ParticipantStatus, Role, SettingsUpdate, StoreError,
+    TeamRole, TournamentInput, TournamentSettings, TournamentUpdate, Visibility, no_responses,
 };
 use api_public::{AppState, app};
 use common::{SECRET, access, call, logged_in_as, login, request};
@@ -239,7 +239,8 @@ async fn a_tournament_is_configurable_and_owned_by_its_creator() {
     assert_eq!(t["registration_policy"], "approval_required");
     assert_eq!(t["check_in_open_at"], "2026-11-14T16:00:00.000000Z");
     assert_eq!(t["is_template"], false);
-    assert!(t.get("team_size").is_none());
+    // Conservé tant que le mobile compare l'effectif à `team_size`.
+    assert_eq!(t["team_size"], 3);
 
     // Défauts : en ligne, public, inscriptions ouvertes, remplaçants illimités.
     let (_, plain) = post(
@@ -1741,4 +1742,384 @@ async fn a_legacy_file_without_settings_still_imports() {
     assert_eq!(t["team_max_starters"], 3);
     assert_eq!(t["visibility"], "public");
     assert_eq!(t["owner_id"], s.admin.id);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Corrections de la revue de #182
+// ---------------------------------------------------------------------------------------------
+
+/// Un PATCH n'écrit que les champs fournis : une modification calculée sur un état antérieur
+/// ne rétablit pas une visibilité changée entre-temps.
+#[actix_web::test]
+async fn a_settings_update_only_writes_the_fields_it_names() {
+    let store = MemoryStore::new();
+    let tournament = store
+        .create_tournament(TournamentInput {
+            game_id: Uuid::new_v4(),
+            name: "Partiel".into(),
+            description: None,
+            start_date: "2026-11-14T18:00:00.000000Z".into(),
+            end_date: "2026-11-15T18:00:00.000000Z".into(),
+            registration_open_at: None,
+            registration_close_at: None,
+            participant_type: api_public::store::ParticipantType::Solo,
+            max_participants: 4,
+            team_scoring_mode: api_public::store::TeamScoringMode::None,
+            team_scoring_n: None,
+            settings: TournamentSettings::solo(),
+            owner_id: None,
+            is_template: false,
+        })
+        .await
+        .unwrap();
+    let hidden = store
+        .update_tournament(
+            tournament.id,
+            TournamentUpdate {
+                settings: SettingsUpdate {
+                    visibility: Some(Visibility::InvitationOnly),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(hidden.settings.visibility, Visibility::InvitationOnly);
+    // Le second PATCH (règlement seulement) a été préparé avant le premier.
+    let updated = store
+        .update_tournament(
+            tournament.id,
+            TournamentUpdate {
+                settings: SettingsUpdate {
+                    rules: Some(Some("Pas de triche.".into())),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.settings.visibility, Visibility::InvitationOnly);
+    assert_eq!(updated.settings.rules.as_deref(), Some("Pas de triche."));
+
+    // Par HTTP, changer le règlement ne touche pas non plus à la visibilité.
+    let (app, s) = setup().await;
+    let tid = open(&app, &s, json!({ "visibility": "invitation_only" })).await;
+    let (status, t) = patch(
+        &app,
+        &format!("/tournaments/{tid}"),
+        &s.admin,
+        json!({ "rules": "Règlement" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{t}");
+    assert_eq!(t["visibility"], "invitation_only");
+    assert_eq!(t["rules"], "Règlement");
+}
+
+/// Le PATCH de statut applique la capacité à toute transition qui attribue une place.
+#[actix_web::test]
+async fn a_status_patch_cannot_seat_a_participant_in_a_full_tournament() {
+    let (app, s) = setup().await;
+    let tid = open(
+        &app,
+        &s,
+        json!({ "waiting_list_enabled": true, "max_participants": 1 }),
+    )
+    .await;
+    let (_, first) = register(&app, &tid, &s.alice, json!({})).await;
+    let (_, second) = register(&app, &tid, &s.bob, json!({})).await;
+    assert_eq!(second["status"], "waitlisted");
+    let path = |p: &Value| format!("/tournaments/{tid}/participants/{}", id(p));
+    for target in ["registered", "checked_in", "disqualified"] {
+        let (status, error) =
+            patch(&app, &path(&second), &s.admin, json!({ "status": target })).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{target}: {error}");
+        assert_eq!(error["error"], "tournament_full");
+    }
+    // Une transition entre deux statuts qui occupent une place reste possible.
+    let (status, _) = patch(
+        &app,
+        &path(&first),
+        &s.admin,
+        json!({ "status": "disqualified" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Approbation requise : même contrôle pour `pending`.
+    let approval = open(
+        &app,
+        &s,
+        json!({ "name": "Sur dossier", "registration_policy": "approval_required", "max_participants": 1 }),
+    )
+    .await;
+    let (_, a) = register(&app, &approval, &s.alice, json!({})).await;
+    let (_, b) = register(&app, &approval, &s.bob, json!({})).await;
+    let path = |p: &Value| format!("/tournaments/{approval}/participants/{}", id(p));
+    let (status, _) = patch(&app, &path(&a), &s.admin, json!({ "status": "registered" })).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = patch(&app, &path(&b), &s.admin, json!({ "status": "registered" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+/// Libérer une place (suppression ou statut sans place) promeut la liste d'attente dans la
+/// même opération : les promus sont renvoyés par le store.
+#[actix_web::test]
+async fn releasing_a_seat_promotes_the_waiting_list_atomically() {
+    let store = MemoryStore::new();
+    let mut users = Vec::new();
+    for n in 0..3 {
+        users.push(
+            store
+                .create_user(&format!("p{n}"), None, "hash")
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    let mut settings = TournamentSettings::solo();
+    settings.waiting_list_enabled = true;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            game_id: Uuid::new_v4(),
+            name: "Atomique".into(),
+            description: None,
+            start_date: "2026-11-14T18:00:00.000000Z".into(),
+            end_date: "2026-11-15T18:00:00.000000Z".into(),
+            registration_open_at: None,
+            registration_close_at: None,
+            participant_type: api_public::store::ParticipantType::Solo,
+            max_participants: 1,
+            team_scoring_mode: api_public::store::TeamScoringMode::None,
+            team_scoring_n: None,
+            settings,
+            owner_id: None,
+            is_template: false,
+        })
+        .await
+        .unwrap();
+    let mut added = Vec::new();
+    for user in &users {
+        added.push(
+            store
+                .add_participant(ParticipantInput {
+                    tournament_id: tournament.id,
+                    user_id: Some(*user),
+                    tournament_team_id: None,
+                    responses: no_responses(),
+                })
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    let change = store
+        .set_participant_status(added[0].id, ParticipantStatus::Withdrawn)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(change.participant.status, ParticipantStatus::Withdrawn);
+    assert_eq!(
+        change.promoted.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [added[1].id]
+    );
+    let promoted = store
+        .delete_participant(added[1].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        promoted.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [added[2].id]
+    );
+    // Supprimer un inscrit sans place ne promeut personne.
+    assert!(
+        store
+            .delete_participant(added[0].id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Supprimer son compte transmet ses tournois : à un administrateur du tournoi d'abord, sinon
+/// à un administrateur global.
+#[actix_web::test]
+async fn deleting_the_owner_account_hands_the_tournament_to_a_successor() {
+    let (app, s) = setup().await;
+    let tid = open(&app, &s, json!({})).await;
+    let orphan = open(&app, &s, json!({ "name": "Sans administrateur" })).await;
+    let (status, _) = put(
+        &app,
+        &format!("/tournaments/{tid}/roles/{}", s.alice.id),
+        &s.admin,
+        json!({ "role": "admin" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = delete(&app, "/me/delete", &s.admin).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, t) = get(&app, &format!("/tournaments/{tid}"), &s.alice).await;
+    assert_eq!(t["owner_id"], s.alice.id);
+    // Le successeur peut à son tour déléguer : le tournoi n'est pas bloqué.
+    let (status, _) = put(
+        &app,
+        &format!("/tournaments/{tid}/roles/{}", s.bob.id),
+        &s.alice,
+        json!({ "role": "referee" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Le propriétaire n'a pas de rôle délégué.
+    let (_, roles) = get(&app, &format!("/tournaments/{tid}/roles"), &s.alice).await;
+    let delegated = roles["roles"].as_array().unwrap();
+    assert!(delegated.iter().any(|r| r["user_id"] == s.bob.id));
+    assert!(delegated.iter().all(|r| r["user_id"] != s.alice.id));
+    let (_, audit) = get(&app, &format!("/tournaments/{tid}/role-audit"), &s.alice).await;
+    assert!(audit.as_array().unwrap().iter().any(|entry| {
+        entry["action"] == "transfer"
+            && entry["target_user_id"] == s.alice.id
+            && entry["actor_id"].is_null()
+    }));
+
+    // Sans administrateur de tournoi ni administrateur global restant, personne ne reprend.
+    let (status, t) = get(&app, &format!("/tournaments/{orphan}"), &s.bob).await;
+    assert_eq!(status, StatusCode::OK, "{t}");
+    assert!(t["owner_id"].is_null(), "{t}");
+
+    // Au niveau du store : à défaut d'administrateur local, le plus ancien administrateur
+    // global reprend le tournoi.
+    let store = MemoryStore::new();
+    let owner = store.create_user("owner", None, "hash").await.unwrap().id;
+    let successor = store.create_user("global", None, "hash").await.unwrap().id;
+    store.set_role("global", Role::Admin);
+    let tournament = store
+        .create_tournament(TournamentInput {
+            game_id: Uuid::new_v4(),
+            name: "Repris".into(),
+            description: None,
+            start_date: "2026-11-14T18:00:00.000000Z".into(),
+            end_date: "2026-11-15T18:00:00.000000Z".into(),
+            registration_open_at: None,
+            registration_close_at: None,
+            participant_type: api_public::store::ParticipantType::Solo,
+            max_participants: 4,
+            team_scoring_mode: api_public::store::TeamScoringMode::None,
+            team_scoring_n: None,
+            settings: TournamentSettings::solo(),
+            owner_id: Some(owner),
+            is_template: false,
+        })
+        .await
+        .unwrap();
+    assert!(store.delete_user(owner).await.unwrap());
+    let reloaded = store.find_tournament(tournament.id).await.unwrap().unwrap();
+    assert_eq!(reloaded.owner_id, Some(successor));
+}
+
+/// Les ajouts concurrents de membres ne dépassent pas la limite de titulaires.
+#[actix_web::test]
+async fn concurrent_member_additions_respect_the_roster_limit() {
+    let store = Arc::new(MemoryStore::new());
+    let owner = store.create_user("captain", None, "hash").await.unwrap().id;
+    let mut players = Vec::new();
+    for n in 0..8 {
+        players.push(
+            store
+                .create_user(&format!("m{n}"), None, "hash")
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    let tournament = store
+        .create_tournament(TournamentInput {
+            game_id: Uuid::new_v4(),
+            name: "Effectif".into(),
+            description: None,
+            start_date: "2026-11-14T18:00:00.000000Z".into(),
+            end_date: "2026-11-15T18:00:00.000000Z".into(),
+            registration_open_at: None,
+            registration_close_at: None,
+            participant_type: api_public::store::ParticipantType::Team,
+            max_participants: 4,
+            team_scoring_mode: api_public::store::TeamScoringMode::None,
+            team_scoring_n: None,
+            settings: TournamentSettings::team(3),
+            owner_id: None,
+            is_template: false,
+        })
+        .await
+        .unwrap();
+    let team = store
+        .create_tournament_team(api_public::store::TournamentTeamInput {
+            tournament_id: tournament.id,
+            team_id: None,
+            name: "Alpha".into(),
+            tag: None,
+            picture_url: None,
+            owner_id: owner,
+            members: vec![(owner, TeamRole::Owner)],
+        })
+        .await
+        .unwrap();
+    let mut tasks = Vec::new();
+    for player in players {
+        let store = store.clone();
+        tasks.push(tokio::spawn(async move {
+            store
+                .add_tournament_team_member(team.id, player, TeamRole::Member)
+                .await
+        }));
+    }
+    let mut full = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(Some(_)) => {}
+            Err(StoreError::TeamRosterFull(3)) => full += 1,
+            other => panic!("{other:?}"),
+        }
+    }
+    let members = store
+        .list_tournament_team_members(team.id)
+        .await
+        .unwrap()
+        .unwrap();
+    // Le propriétaire compte parmi les titulaires.
+    assert_eq!(members.len(), 3);
+    assert_eq!(full, 6);
+}
+
+/// La liste publique est paginée sans charger les autres inscrits.
+#[actix_web::test]
+async fn public_participants_are_paginated_with_their_names() {
+    let (app, s) = setup().await;
+    let tid = open(&app, &s, json!({})).await;
+    for who in [&s.alice, &s.bob, &s.carol] {
+        let (status, _) = register(&app, &tid, who, json!({})).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, page) = anonymous(
+        &app,
+        &format!("/public/tournaments/{tid}/participants?limit=1&offset=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let page = page.as_array().unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0]["name"], "bob");
+    assert_eq!(page[0]["kind"], "player");
+    let (_, rest) = anonymous(
+        &app,
+        &format!("/public/tournaments/{tid}/participants?limit=10&offset=2"),
+    )
+    .await;
+    assert_eq!(rest.as_array().unwrap().len(), 1);
+    assert_eq!(rest[0]["name"], "carol");
 }

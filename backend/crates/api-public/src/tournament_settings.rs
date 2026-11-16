@@ -2,8 +2,8 @@
 //! inscriptions, pointage) : corps des requêtes, validation et réponses aux champs d'inscription.
 
 use crate::store::{
-    FieldType, ParticipantType, RegistrationField, RegistrationPolicy, TournamentMode,
-    TournamentSettings, Visibility,
+    FieldType, ParticipantType, RegistrationField, RegistrationPolicy, SettingsUpdate,
+    TournamentMode, TournamentSettings, Visibility,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournaments::nullable;
@@ -93,7 +93,7 @@ impl SettingsRequest {
 }
 
 /// Configuration à la modification : champs facultatifs, `null` efface une valeur facultative.
-#[derive(Debug, Default, Deserialize, ToSchema)]
+#[derive(Debug, Default, Clone, Deserialize, ToSchema)]
 pub(crate) struct UpdateSettingsRequest {
     pub mode: Option<TournamentMode>,
     #[serde(default, deserialize_with = "nullable")]
@@ -146,6 +146,45 @@ impl UpdateSettingsRequest {
             && self.waiting_list_enabled.is_none()
             && self.registration_fields.is_none()
             && !self.touches_check_in()
+    }
+
+    /// Les champs fournis par la requête, avec leur valeur validée dans `checked` (la
+    /// configuration fusionnée puis nettoyée) : seuls ceux-là sont écrits en base.
+    pub fn to_update(&self, checked: &TournamentSettings) -> SettingsUpdate {
+        let composition = self.team_size.is_some();
+        SettingsUpdate {
+            mode: self.mode.map(|_| checked.mode),
+            location: self.location.as_ref().map(|_| checked.location.clone()),
+            visibility: self.visibility.map(|_| checked.visibility),
+            rules: self.rules.as_ref().map(|_| checked.rules.clone()),
+            team_min_starters: (composition || self.team_min_starters.is_some())
+                .then_some(checked.team_min_starters)
+                .flatten(),
+            team_max_starters: (composition || self.team_max_starters.is_some())
+                .then_some(checked.team_max_starters)
+                .flatten(),
+            team_max_substitutes: self
+                .team_max_substitutes
+                .map(|_| checked.team_max_substitutes),
+            registration_policy: self
+                .registration_policy
+                .map(|_| checked.registration_policy),
+            waiting_list_enabled: self
+                .waiting_list_enabled
+                .map(|_| checked.waiting_list_enabled),
+            registration_fields: self
+                .registration_fields
+                .as_ref()
+                .map(|_| checked.registration_fields.clone()),
+            check_in_open_at: self
+                .check_in_open_at
+                .as_ref()
+                .map(|_| checked.check_in_open_at.clone()),
+            check_in_close_at: self
+                .check_in_close_at
+                .as_ref()
+                .map(|_| checked.check_in_close_at.clone()),
+        }
     }
 
     /// Applique la requête à la configuration existante.
