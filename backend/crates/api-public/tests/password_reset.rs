@@ -4,8 +4,9 @@ mod common;
 
 use actix_web::http::StatusCode;
 use api_public::config::AuthConfig;
-use api_public::mail::{MailConfig, Mailer, MemoryMailer, ResendMailer};
+use api_public::mail::{MailConfig, Mailer, MemoryMailer, NotificationMail, ResendMailer};
 use api_public::store::{AuthStore, MemoryStore};
+use api_public::store::{Category, Language};
 use common::{PUBLIC_URL, access, app_with_mailer, login, post, post_as};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -379,6 +380,11 @@ fn mail_config() -> MailConfig {
         password_reset_template: "password-reset".into(),
         verification_template: "email-address-confirmation".into(),
         welcome_template: "welcome-account".into(),
+        notification_templates: [
+            "notification-fr".into(),
+            "notification-en".into(),
+            "notification-es".into(),
+        ],
     }
 }
 
@@ -408,6 +414,43 @@ async fn resend_mailer_posts_the_message_to_resend() {
     );
     assert!(body.get("html").is_none());
     assert!(body.get("text").is_none());
+}
+
+#[tokio::test]
+async fn resend_notifications_use_the_template_of_the_language() {
+    for (language, template) in [
+        (Language::Fr, "notification-fr"),
+        (Language::En, "notification-en"),
+        (Language::Es, "notification-es"),
+    ] {
+        let (endpoint, server) = fake_resend(200).await;
+        let mailer = ResendMailer::with_endpoint(&mail_config(), &endpoint).unwrap();
+        mailer
+            .send_notification(
+                "alice@example.com",
+                &NotificationMail {
+                    language,
+                    category: Category::Teams,
+                    title: "Titre".into(),
+                    body: "Corps".into(),
+                    action_url: Some("https://x.test/tournaments/1".into()),
+                },
+            )
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["template"]["id"], template);
+        assert_eq!(body["subject"], "Titre");
+        assert_eq!(
+            body["template"]["variables"],
+            json!({
+                "TITLE": "Titre", "BODY": "Corps", "CATEGORY": "teams",
+                "LANGUAGE": language.as_str(),
+                "ACTION_URL": "https://x.test/tournaments/1", "HAS_ACTION": true,
+            })
+        );
+    }
 }
 
 #[tokio::test]
