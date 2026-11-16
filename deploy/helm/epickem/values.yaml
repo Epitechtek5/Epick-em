@@ -44,6 +44,10 @@ postgres:
 
 redis:
   image: redis:7-alpine
+  # Sous la limite mémoire du conteneur, pour laisser de la marge à la réécriture de l'AOF.
+  maxmemory: 192mb
+  storage: 1Gi
+  storageClass: ""
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }

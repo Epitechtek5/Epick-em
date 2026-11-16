@@ -30,12 +30,24 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Flux d'événements et tournois importés : persistés (AOF). Mémoire pleine : seules les clés
+    # à durée de vie (cache) sont évincées, jamais le flux d'événements.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - volatile-lru
     ports:
       - "${REDIS_PORT}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       retries: 30
+    volumes:
+      - redis-data:/data
 
   migrations:
     build: ./db
@@ -74,3 +86,4 @@ services:
 
 volumes:
   postgres-data:
+  redis-data:
