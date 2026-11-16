@@ -1074,3 +1074,52 @@ async fn a_generated_series_played_game_by_game_advances_its_winner() {
     assert!(members(&next).contains(&winner), "{next}");
     assert!(!members(&next).contains(&loser), "{next}");
 }
+
+/// Forfait : l'absent n'a ni statistique ni manche, il perd (`loss`, rang 2) ; son adversaire
+/// gagne la série 2-0 sans l'avoir jouée et passe au tour suivant, devant l'absent au classement.
+#[actix_web::test]
+async fn a_forfeit_sends_the_opponent_through() {
+    let (app, s) = setup(4).await;
+    let mut definition = step("single_elim", "duel", 4, 1);
+    definition["rules"] = json!({ "best_of": 3 });
+    let (status, body, run) = running(&app, &s, definition, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    generate(&app, &s, &run).await;
+    let semi = matches(&app, &s, &run)
+        .await
+        .into_iter()
+        .find(|m| m["round"] == 1)
+        .unwrap();
+    let (present, absent) = (members(&semi)[0].clone(), members(&semi)[1].clone());
+    let (status, outcome) = finish_match(&app, &s, &run, &semi, &present, Some((2, 0))).await;
+    assert_eq!(status, StatusCode::OK, "{outcome}");
+
+    let done = refreshed(&app, &s, &run, &id(&semi)).await;
+    let entry = |who: &str| {
+        done["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["participant_id"] == who)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(entry(&absent)["result"], "loss");
+    assert_eq!(entry(&absent)["games_won"], 0);
+    assert_eq!(entry(&present)["result"], "win");
+    let next = refreshed(&app, &s, &run, done["next_match_id"].as_str().unwrap()).await;
+    assert!(members(&next).contains(&present), "{next}");
+    assert!(!members(&next).contains(&absent), "{next}");
+    let (_, ranking) = get(&app, &format!("{}/ranking", run.base()), &s.admin).await;
+    // Classement en cours : le qualifié passe devant l'éliminé.
+    let rank_of = |who: &str| {
+        ranking[0]["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["participant_id"] == who)
+            .and_then(|p| p["rank"].as_i64())
+            .unwrap()
+    };
+    assert!(rank_of(&present) < rank_of(&absent), "{ranking}");
+}

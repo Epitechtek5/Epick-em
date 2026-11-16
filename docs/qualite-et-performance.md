@@ -28,6 +28,14 @@ HTTP (`backend/crates/api-public/tests/`).
 | Import ↔ saisie : un résultat importé avec ses seules statistiques reçoit les mêmes points, rangs et issues qu'une saisie, et la suite donne les mêmes totaux | `tests/matches.rs` (`imported_results_follow_the_same_rules_as_manual_ones`) |
 | Export puis réimport sans perte (JSON et CSV) ; fichiers invalides refusés avant toute écriture | `tests/steps.rs`, `tests/matches.rs` |
 | Tournois externes : correction de résultat détectée une seule fois, rejeu idempotent | crate `connectors` (`sync/tests.rs`, `tests/json_file.rs`) |
+| Élimination simple : tableau d'une puissance de deux sans exempt, exempts aux meilleures têtes de série sinon, têtes de série qui se rencontrent le plus tard possible ; parcours jusqu'au champion | crate `domain` (`bracket.rs`, `seeding.rs`), `tests/generation.rs` (`single_elimination_with_byes_plays_to_a_champion`) |
+| Double élimination : forme du tableau pour toute taille, perdants envoyés au tableau des perdants, grande finale et « reset » joué ou annulé | `bracket.rs`, `tests/generation.rs` (`double_elimination_sends_losers_down_and_plays_the_reset`, `the_reset_is_cancelled_when_the_winners_champion_wins_the_grand_final`) |
+| Suisse : groupes de score, revanches évitées, exempt au dernier qui n'en a pas eu pour un nombre impair, appariement impossible signalé ou revanche acceptée sur demande | `swiss.rs`, `tests/generation.rs` (`swiss_rounds_follow_the_standings_without_rematches`, `swiss_reports_impossible_pairings_and_accepts_rematches_on_request`) |
+| Têtes de série manuelles, aléatoires ou par classement ; tirage en serpent des groupes | `seeding.rs`, `tests/generation.rs` (`seeds_are_manual_random_or_ranking_based`, `a_manual_seed_order_places_the_bracket`) |
+| Départages ordonnés : points, confrontation directe, différence de manches, Buchholz, ordre d'inscription en dernier ; élimination classée par tour atteint | `standings.rs`, `standing.rs`, `tests/generation.rs` (`a_round_robin_pool_plays_everyone_once_and_head_to_head_breaks_ties`) |
+| Séries BO3/BO5 : majorité des manches, saisie directe (`games_won`) ou partie par partie, le vainqueur avance | `standings.rs`, `tests/generation.rs` (`series_need_a_decided_score_and_keep_rounds_apart_from_games`, `a_generated_series_played_game_by_game_advances_its_winner`), `tests/match_games.rs` |
+| Forfait : l'absent perd sans statistique ni manche, son adversaire avance | `matches.rs` (`settle`), `tests/generation.rs` (`a_forfeit_sends_the_opponent_through`) |
+| Génération idempotente, même sous appels concurrents ; export puis réimport d'un tableau généré | `tests/generation.rs` |
 
 ### Concurrence et idempotence (PostgreSQL réel)
 
@@ -42,12 +50,9 @@ HTTP (`backend/crates/api-public/tests/`).
 
 ### Non couvert, faute de fonctionnalité
 
-Le dépôt ne contient pas encore : génération automatique des tableaux (élimination simple ou
-double, exempts pour un nombre de participants qui n'est pas une puissance de deux), appariements
-suisses et évitement des revanches, têtes de série automatiques, critères de départage ordonnés
-appliqués au classement (le champ `tiebreak` est enregistré mais le classement départage par
-points puis ordre d'inscription), confirmation des résultats par les participants, litiges et
-forfaits. Les tests correspondants sont à écrire avec ces fonctionnalités (#157, #162).
+Les résultats sont saisis par un administrateur : la confirmation des résultats par les
+participants et les litiges n'existent pas encore dans le dépôt. Leurs tests sont à écrire avec
+ces fonctionnalités.
 
 ## Accessibilité
 
