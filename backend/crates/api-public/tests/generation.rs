@@ -772,6 +772,54 @@ async fn series_need_a_decided_score_and_keep_rounds_apart_from_games() {
             .unwrap()["games_won"],
         2
     );
+
+    // L'autre demi-finale ne donne que le score de la série : ni statistiques ni rang. Les rangs
+    // se déduisent des manches et le match se termine.
+    let other = all
+        .iter()
+        .filter(|m| m["round"] == 1)
+        .find(|m| m["id"] != semi["id"])
+        .unwrap()
+        .clone();
+    let (first, second) = (members(&other)[0].clone(), members(&other)[1].clone());
+    let match_path = format!("{}/matches/{}", run.base(), id(&other));
+    let (status, saved) = put(
+        &app,
+        &format!("{match_path}/results"),
+        &s.admin,
+        json!({ "results": [
+            { "participant_id": first, "stats": {}, "games_won": 1 },
+            { "participant_id": second, "stats": {}, "games_won": 2 },
+        ] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, out) = post(
+        &app,
+        &format!("{match_path}/status"),
+        &s.admin,
+        json!({ "status": "finished" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let done = refreshed(&app, &s, &run, &id(&other)).await;
+    let of = |who: &str| {
+        done["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["participant_id"] == who)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        (of(&second)["rank"].clone(), of(&second)["result"].clone()),
+        (json!(1), json!("win"))
+    );
+    assert_eq!(
+        (of(&first)["rank"].clone(), of(&first)["result"].clone()),
+        (json!(2), json!("loss"))
+    );
 }
 
 #[actix_web::test]

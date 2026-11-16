@@ -3,7 +3,8 @@
 //!
 //! Le même calcul sert au classement en direct, au classement définitif de la clôture et à la
 //! qualification, pour qu'ils ne divergent jamais. En élimination, l'ordre vient du tableau : le
-//! vainqueur de la dernière manche, son adversaire, puis le nombre de victoires.
+//! vainqueur de la dernière manche, son adversaire, puis le tour d'élimination (le plus tardif
+//! d'abord) et le nombre de victoires, avant les critères de départage.
 
 use crate::store::StepParticipant;
 use crate::store::{Bracket, Match, MatchParticipant, MatchResult, MatchStatus, Step, StepFormat};
@@ -97,21 +98,46 @@ pub(crate) fn rank_group(
 }
 
 /// Valeur d'ordre en élimination : le vainqueur de la dernière manche, puis son adversaire, puis
-/// le nombre de victoires.
+/// le tour où chacun a été éliminé (le plus tardif d'abord, les joueurs encore en lice avant
+/// tous les éliminés), puis le nombre de victoires. Deux joueurs éliminés au même tour avec
+/// autant de victoires restent à égalité : les critères de départage les séparent.
 fn elimination_keys(
     finished: &[&&Match],
     by_match: &HashMap<Uuid, Vec<&MatchParticipant>>,
     index: &HashMap<Uuid, usize>,
 ) -> HashMap<usize, f64> {
-    let mut keys: HashMap<usize, f64> = HashMap::new();
+    // Tours du tableau, du premier au dernier : le tableau des perdants après celui des
+    // vainqueurs, la grande finale en dernier.
+    let tour = |m: &Match| (bracket_rank(m.bracket), m.round.unwrap_or(0));
+    let mut tours: Vec<(u8, i32)> = finished.iter().map(|m| tour(m)).collect();
+    tours.sort_unstable();
+    tours.dedup();
+    let depth = |m: &Match| tours.iter().position(|t| *t == tour(m)).unwrap_or(0) as f64;
+    let alive = tours.len() as f64;
+
+    let mut wins: HashMap<usize, f64> = HashMap::new();
+    let mut eliminated: HashMap<usize, f64> = HashMap::new();
     for m in finished {
         for p in by_match.get(&m.id).into_iter().flatten() {
-            if p.result == Some(MatchResult::Win)
-                && let Some(i) = index.get(&p.participant_id)
-            {
-                *keys.entry(*i).or_default() += 1.0;
+            let Some(i) = index.get(&p.participant_id) else {
+                continue;
+            };
+            match p.result {
+                Some(MatchResult::Win) => *wins.entry(*i).or_default() += 1.0,
+                // Une défaite sans repêchage (pas de match suivant pour le perdant) élimine.
+                Some(MatchResult::Loss) if m.loser_next_match_id.is_none() => {
+                    let at = depth(m);
+                    let slot = eliminated.entry(*i).or_insert(at);
+                    *slot = slot.max(at);
+                }
+                _ => {}
             }
         }
+    }
+    let mut keys: HashMap<usize, f64> = HashMap::new();
+    for i in index.values() {
+        let round = eliminated.get(i).copied().unwrap_or(alive);
+        keys.insert(*i, round * 1_000.0 + wins.get(i).copied().unwrap_or(0.0));
     }
     let last = finished
         .iter()
@@ -120,9 +146,9 @@ fn elimination_keys(
         for p in by_match.get(&last.id).into_iter().flatten() {
             if let Some(i) = index.get(&p.participant_id) {
                 let bonus = if p.result == Some(MatchResult::Win) {
-                    1_000_000.0
+                    1_000_000_000.0
                 } else {
-                    100_000.0
+                    100_000_000.0
                 };
                 *keys.entry(*i).or_default() += bonus;
             }
@@ -238,6 +264,34 @@ mod tests {
         let members = [member(a, 3.0), member(b, 3.0)];
         let step = step(StepFormat::Pool, serde_json::json!([]));
         assert_eq!(run(&step, &members, &[]), vec![(a, false), (b, true)]);
+    }
+
+    #[test]
+    fn elimination_ranks_by_elimination_round_before_registration() {
+        // Double élimination : x (inscrit en premier) sort au 3e tour du tableau des perdants,
+        // y au 4e ; tous deux comptent deux victoires. y est devant x, même sans départage.
+        let [x, y, w, z, p, q] = [1, 2, 3, 4, 5, 6].map(Uuid::from_u128);
+        let members = [x, y, w, z, p, q].map(|id| member(id, 0.0));
+        let at = |winner, loser, bracket, round| {
+            let (mut m, parts) = finished(winner, loser);
+            m.bracket = Some(bracket);
+            m.round = Some(round);
+            (m, parts)
+        };
+        let games = [
+            at(x, p, Bracket::Losers, 1),
+            at(x, q, Bracket::Losers, 2),
+            at(y, p, Bracket::Losers, 2),
+            at(y, x, Bracket::Losers, 3),
+            at(w, y, Bracket::Losers, 4),
+            at(z, w, Bracket::GrandFinal, 1),
+        ];
+        let step = step(StepFormat::DoubleElim, serde_json::json!([]));
+        let ranked: Vec<Uuid> = run(&step, &members, &games)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(&ranked[..4], &[z, w, y, x]);
     }
 
     #[test]

@@ -648,11 +648,12 @@ async fn finish(
     current: &Match,
     members: &[MatchParticipant],
 ) -> Result<Match, ApiError> {
+    // Une série se décide aux manches : ses rangs en viennent, avant toute autre validation.
+    let members = series_members(step, current, members)?;
     let mut scores =
-        settle(members).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
-    apply_series(step, current, &mut scores)?;
+        settle(&members).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
     apply_step_scoring(step, &mut scores);
-    let (placements, cancel) = progression(state, step, current, members, &scores).await?;
+    let (placements, cancel) = progression(state, step, current, &members, &scores).await?;
 
     // Total de l'étape : les matchs déjà terminés plus celui-ci.
     let finished_ids: HashSet<Uuid> = state
@@ -695,11 +696,17 @@ async fn finish(
         .ok_or(ApiError::NotFound)
 }
 
-/// Série au meilleur de 3 ou 5 : le vainqueur est celui qui atteint la majorité des manches, qui
-/// remplace le classement déduit des points.
-fn apply_series(step: &Step, current: &Match, scores: &mut [MatchScore]) -> Result<(), ApiError> {
+/// Série au meilleur de 3 ou 5 : le vainqueur est celui qui atteint la majorité des manches.
+/// Les rangs et résultats en sont déduits (ils remplacent ceux déduits des points), si bien
+/// qu'une série saisie avec ses seuls `games_won`, sans statistiques ni rang, se termine.
+fn series_members(
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+) -> Result<Vec<MatchParticipant>, ApiError> {
+    let mut scores = members.to_vec();
     if current.best_of <= 1 || step.match_type != MatchType::Duel || scores.len() != 2 {
-        return Ok(());
+        return Ok(scores);
     }
     let invalid = |message: String| ApiError::Validation(vec![("results", message)]);
     let (Some(a), Some(b)) = (scores[0].games_won, scores[1].games_won) else {
@@ -724,7 +731,7 @@ fn apply_series(step: &Step, current: &Match, scores: &mut [MatchScore]) -> Resu
     scores[winner].result = Some(MatchResult::Win);
     scores[loser].rank = Some(2);
     scores[loser].result = Some(MatchResult::Loss);
-    Ok(())
+    Ok(scores)
 }
 
 /// Barème de l'étape : remplace les points issus des statistiques, sans les additionner (pas de
