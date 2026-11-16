@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import ArrowLeft01Icon from '@hugeicons/core-free-icons/ArrowLeft01Icon';
 import ArrowRight01Icon from '@hugeicons/core-free-icons/ArrowRight01Icon';
 import Calendar03Icon from '@hugeicons/core-free-icons/Calendar03Icon';
-import TrophyIcon from '@hugeicons/core-free-icons/TrophyIcon';
+import { AuthHeader } from '@/components/auth-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { ScreenState } from '@/components/ui/feedback';
@@ -47,54 +47,59 @@ export function PublicTournamentsScreen() {
         <Button
           variant="ghost"
           size="icon"
-          className="self-start rounded-full border border-border bg-card"
+          className="-ml-3 self-start"
           onPress={() => router.replace('/login')}
           accessibilityLabel={t('tournaments.public.backToLogin')}
         >
           <Icon icon={ArrowLeft01Icon} tone="foreground" />
         </Button>
-        <View className="gap-4 rounded-3xl border border-primary/20 bg-primary/10 p-5">
-          <View className="h-12 w-12 items-center justify-center rounded-2xl bg-primary">
-            <Icon icon={TrophyIcon} tone="primary-foreground" size={26} />
-          </View>
-          <View className="gap-1.5">
-            <Text className="text-3xl font-bold">
-              {t('tournaments.public.title')}
-            </Text>
-            <Text variant="muted">{t('tournaments.public.help')}</Text>
-          </View>
-        </View>
+        <AuthHeader
+          title={t('tournaments.public.title')}
+          description={t('tournaments.public.help')}
+        />
         {data.map((tournament) => (
-          <Card key={tournament.id} className="border-primary/15 py-0">
-            <CardContent className="gap-5 py-5">
-              <View className="gap-3">
+          <Card key={tournament.id}>
+            <CardContent className="gap-3 pt-5">
+              <View className="flex-row items-start justify-between gap-3">
+                <View className="flex-1 gap-1">
+                  <Text className="text-lg font-semibold">
+                    {tournament.name}
+                  </Text>
+                  <Text variant="muted">
+                    {t(
+                      `tournaments.participantType.${tournament.participant_type}`,
+                    )}
+                  </Text>
+                </View>
                 <StatusBadge
                   status={tournament.status}
                   label={t(`tournaments.status.${tournament.status}`)}
                 />
-                <Text className="text-xl font-semibold">{tournament.name}</Text>
-                <View className="flex-row items-center gap-2">
-                  <Icon icon={Calendar03Icon} size={18} />
-                  <Text variant="muted" className="text-sm">
-                    {formatTournamentDate(tournament.start_date, i18n.language)}
-                  </Text>
-                </View>
               </View>
-              <Button
-                className="w-full"
-                onPress={() =>
-                  router.push({
-                    pathname: '/public-tournaments/[tournamentId]',
-                    params: { tournamentId: tournament.id },
-                  })
-                }
-                accessibilityLabel={t('tournaments.public.viewDetails', {
-                  name: tournament.name,
-                })}
-              >
-                <Text>{t('tournaments.public.detailsAction')}</Text>
-                <Icon icon={ArrowRight01Icon} tone="primary-foreground" />
-              </Button>
+              <View className="flex-row items-center gap-2">
+                <Icon icon={Calendar03Icon} size={18} />
+                <Text variant="muted" className="flex-1">
+                  {formatTournamentDate(tournament.start_date, i18n.language)}
+                </Text>
+              </View>
+              <View className="flex-row justify-end">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onPress={() =>
+                    router.push({
+                      pathname: '/public-tournaments/[tournamentId]',
+                      params: { tournamentId: tournament.id },
+                    })
+                  }
+                  accessibilityLabel={t('tournaments.public.viewDetails', {
+                    name: tournament.name,
+                  })}
+                >
+                  <Text>{t('tournaments.public.detailsAction')}</Text>
+                  <Icon icon={ArrowRight01Icon} size={16} />
+                </Button>
+              </View>
             </CardContent>
           </Card>
         ))}
@@ -149,18 +154,22 @@ export function PublicTournamentDetailsScreen() {
         <Button
           variant="ghost"
           size="icon"
-          className="self-start rounded-full border border-border bg-card"
+          className="-ml-3 self-start"
           onPress={() => router.replace('/public-tournaments')}
           accessibilityLabel={t('common.back')}
         >
           <Icon icon={ArrowLeft01Icon} tone="foreground" />
         </Button>
-        <View className="gap-3 rounded-3xl border border-primary/20 bg-primary/10 p-5">
-          <StatusBadge
-            status={tournament.status}
-            label={t(`tournaments.status.${tournament.status}`)}
-          />
-          <Text className="text-2xl font-semibold">{tournament.name}</Text>
+        <View className="gap-2">
+          <View className="flex-row items-start justify-between gap-3">
+            <Text className="flex-1 text-2xl font-semibold">
+              {tournament.name}
+            </Text>
+            <StatusBadge
+              status={tournament.status}
+              label={t(`tournaments.status.${tournament.status}`)}
+            />
+          </View>
           {tournament.description ? (
             <Text variant="muted">{tournament.description}</Text>
           ) : null}
