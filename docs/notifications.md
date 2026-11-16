@@ -54,14 +54,16 @@ Module `notifications`. Un handler, une fois son opération réussie, appelle
    livraison est journalisée et n'annule jamais l'opération métier.
 2. Les destinataires sont résolus (`Audience`) : des comptes, les inscrits actifs d'un tournoi
    (joueurs, ou membres des équipes inscrites, hors `withdrawn` et `disqualified`) ou des
-   inscriptions précises.
-3. Pour chaque destinataire et chaque canal de l'événement, le moteur lit les réglages, ignore le
+   inscriptions précises. Un joueur inscrit en solo pour le compte d'une équipe est seul
+   destinataire : ses coéquipiers ne sont pas concernés.
+3. Pour chaque destinataire et chaque canal de l'événement, le moteur relit les réglages, ignore le
    canal si la catégorie y est désactivée, puis réserve la livraison `(clé, compte, canal)` dans
    `notification_log` : un événement émis deux fois ne prévient qu'une fois.
 4. Il rédige titre et corps dans la langue du compte à partir des textes `fr`/`en`/`es` du
    catalogue, puis envoie.
 5. Un envoi est tenté 3 fois (attente 0,5 s puis 1 s). En cas d'échec définitif, la réservation est
-   levée : ré-émettre l'événement relivre. Un jeton refusé (`DeviceNotRegistered`) est supprimé sans
+   levée : ré-émettre l'événement relivre. Les réglages sont relus avant chaque essai : un canal
+   coupé pendant l'envoi (ou ses reprises) n'est plus servi. Un jeton refusé (`DeviceNotRegistered`) est supprimé sans
    nouvel essai ; un refus définitif n'est pas repris.
 
 Conditions par canal : l'e-mail exige un `Mailer` configuré et une adresse **vérifiée** ; le push
@@ -79,7 +81,7 @@ moteur : ils ignorent les préférences et ne peuvent pas être désactivés.
 | `tournament.started` | tournaments | inscrits actifs | `POST /tournaments/{id}/status` → `ongoing` | `kind:<tournoi>` |
 | `tournament.finished` | tournaments | inscrits actifs | statut → `finished` | `kind:<tournoi>` |
 | `tournament.cancelled` | tournaments | inscrits actifs | statut → `cancelled` | `kind:<tournoi>` |
-| `tournament.disqualified` | tournaments | l'inscrit (ou son équipe) | `PATCH .../participants/{id}` → `disqualified` | `kind:<inscription>` |
+| `tournament.disqualified` | tournaments | l'inscrit (ou son équipe) | `PATCH .../participants/{id}` → `disqualified` depuis un autre statut | `kind:<inscription>:<disqualification>` |
 | `team.member_added` | teams | le membre ajouté | `POST /teams/{id}/members`, `POST /tournament-teams/{id}/members` | `kind:<équipe>:<compte>:<horodatage>` |
 | `team.member_removed` | teams | le membre retiré | `DELETE /teams/{id}/members/{user}`, `DELETE /tournament-teams/{id}/members/{user}` | idem |
 | `match.started` | matches | participants du match | statut du match → `ongoing` | `kind:<match>` |

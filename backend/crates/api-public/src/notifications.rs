@@ -379,15 +379,13 @@ impl Notifier {
         let Some(user) = self.store.find_user_by_id(user_id).await? else {
             return Ok(());
         };
-        let settings = self
-            .store
-            .user_settings(user_id)
-            .await?
-            .unwrap_or_else(UserSettings::defaults);
+        let settings = self.settings(user_id).await?;
         let (title, body) = localized(definition, settings.language, &event.payload);
         let path = definition.path.map(|path| render(path, &event.payload));
+        let category = definition.category;
         for &channel in definition.channels {
-            if !settings.allows(definition.category, channel) {
+            // Relues à chaque canal : l'envoi du précédent (et ses reprises) a pu durer.
+            if !self.allows(user_id, category, channel).await? {
                 continue;
             }
             match channel {
@@ -409,8 +407,10 @@ impl Notifier {
                             .as_ref()
                             .map(|path| format!("{}{path}", self.public_url.trim_end_matches('/'))),
                     };
-                    self.once(event, user_id, channel, || self.send_email(address, &mail))
-                        .await?;
+                    self.once(event, user_id, channel, || {
+                        self.send_email(user_id, category, address, &mail)
+                    })
+                    .await?;
                 }
                 Channel::Push => {
                     if !self.push.available() {
@@ -425,7 +425,7 @@ impl Notifier {
                     data.insert("path".into(), json!(path));
                     let data = Value::Object(data);
                     self.once(event, user_id, channel, || {
-                        self.send_push(user_id, &title, &body, &data)
+                        self.send_push(user_id, category, &title, &body, &data)
                     })
                     .await?;
                 }
@@ -462,8 +462,47 @@ impl Notifier {
         Ok(())
     }
 
-    async fn send_email(&self, to: &str, mail: &NotificationMail) -> bool {
+    async fn settings(&self, user_id: Uuid) -> Result<UserSettings, StoreError> {
+        Ok(self
+            .store
+            .user_settings(user_id)
+            .await?
+            .unwrap_or_else(UserSettings::defaults))
+    }
+
+    /// Préférences courantes du destinataire pour ce canal.
+    async fn allows(
+        &self,
+        user_id: Uuid,
+        category: Category,
+        channel: Channel,
+    ) -> Result<bool, StoreError> {
+        Ok(self.settings(user_id).await?.allows(category, channel))
+    }
+
+    /// Comme [`Self::allows`], relu avant chaque tentative d'envoi : un canal coupé pendant les
+    /// reprises n'est plus servi. Une erreur de lecture interrompt l'envoi.
+    async fn still_allowed(&self, user_id: Uuid, category: Category, channel: Channel) -> bool {
+        match self.allows(user_id, category, channel).await {
+            Ok(allowed) => allowed,
+            Err(err) => {
+                eprintln!("api-public : préférences de notification : {err}");
+                false
+            }
+        }
+    }
+
+    async fn send_email(
+        &self,
+        user_id: Uuid,
+        category: Category,
+        to: &str,
+        mail: &NotificationMail,
+    ) -> bool {
         for attempt in 1..=MAX_ATTEMPTS {
+            if !self.still_allowed(user_id, category, Channel::Email).await {
+                return false;
+            }
             match self.mailer.send_notification(to, mail).await {
                 Ok(()) => return true,
                 Err(err) => {
@@ -477,7 +516,14 @@ impl Notifier {
 
     /// `true` si au moins un appareil a reçu la notification. Les jetons que le service ne
     /// reconnaît plus sont supprimés.
-    async fn send_push(&self, user_id: Uuid, title: &str, body: &str, data: &Value) -> bool {
+    async fn send_push(
+        &self,
+        user_id: Uuid,
+        category: Category,
+        title: &str,
+        body: &str,
+        data: &Value,
+    ) -> bool {
         let tokens = match self.store.list_push_tokens(user_id).await {
             Ok(tokens) => tokens,
             Err(err) => {
@@ -488,6 +534,9 @@ impl Notifier {
         let mut delivered = false;
         for device in tokens {
             for attempt in 1..=MAX_ATTEMPTS {
+                if !self.still_allowed(user_id, category, Channel::Push).await {
+                    return delivered;
+                }
                 match self.push.send(&device.token, title, body, data).await {
                     Ok(()) => {
                         delivered = true;
@@ -562,8 +611,11 @@ impl Notifier {
         users: &mut Vec<Uuid>,
         participant: &TournamentParticipant,
     ) -> Result<(), StoreError> {
-        users.extend(participant.user_id);
-        if let Some(team_id) = participant.tournament_team_id {
+        // Un joueur inscrit en solo pour le compte d'une équipe est seul concerné : ses
+        // coéquipiers ne jouent pas ses matchs.
+        if let Some(user_id) = participant.user_id {
+            users.push(user_id);
+        } else if let Some(team_id) = participant.tournament_team_id {
             let members = self
                 .store
                 .list_tournament_team_members(team_id)
@@ -597,10 +649,16 @@ fn tournament_payload(tournament: &Tournament) -> Value {
     json!({"tournament_id": tournament.id, "tournament_name": tournament.name})
 }
 
-pub fn participant_disqualified(tournament: &Tournament, participant_id: Uuid) -> Event {
+/// `stamp` distingue deux disqualifications successives de la même inscription (après un
+/// rétablissement) ; les reprises d'une même disqualification gardent la même clé.
+pub fn participant_disqualified(
+    tournament: &Tournament,
+    participant_id: Uuid,
+    stamp: &str,
+) -> Event {
     Event {
         kind: "tournament.disqualified",
-        key: format!("tournament.disqualified:{participant_id}"),
+        key: format!("tournament.disqualified:{participant_id}:{stamp}"),
         audience: Audience::Participants(vec![participant_id]),
         payload: tournament_payload(tournament),
     }

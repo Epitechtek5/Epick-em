@@ -842,16 +842,22 @@ async fn update_participant(
         }
         require_actor(&state, &claims, &participant).await?;
     }
-    let participant = state
+    let (participant, previous) = state
         .store
         .set_participant_status(participant.id, status)
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
-    if status == ParticipantStatus::Disqualified {
+    // Seule une nouvelle disqualification avertit ; chacune a sa propre clé, de sorte qu'une
+    // disqualification après un rétablissement est notifiée à son tour.
+    if status == ParticipantStatus::Disqualified && previous != ParticipantStatus::Disqualified {
         crate::notifications::emit(
             &state,
-            crate::notifications::participant_disqualified(&tournament, participant.id),
+            crate::notifications::participant_disqualified(
+                &tournament,
+                participant.id,
+                &Uuid::new_v4().to_string(),
+            ),
         );
     }
     Ok(HttpResponse::Ok().json(participant))
@@ -948,7 +954,7 @@ async fn check_in(
             return Err(ApiError::InvalidTransition);
         }
     }
-    let participant = state
+    let (participant, _) = state
         .store
         .set_participant_status(participant.id, ParticipantStatus::CheckedIn)
         .await

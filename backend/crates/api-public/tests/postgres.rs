@@ -1270,12 +1270,13 @@ async fn participants_are_unique_and_capped_by_max_participants() {
     );
 
     // Un retrait libère la place sans effacer la ligne.
-    let withdrawn = store
+    let (withdrawn, previous) = store
         .set_participant_status(second.id, ParticipantStatus::Withdrawn)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(withdrawn.status, ParticipantStatus::Withdrawn);
+    assert_eq!(previous, second.status);
     store.add_participant(solo(carol)).await.unwrap().unwrap();
     let listed = store.list_participants(tournament.id, 10, 0).await.unwrap();
     assert_eq!(listed.len(), 3);
