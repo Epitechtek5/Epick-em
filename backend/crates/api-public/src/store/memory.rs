@@ -68,6 +68,8 @@ pub struct MemoryStore {
     state: Mutex<State>,
     /// Tournois importés, dans un cache en mémoire.
     imports: Imports,
+    /// Pronostics et Pick'em.
+    pub(super) pickem: super::pickem_memory::PickemMemory,
 }
 
 impl MemoryStore {
@@ -106,6 +108,10 @@ impl MemoryStore {
 impl AuthStore for MemoryStore {
     fn imports(&self) -> &Imports {
         &self.imports
+    }
+
+    fn pickem(&self) -> &dyn super::PickemStore {
+        self
     }
 
     async fn create_user_with_token(

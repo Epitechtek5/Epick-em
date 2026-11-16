@@ -32,3 +32,5 @@ databaseChangeLog:
       file: changelog/0015-email-verification.yaml
   - include:
       file: changelog/0017-external-sources.yaml
+  - include:
+      file: changelog/0019-predictions-pickem.yaml

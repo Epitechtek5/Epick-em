@@ -7,6 +7,9 @@ mod games;
 mod imported;
 mod matches;
 mod memory;
+mod pickem;
+mod pickem_memory;
+mod pickem_postgres;
 mod postgres;
 mod projection;
 mod stats;
@@ -21,6 +24,10 @@ pub use self::matches::{
     MatchScore, MatchStatus, MatchUpdate,
 };
 pub use self::memory::MemoryStore;
+pub use self::pickem::{
+    Answer, AnswerInput, LeaderboardEntry, PickOutcome, PickemStore, Prediction, PredictionInput,
+    Question, QuestionInput, QuestionKind, QuestionUpdate, Resolved,
+};
 pub use self::postgres::PgStore;
 pub use self::projection::{
     ProjectedEntry, ProjectedGroup, ProjectedMatch, ProjectedMember, ProjectedParticipant,
@@ -677,6 +684,9 @@ pub trait AuthStore: Send + Sync {
 
     /// Modèles des tournois importés, servis par les lectures à la place de la base.
     fn imports(&self) -> &Imports;
+
+    /// Pronostics et Pick'em des spectateurs.
+    fn pickem(&self) -> &dyn PickemStore;
 
     /// Reporte un tournoi importé dans le modèle local : statut, inscrits importés, étapes,
     /// groupes, matchs et résultats, rangés dans le cache ([`Imports`]) et jamais en base. Les

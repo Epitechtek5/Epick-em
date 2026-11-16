@@ -5,7 +5,8 @@
 //!
 //! Un tournoi importé est **géré par sa source** : le middleware [`protect_external`] refuse
 //! toute écriture sur lui (`409 externally_managed`) — réglages, inscriptions, équipes, étapes,
-//! matchs et import de fichier. Il se supprime par `DELETE /external-tournaments/{id}`.
+//! matchs et import de fichier. Il se supprime par `DELETE /external-tournaments/{id}`. Les
+//! pronostics et le Pick'em, données des spectateurs, restent permis.
 //!
 //! La synchronisation elle-même (planification, curseurs, reprise, événements de résultat) est
 //! dans la crate `connectors` ; api-internal la lance périodiquement.
@@ -801,7 +802,11 @@ pub async fn protect_external(
     next: Next<BoxBody>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
     let read = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    if read || !req.resource_map().has_resource(req.path()) {
+    // Pronostics et Pick'em sont des données des spectateurs, permises sur un tournoi importé.
+    if read
+        || !req.resource_map().has_resource(req.path())
+        || crate::predictions::spectator_owned(req.path())
+    {
         return next.call(req).await;
     }
     let Some(state) = req.app_data::<web::Data<AppState>>().cloned() else {
