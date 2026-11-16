@@ -14,6 +14,17 @@ use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
+async fn wait_for_verification_emails(mailer: &MemoryMailer, expected: usize) {
+    for _ in 0..100 {
+        if mailer.verification.lock().unwrap().len() >= expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    panic!("timed out waiting for {expected} verification email(s)");
+}
+
 #[actix_web::test]
 async fn account_emails_use_persisted_language_including_pending_addresses() {
     use api_public::store::{Language, SettingsUpdate};
@@ -277,7 +288,7 @@ async fn postgres_registration_resend_and_concurrent_confirmation() {
         post(&app, "/register", body.clone()).await.0,
         StatusCode::CREATED
     );
-    tokio::task::yield_now().await;
+    wait_for_verification_emails(&mailer, 1).await;
     let get_token = || {
         mailer
             .verification
@@ -308,7 +319,7 @@ async fn postgres_registration_resend_and_concurrent_confirmation() {
     assert_eq!(mailer.verification.lock().unwrap().len(), 1);
     sqlx::query("UPDATE email_verification_tokens SET created_at=created_at-interval '61 seconds' WHERE user_id=$1").bind(user.id).execute(&pool).await.unwrap();
     post(&app, "/resend-verification-email", resend.clone()).await;
-    tokio::task::yield_now().await;
+    wait_for_verification_emails(&mailer, 2).await;
     let second = get_token();
     assert_ne!(first, second);
     // Public resend returns before provider acknowledgement and token promotion.
