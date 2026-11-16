@@ -3,15 +3,18 @@ import { Link } from 'react-router'
 
 import { GameImage } from '@/components/games/GameImage'
 import { Icon } from '@/components/ui/icon'
-import { formatDateRange, formatDay } from '@/features/tournaments/format'
+import { formatDateRange, formatDay, teamFormatMessage } from '@/features/tournaments/format'
 import { participantTypeLabelKey } from '@/features/tournaments/labels'
 import { registrationWindow } from '@/features/tournaments/lifecycle'
-import type { Tournament } from '@/features/tournaments/types'
+import type { PublicTournament, Tournament } from '@/features/tournaments/types'
 import { useI18n } from '@/i18n/context'
 import { TournamentStatusBadge } from './TournamentStatusBadge'
 
 interface TournamentCardProps {
-  tournament: Tournament
+  // Tournoi du catalogue, ou tournoi public (pages sans connexion).
+  tournament: Tournament | PublicTournament
+  // Fiche ouverte par la carte ; la fiche authentifiée par défaut.
+  href?: string
   // Nom du jeu déjà résolu (« … » pendant le chargement) et première image du jeu.
   gameName: string
   gameImage?: string
@@ -19,9 +22,10 @@ interface TournamentCardProps {
 
 // Carte du catalogue : image du jeu en couverture, statut, nom (lien vers la fiche), jeu,
 // dates, format et capacité.
-export function TournamentCard({ tournament, gameName, gameImage }: TournamentCardProps) {
+export function TournamentCard({ tournament, gameName, gameImage, href }: TournamentCardProps) {
   const { t, lang } = useI18n()
   const team = tournament.participant_type === 'team'
+  const format = teamFormatMessage(tournament.team_min_starters, tournament.team_max_starters)
   const open = registrationWindow(tournament) === 'open'
 
   return (
@@ -40,7 +44,7 @@ export function TournamentCard({ tournament, gameName, gameImage }: TournamentCa
             <span className="truncate">{gameName}</span>
           </p>
           <h2 className="text-lg leading-snug font-semibold break-words">
-            <Link to={`/tournaments/${tournament.id}`} className="outline-none after:absolute after:inset-0 after:rounded-2xl">
+            <Link to={href ?? `/tournaments/${tournament.id}`} className="outline-none after:absolute after:inset-0 after:rounded-2xl">
               {tournament.name}
             </Link>
           </h2>
@@ -63,9 +67,7 @@ export function TournamentCard({ tournament, gameName, gameImage }: TournamentCa
               <span className="sr-only">{t('tournaments.participantTypeLabel')}</span>
             </dt>
             <dd>
-              {team
-                ? t('tournaments.formatTeam', { size: tournament.team_size ?? 0 })
-                : t(participantTypeLabelKey('solo'))}
+              {team && format ? t(format.key, format.params) : t(participantTypeLabelKey(tournament.participant_type))}
               {' · '}
               {t(team ? 'tournaments.capacityTeams' : 'tournaments.capacityPlayers', { count: tournament.max_participants })}
             </dd>

@@ -31,6 +31,7 @@ import { isUuid } from '@/features/teams/validation'
 import { getTournament } from '@/features/tournaments/api'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { useTournamentAccess } from '@/hooks/use-tournament-access'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -40,7 +41,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 export default function StepDetailsPage() {
   const { tournamentId = '', stepId = '' } = useParams()
   const { t } = useI18n()
-  const { isAdmin, refreshRole } = useAuth()
+  const { refreshRole } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(tournamentId) && isUuid(stepId)
@@ -60,6 +61,8 @@ export default function StepDetailsPage() {
   const [local, setLocal] = useState<{ base: typeof loaded; steps: Step[] } | null>(null)
   const steps = local && local.base === loaded ? local.steps : (loaded?.steps ?? [])
   const tournament = loaded?.tournament ?? null
+  // Organisateurs du tournoi (droits fournis par le serveur).
+  const isAdmin = useTournamentAccess(tournament).access.can_manage
   const step = steps.find((candidate) => candidate.id === stepId) ?? null
   const [version, setVersion] = useState(0)
   const [deleting, setDeleting] = useState(false)

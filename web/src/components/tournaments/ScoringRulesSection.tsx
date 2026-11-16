@@ -43,9 +43,11 @@ interface Feedback {
 // Barème du tournoi (GET /tournaments/{id}/scoring-rules), une règle par statistique. Les
 // administrateurs ajoutent, modifient et retirent des règles tant que le tournoi est en
 // brouillon ou en inscription ; seules les statistiques liées au jeu du tournoi sont proposées.
-export function ScoringRulesSection({ tournament }: { tournament: Tournament }) {
+export function ScoringRulesSection({ tournament, canManage }: { tournament: Tournament; canManage?: boolean }) {
   const { t } = useI18n()
-  const { isAdmin, refreshRole } = useAuth()
+  const { isAdmin: globalAdmin, refreshRole } = useAuth()
+  // Droits fournis par le serveur (organisateurs du tournoi) ; rôle global à défaut.
+  const isAdmin = canManage ?? globalAdmin
   const { state, reload } = useAsyncResource((signal) => listScoringRules(tournament.id, signal), [tournament.id])
   const statsState = useAsyncResource((signal) => listGameStats(tournament.game_id, signal), [tournament.game_id])
   const stats = statsState.state.status === 'success' ? statsState.state.data : []

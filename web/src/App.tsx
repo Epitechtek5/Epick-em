@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router'
 import { AdminRoute } from '@/components/auth/AdminRoute'
 import { GuestRoute } from '@/components/auth/GuestRoute'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
+import { TournamentManagerRoute } from '@/components/auth/TournamentManagerRoute'
 import { AppShell } from '@/components/layout/AppShell'
 import AccountPage from '@/pages/AccountPage'
 import EnrollEmailPage from '@/pages/EnrollEmailPage'
@@ -16,6 +17,8 @@ import LoginPage from '@/pages/LoginPage'
 import MatchDetailsPage from '@/pages/MatchDetailsPage'
 import MatchEditorPage from '@/pages/MatchEditorPage'
 import NotFoundPage from '@/pages/NotFoundPage'
+import PublicTournamentPage from '@/pages/PublicTournamentPage'
+import PublicTournamentsPage from '@/pages/PublicTournamentsPage'
 import RegisterPage from '@/pages/RegisterPage'
 import ResetPasswordPage from '@/pages/ResetPasswordPage'
 import StatEditorPage from '@/pages/StatEditorPage'
@@ -35,6 +38,7 @@ import TournamentTeamsPage from '@/pages/TournamentTeamsPage'
 import TournamentDetailsPage from '@/pages/TournamentDetailsPage'
 import TournamentEditorPage from '@/pages/TournamentEditorPage'
 import TournamentTransferPage from '@/pages/TournamentTransferPage'
+import TournamentTemplatesPage from '@/pages/TournamentTemplatesPage'
 import TournamentsPage from '@/pages/TournamentsPage'
 import VerifyEmailPage from '@/pages/VerifyEmailPage'
 
@@ -46,6 +50,9 @@ export default function App() {
         {/* Liens reçus par e-mail : accessibles connecté ou non (pas de GuestRoute). */}
         <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        {/* Pages publiques : lecture seule, sans connexion ; le serveur masque les tournois sur invitation. */}
+        <Route path="/public/tournaments" element={<PublicTournamentsPage />} />
+        <Route path="/public/tournaments/:id" element={<PublicTournamentPage />} />
         <Route element={<GuestRoute />}>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
@@ -66,6 +73,10 @@ export default function App() {
             <Route path="/teams/transfer" element={<TeamTransferPage />} />
             <Route path="/tournaments/new" element={<TournamentEditorPage />} />
             <Route path="/tournaments/transfer" element={<TournamentTransferPage />} />
+            <Route path="/tournament-templates" element={<TournamentTemplatesPage />} />
+          </Route>
+          {/* Gestion d'un tournoi : organisateurs du tournoi (droits fournis par le serveur). */}
+          <Route element={<TournamentManagerRoute />}>
             <Route path="/tournaments/:id/edit" element={<TournamentEditorPage />} />
             <Route path="/tournaments/:tournamentId/steps/new" element={<StepEditorPage />} />
             <Route path="/tournaments/:tournamentId/steps/:stepId/edit" element={<StepEditorPage />} />

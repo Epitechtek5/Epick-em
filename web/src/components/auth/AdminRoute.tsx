@@ -4,7 +4,7 @@ import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useI18n } from '@/i18n/context'
 import { useAuth } from '@/lib/auth/auth-context'
 
-function Forbidden() {
+export function Forbidden() {
   const { t } = useI18n()
   useDocumentTitle(t('admin.forbiddenTitle'))
   return (
