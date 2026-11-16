@@ -61,8 +61,10 @@ Contraintes :
 - **Connexion :** mot de passe ou Google, puis, si la double authentification est active, défi
   opaque de 5 minutes (`mfa_challenges`, 5 essais, consommé une fois) échangé contre les jetons
   par `POST /login/2fa`.
-- **Limitation :** 30 demandes Google par IP et 10 codes par compte par quart d'heure
-  (`auth_attempt_limits`).
+- **Limitation :** 30 demandes Google par client et par étape du flux (et par compte pour la
+  liaison) et 10 codes par compte par quart d'heure (`auth_attempt_limits`). Derrière le reverse
+  proxy, le client est lu dans `X-Forwarded-For`, seulement si la connexion vient d'un proxy de
+  confiance déclaré (`TRUSTED_PROXIES`).
 
 ## Conséquences
 

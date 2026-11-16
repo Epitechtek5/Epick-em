@@ -11,7 +11,7 @@
 //!   qu'un défi de courte durée : les jetons ne sont émis qu'après `/login/2fa`
 //!   ([`crate::security`]).
 
-use crate::config::{AuthConfig, SecurityConfig};
+use crate::config::{AuthConfig, IpNetwork, SecurityConfig};
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
 use crate::google::GoogleAuth;
@@ -74,6 +74,8 @@ pub struct AppState {
     pub(crate) google: Option<Arc<GoogleAuth>>,
     /// Clé de chiffrement des secrets TOTP, si configurée.
     pub(crate) totp_key: Option<TotpKey>,
+    /// Proxys de confiance : derrière eux, le client est lu dans `X-Forwarded-For`.
+    pub(crate) trusted_proxies: Arc<[IpNetwork]>,
 }
 
 impl AppState {
@@ -95,6 +97,7 @@ impl AppState {
             public_url: DEFAULT_PUBLIC_URL.into(),
             google: None,
             totp_key: None,
+            trusted_proxies: Arc::from([]),
         })
     }
 
@@ -133,7 +136,15 @@ impl AppState {
         let google = config.google.map(GoogleAuth::connect).transpose()?;
         Ok(self
             .with_google(google.map(Arc::new))
-            .with_totp_key(config.totp_key))
+            .with_totp_key(config.totp_key)
+            .with_trusted_proxies(config.trusted_proxies))
+    }
+
+    /// Proxys de confiance (le reverse proxy du déploiement) : derrière eux, l'adresse du client
+    /// est lue dans `X-Forwarded-For` pour les limites par client.
+    pub fn with_trusted_proxies(mut self, proxies: Vec<IpNetwork>) -> Self {
+        self.trusted_proxies = proxies.into();
+        self
     }
 
     /// Branche une connexion Google (un fournisseur simulé dans les tests).

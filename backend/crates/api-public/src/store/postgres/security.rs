@@ -296,16 +296,19 @@ impl SecurityStore for PgStore {
     async fn enable_totp(
         &self,
         user_id: Uuid,
+        ciphertext: &[u8],
         step: i64,
         recovery_hashes: &[String],
     ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
         let enabled = sqlx::query(
             "UPDATE user_totp SET enabled_at = now(), last_used_step = $2 \
-             WHERE user_id = $1 AND enabled_at IS NULL AND last_used_step < $2",
+             WHERE user_id = $1 AND enabled_at IS NULL AND last_used_step < $2 \
+               AND secret_ciphertext = $3",
         )
         .bind(user_id)
         .bind(step)
+        .bind(ciphertext)
         .execute(&mut *tx)
         .await?
         .rows_affected()
@@ -364,6 +367,7 @@ impl SecurityStore for PgStore {
             return Ok(false);
         }
         insert_recovery_codes(&mut tx, user_id, recovery_hashes).await?;
+        revoke_sessions(&mut tx, user_id).await?;
         tx.commit().await?;
         Ok(true)
     }

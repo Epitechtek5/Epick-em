@@ -222,12 +222,15 @@ impl SecurityStore for MemoryStore {
     async fn enable_totp(
         &self,
         user_id: Uuid,
+        ciphertext: &[u8],
         step: i64,
         recovery_hashes: &[String],
     ) -> Result<bool, StoreError> {
         let mut state = self.state();
         match state.totp.get_mut(&user_id) {
-            Some((_, enabled, last)) if !*enabled && *last < step => {
+            Some((secret, enabled, last))
+                if !*enabled && *last < step && secret.as_slice() == ciphertext =>
+            {
                 *enabled = true;
                 *last = step;
             }
@@ -277,6 +280,7 @@ impl SecurityStore for MemoryStore {
         for hash in recovery_hashes {
             state.recovery_codes.insert(hash.clone(), (user_id, false));
         }
+        state.revoke_sessions(user_id);
         Ok(true)
     }
 

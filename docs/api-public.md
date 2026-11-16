@@ -28,7 +28,7 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /2fa/setup` | JWT valide, **récent** | — | `200` `{ secret, otpauth_uri }` |
 | `POST /2fa/enable` | JWT valide, **récent** | `{ code }` | `200` `{ recovery_codes }` |
 | `POST /2fa/disable` | JWT valide, **récent** | `{ code }` | `204` |
-| `POST /2fa/recovery-codes` | JWT valide, **récent** | `{ code }` | `200` `{ recovery_codes }` |
+| `POST /2fa/recovery-codes` | JWT valide, **récent** | `{ code }` | `200` `{ recovery_codes }` ; les anciens codes ne valent plus rien et les jetons de rafraîchissement du compte sont révoqués |
 | `GET /users` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, username, role }]` |
 | `GET /user/{id}` | JWT valide | — | `200` `{ id, username, role }` |
 | `GET /me` | JWT valide | — | `200` `{ id, username, role, email }` (compte courant uniquement) |
@@ -140,7 +140,7 @@ Décisions : [ADR-011](adr/011-connexion-google-et-double-authentification.md).
 - **Authentification récente** (« récent » ci-dessus) : connexion de moins de 10 minutes (`auth_time`), sinon `403 reauthentication_required`. Si la double authentification est active, lier, délier, désactiver ou régénérer les codes exige aussi un code (`second_factor` ou `code`).
 - **Déliaison :** refusée (`409 last_login_method`) si le compte n'a pas de mot de passe choisi ; révoque les jetons de rafraîchissement.
 - **TOTP :** `/2fa/setup` renvoie un secret (base32) et une URI `otpauth://` à afficher en QR code ; la double authentification n'est active qu'après `/2fa/enable` avec un code valide, qui renvoie dix codes de récupération (affichés une seule fois, usage unique). `/2fa/disable` révoque les jetons de rafraîchissement.
-- **Limites :** défi de 5 minutes et 5 essais ; 10 codes par compte et 30 demandes Google par adresse IP par quart d'heure (`429 too_many_attempts`) ; un code TOTP ne sert qu'une fois.
+- **Limites :** défi de 5 minutes et 5 essais ; 10 codes par compte par quart d'heure ; 30 demandes Google par client et par étape (autorisation, retour, et pour la liaison d'un compte autorisation et liaison, aussi limitées par compte) par quart d'heure (`429 too_many_attempts`). Le client est l'adresse de la connexion, sauf derrière un proxy de confiance (`TRUSTED_PROXIES`, adresses ou réseaux CIDR) : c'est alors la première adresse non fiable de `X-Forwarded-For` en partant de la droite ; un code TOTP ne sert qu'une fois.
 
 ### Règles
 

@@ -2815,7 +2815,7 @@ async fn totp_steps_recovery_codes_and_challenges_are_single_use() {
     let hash = |s: &str| format!("{:0>64}", s);
 
     assert!(
-        !store.enable_totp(id, 10, &[]).await.unwrap(),
+        !store.enable_totp(id, b"chiffre-1", 10, &[]).await.unwrap(),
         "rien en attente"
     );
     assert!(store.stage_totp(id, b"chiffre-1").await.unwrap());
@@ -2827,7 +2827,19 @@ async fn totp_steps_recovery_codes_and_challenges_are_single_use() {
     assert_eq!(record.ciphertext, b"chiffre-2");
     assert!(!record.enabled);
     let codes = vec![hash(&format!("a{id}")), hash(&format!("b{id}"))];
-    assert!(store.enable_totp(id, 100, &codes).await.unwrap());
+    // Le code a confirmé « chiffre-1 », remplacé depuis par un nouvel enrôlement : refus.
+    assert!(
+        !store
+            .enable_totp(id, b"chiffre-1", 100, &codes)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .enable_totp(id, b"chiffre-2", 100, &codes)
+            .await
+            .unwrap()
+    );
     assert!(!store.stage_totp(id, b"x").await.unwrap(), "déjà active");
     let status = store.security_status(id).await.unwrap();
     assert!(status.totp_enabled);

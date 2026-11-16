@@ -35,6 +35,7 @@ use crate::store::{GOOGLE, OAuthPurpose, OAuthState, StoreError, Unlink, UserRec
 use crate::totp::{self, TotpKey};
 use actix_web::{HttpRequest, HttpResponse, get, post, web};
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use std::time::Duration;
 use utoipa::ToSchema;
 use utoipa_actix_web::service_config::ServiceConfig;
@@ -163,11 +164,51 @@ async fn limit(state: &AppState, key: &str, limit: u32) -> Result<(), ApiError> 
     }
 }
 
-async fn limit_peer(state: &AppState, http: &HttpRequest) -> Result<(), ApiError> {
-    let peer = http
-        .peer_addr()
-        .map_or_else(|| "inconnu".to_string(), |addr| addr.ip().to_string());
-    limit(state, &format!("oauth:{peer}"), OAUTH_ATTEMPTS).await
+/// Adresse du client : celle de la connexion, sauf si elle vient d'un proxy de confiance ; on
+/// remonte alors `X-Forwarded-For` de droite à gauche jusqu'à la première adresse qui n'est pas
+/// un proxy de confiance (les entrées plus à gauche, écrites par le client, ne sont pas crues).
+pub(crate) fn client_ip(state: &AppState, http: &HttpRequest) -> Option<IpAddr> {
+    let peer = http.peer_addr()?.ip();
+    let trusted = |ip: IpAddr| state.trusted_proxies.iter().any(|net| net.contains(ip));
+    if !trusted(peer) {
+        return Some(peer);
+    }
+    let mut client = peer;
+    for value in http.headers().get_all("x-forwarded-for").rev() {
+        let Ok(value) = value.to_str() else {
+            return Some(client);
+        };
+        for item in value.rsplit(',') {
+            match item.trim().parse::<IpAddr>() {
+                Ok(ip) if trusted(ip) => client = ip,
+                Ok(ip) => return Some(ip),
+                Err(_) => return Some(client),
+            }
+        }
+    }
+    Some(client)
+}
+
+/// Limite des échanges OAuth par client, une fenêtre par étape (`step`) du flux.
+async fn limit_peer(state: &AppState, http: &HttpRequest, step: &str) -> Result<(), ApiError> {
+    let peer = client_ip(state, http).map_or_else(|| "inconnu".to_string(), |ip| ip.to_string());
+    limit(state, &format!("oauth:{step}:{peer}"), OAUTH_ATTEMPTS).await
+}
+
+/// Limite de la liaison Google : par client et par compte, comme la connexion.
+async fn limit_link(
+    state: &AppState,
+    http: &HttpRequest,
+    user_id: Uuid,
+    step: &str,
+) -> Result<(), ApiError> {
+    limit_peer(state, http, &format!("link-{step}")).await?;
+    limit(
+        state,
+        &format!("oauth:link-{step}:{user_id}"),
+        OAUTH_ATTEMPTS,
+    )
+    .await
 }
 
 fn oidc_error(err: OidcError) -> ApiError {
@@ -295,7 +336,7 @@ async fn google_authorize(
     http: HttpRequest,
 ) -> Result<HttpResponse, ApiError> {
     google(&state)?;
-    limit_peer(&state, &http).await?;
+    limit_peer(&state, &http, "authorize").await?;
     let response = authorization(&state, OAuthPurpose::Login, None).await?;
     Ok(HttpResponse::Ok().json(response))
 }
@@ -325,7 +366,7 @@ async fn google_callback(
     request: web::Json<OAuthCallback>,
 ) -> Result<HttpResponse, ApiError> {
     google(&state)?;
-    limit_peer(&state, &http).await?;
+    limit_peer(&state, &http, "callback").await?;
     let identity = complete(
         &state,
         &request.code,
@@ -513,16 +554,19 @@ async fn account_security(
         (status = 200, description = "URL d'autorisation Google", body = AuthorizationResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
+        (status = 429, description = "Trop de tentatives", body = ErrorResponse),
         (status = 503, description = "Connexion Google non configurée", body = ErrorResponse),
     ),
 )]
 #[post("/account/google/authorize")]
 async fn link_authorize(
     state: web::Data<AppState>,
+    http: HttpRequest,
     claims: web::ReqData<Claims>,
 ) -> Result<HttpResponse, ApiError> {
     google(&state)?;
     require_recent(&claims)?;
+    limit_link(&state, &http, claims.sub, "authorize").await?;
     let response = authorization(&state, OAuthPurpose::Link, Some(claims.sub)).await?;
     Ok(HttpResponse::Ok().json(response))
 }
@@ -541,17 +585,21 @@ async fn link_authorize(
         (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 409, description = "Compte Google déjà lié", body = ErrorResponse),
         (status = 502, description = "Google injoignable", body = ErrorResponse),
+        (status = 429, description = "Trop de tentatives", body = ErrorResponse),
         (status = 503, description = "Connexion Google non configurée", body = ErrorResponse),
     ),
 )]
 #[post("/account/google/link")]
 async fn link_google(
     state: web::Data<AppState>,
+    http: HttpRequest,
     claims: web::ReqData<Claims>,
     request: web::Json<LinkRequest>,
 ) -> Result<HttpResponse, ApiError> {
     google(&state)?;
     require_recent(&claims)?;
+    // Avant tout échange avec Google : les codes refusés comptent aussi.
+    limit_link(&state, &http, claims.sub, "link").await?;
     confirm_second_factor(&state, claims.sub, request.second_factor.as_deref()).await?;
     let identity = complete(
         &state,
@@ -695,7 +743,7 @@ async fn enable_totp(
     let codes = totp::new_recovery_codes();
     if !state
         .store
-        .enable_totp(claims.sub, step, &hashes(&codes))
+        .enable_totp(claims.sub, &record.ciphertext, step, &hashes(&codes))
         .await
         .map_err(ApiError::internal)?
     {
@@ -741,7 +789,8 @@ async fn disable_totp(
     Ok(HttpResponse::NoContent().finish())
 }
 
-/// Remplace les codes de récupération (les anciens deviennent inutilisables).
+/// Remplace les codes de récupération (les anciens deviennent inutilisables) et révoque les
+/// jetons de rafraîchissement du compte : une session ouverte avec un ancien code ne survit pas.
 #[utoipa::path(
     post,
     path = "/2fa/recovery-codes",
@@ -795,6 +844,45 @@ async fn require_enabled(state: &AppState, user_id: Uuid) -> Result<(), ApiError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_client_is_read_behind_trusted_proxies_only() {
+        use crate::config::{AuthConfig, IpNetwork};
+        use actix_web::test::TestRequest;
+        let state = AppState::new(
+            std::sync::Arc::new(crate::store::MemoryStore::new()),
+            AuthConfig {
+                jwt_secret: "0123456789abcdef0123456789abcdef".into(),
+                access_token_ttl: Duration::from_secs(60),
+                refresh_token_ttl: Duration::from_secs(60),
+            },
+        )
+        .unwrap()
+        .with_trusted_proxies(vec![IpNetwork::parse("172.16.0.0/12").unwrap()]);
+        let ip = |peer: &str, forwarded: Option<&str>| {
+            let mut request = TestRequest::default().peer_addr(peer.parse().unwrap());
+            if let Some(value) = forwarded {
+                request = request.insert_header(("x-forwarded-for", value));
+            }
+            client_ip(&state, &request.to_http_request())
+                .unwrap()
+                .to_string()
+        };
+        // Connexion directe : l'en-tête, écrit par le client, est ignoré.
+        assert_eq!(ip("203.0.113.9:1", Some("198.51.100.1")), "203.0.113.9");
+        // Derrière nginx : l'adresse ajoutée par le proxy, pas celle que le client a inventée.
+        assert_eq!(
+            ip("172.18.0.3:1", Some("198.51.100.1, 203.0.113.9")),
+            "203.0.113.9"
+        );
+        assert_eq!(
+            ip("172.18.0.3:1", Some("203.0.113.9, 172.18.0.2")),
+            "203.0.113.9"
+        );
+        // Sans en-tête ou avec une valeur illisible : le proxy lui-même.
+        assert_eq!(ip("172.18.0.3:1", None), "172.18.0.3");
+        assert_eq!(ip("172.18.0.3:1", Some("pas-une-ip")), "172.18.0.3");
+    }
 
     #[test]
     fn usernames_derived_from_email_are_valid() {

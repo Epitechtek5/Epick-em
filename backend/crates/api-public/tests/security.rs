@@ -502,6 +502,28 @@ async fn oauth_states_are_single_use_and_bound_to_their_purpose() {
 }
 
 #[actix_web::test]
+async fn linking_google_is_rate_limited() {
+    let (app, _, _) = setup(ALL).await;
+    let mallory = logged_in_as(&app, "mallory", "secret123").await;
+    let mut limited = false;
+    for _ in 0..31 {
+        let (status, _) = post_as(
+            &app,
+            access(&mallory),
+            "/account/google/link",
+            json!({ "code": "refusé", "state": "inconnu" }),
+        )
+        .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    assert!(limited);
+}
+
+#[actix_web::test]
 async fn linking_never_steals_an_identity() {
     let (app, google, _) = setup(ALL).await;
     let (_, owner) = google_sign_in!(&app, google, who("g-owner", "owner@gmail.com"));
@@ -841,13 +863,7 @@ async fn disabling_and_regenerating_need_the_second_factor() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let fresh: Vec<String> = serde_json::from_value(fresh["recovery_codes"].clone()).unwrap();
-    // Les anciens codes ne valent plus rien.
-    let (status, _) = post_as(&app, token, "/2fa/disable", json!({ "code": recovery[3] })).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, _) = post_as(&app, token, "/2fa/disable", json!({ "code": fresh[0] })).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-    assert_eq!(security(&app, token).await["two_factor_enabled"], false);
-    // Désactiver révoque les sessions ; la connexion redevient directe.
+    // Régénérer les codes révoque les sessions : celle ouverte avec un ancien code ne survit pas.
     let (status, _) = post_as(
         &app,
         token,
@@ -856,6 +872,13 @@ async fn disabling_and_regenerating_need_the_second_factor() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Les anciens codes ne valent plus rien.
+    let (status, _) = post_as(&app, token, "/2fa/disable", json!({ "code": recovery[3] })).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = post_as(&app, token, "/2fa/disable", json!({ "code": fresh[0] })).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(security(&app, token).await["two_factor_enabled"], false);
+    // La connexion redevient directe.
     let (status, tokens) = login(&app, "jade", "secret123").await;
     assert_eq!(status, StatusCode::OK);
     assert!(tokens["access_token"].is_string());

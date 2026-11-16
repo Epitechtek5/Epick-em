@@ -140,10 +140,12 @@ pub trait SecurityStore: Send + Sync {
     async fn stage_totp(&self, user_id: Uuid, ciphertext: &[u8]) -> Result<bool, StoreError>;
 
     /// Active le secret en attente avec le pas `step` du code qui l'a confirmé, et enregistre
-    /// les codes de récupération ; `false` si rien n'est en attente.
+    /// les codes de récupération ; `false` si rien n'est en attente ou si le secret en attente
+    /// n'est plus `ciphertext`, celui que le code a confirmé (un nouvel enrôlement l'a remplacé).
     async fn enable_totp(
         &self,
         user_id: Uuid,
+        ciphertext: &[u8],
         step: i64,
         recovery_hashes: &[String],
     ) -> Result<bool, StoreError>;
@@ -158,8 +160,9 @@ pub trait SecurityStore: Send + Sync {
         code_hash: &str,
     ) -> Result<bool, StoreError>;
 
-    /// Remplace tous les codes de récupération ; `false` si la double authentification n'est
-    /// pas active.
+    /// Remplace tous les codes de récupération et révoque les jetons de rafraîchissement du
+    /// compte (une session ouverte avec un ancien code ne survit pas) ; `false` si la double
+    /// authentification n'est pas active.
     async fn replace_recovery_codes(
         &self,
         user_id: Uuid,

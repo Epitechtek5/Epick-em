@@ -2,6 +2,7 @@
 
 use crate::totp::TotpKey;
 use std::fmt;
+use std::net::IpAddr;
 use std::time::Duration;
 
 const DEFAULT_ACCESS_TOKEN_TTL_SECS: u64 = 15 * 60;
@@ -100,6 +101,53 @@ pub struct SecurityConfig {
     pub google: Option<GoogleConfig>,
     /// Clé de chiffrement des secrets TOTP (`TOTP_ENCRYPTION_KEY`, 64 caractères hexadécimaux).
     pub totp_key: Option<TotpKey>,
+    /// Proxys de confiance (`TRUSTED_PROXIES`, adresses ou réseaux CIDR séparés par des
+    /// virgules) : derrière eux, le client est lu dans `X-Forwarded-For`.
+    pub trusted_proxies: Vec<IpNetwork>,
+}
+
+/// Adresse IP ou réseau CIDR (`10.0.0.0/8`, `::1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IpNetwork {
+    address: IpAddr,
+    prefix: u8,
+}
+
+impl IpNetwork {
+    pub fn parse(value: &str) -> Option<Self> {
+        let (address, prefix) = match value.trim().split_once('/') {
+            Some((address, prefix)) => (address.parse().ok()?, Some(prefix.parse().ok()?)),
+            None => (value.trim().parse().ok()?, None),
+        };
+        let max = match address {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+        let prefix = prefix.unwrap_or(max);
+        (prefix <= max).then_some(IpNetwork { address, prefix })
+    }
+
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let ip = match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+            v4 => v4,
+        };
+        match (self.address, ip) {
+            (IpAddr::V4(net), IpAddr::V4(ip)) => {
+                let mask = u32::MAX
+                    .checked_shl(32 - u32::from(self.prefix))
+                    .unwrap_or(0);
+                u32::from(net) & mask == u32::from(ip) & mask
+            }
+            (IpAddr::V6(net), IpAddr::V6(ip)) => {
+                let mask = u128::MAX
+                    .checked_shl(128 - u32::from(self.prefix))
+                    .unwrap_or(0);
+                u128::from(net) & mask == u128::from(ip) & mask
+            }
+            _ => false,
+        }
+    }
 }
 
 impl SecurityConfig {
@@ -136,7 +184,20 @@ impl SecurityConfig {
                 Some(TotpKey::from_hex(&value).ok_or(ConfigError::Invalid("TOTP_ENCRYPTION_KEY"))?)
             }
         };
-        Ok(SecurityConfig { google, totp_key })
+        let trusted_proxies = match get("TRUSTED_PROXIES") {
+            None => Vec::new(),
+            Some(value) => value
+                .split(',')
+                .filter(|item| !item.trim().is_empty())
+                .map(IpNetwork::parse)
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ConfigError::Invalid("TRUSTED_PROXIES"))?,
+        };
+        Ok(SecurityConfig {
+            google,
+            totp_key,
+            trusted_proxies,
+        })
     }
 }
 
@@ -260,5 +321,29 @@ mod tests {
         assert!(!valid_redirect_uri("javascript:alert(1)"));
         assert!(!valid_redirect_uri("https://epickem.app/#frag"));
         assert!(!valid_redirect_uri("pas une url"));
+    }
+
+    #[test]
+    fn trusted_proxies_are_addresses_or_networks() {
+        let parse = |value: &str| {
+            SecurityConfig::from_lookup(|name| {
+                (name == "TRUSTED_PROXIES").then(|| value.to_string())
+            })
+        };
+        let config = parse("172.16.0.0/12, ::1").unwrap();
+        let [network, local] = config.trusted_proxies[..] else {
+            panic!("deux réseaux attendus");
+        };
+        assert!(network.contains("172.18.0.5".parse().unwrap()));
+        assert!(!network.contains("192.168.1.2".parse().unwrap()));
+        assert!(network.contains("::ffff:172.18.0.5".parse().unwrap()));
+        assert!(local.contains("::1".parse().unwrap()));
+        assert!(parse("").unwrap().trusted_proxies.is_empty());
+        for bad in ["nginx", "10.0.0.0/33", "10.0.0.0/x"] {
+            assert_eq!(
+                parse(bad).unwrap_err(),
+                ConfigError::Invalid("TRUSTED_PROXIES")
+            );
+        }
     }
 }
