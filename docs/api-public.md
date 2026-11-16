@@ -20,10 +20,14 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /reset-password` | aucune | `{ token, password }` | `204` |
 | `GET /users` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, username, role }]` |
 | `GET /user/{id}` | JWT valide | — | `200` `{ id, username, role }` |
-| `GET /me` | JWT valide | — | `200` `{ id, username, role, email }` (compte courant uniquement) |
-| `PATCH /user/{id}/update` | JWT valide, **administrateur** | `{ username?, password?, role?, email? }` | `200` `{ id, username, role }` |
+| `GET /me/settings` | JWT valide | — | `200` `{ language, theme, notifications }` (voir [notifications](notifications.md)) |
+| `PATCH /me/settings` | JWT valide | `{ language?, theme?, notifications? }` | `200` réglages complets |
+| `POST /me/push-tokens` | JWT valide | `{ token, platform }` | `201` `{ id, platform }` |
+| `DELETE /me/push-tokens` | JWT valide | `{ token }` | `204` |
+| `GET /me` | JWT valide | — | `200` `{ id, username, role, email, picture_url }` (compte courant uniquement) |
+| `PATCH /user/{id}/update` | JWT valide, **administrateur** | `{ username?, password?, role?, email?, picture_url? }` | `200` `{ id, username, role }` |
 | `DELETE /user/{id}/delete` | JWT valide, **administrateur** | — | `204` |
-| `PATCH /me/update` | JWT valide | `{ username?, password?, email? }` (`role` refusé) | `200` `{ id, username, role, email }` |
+| `PATCH /me/update` | JWT valide | `{ username?, password?, email?, picture_url? }` (`role` refusé ; `picture_url` vide = effacer) | `200` `{ id, username, role, email }` |
 | `DELETE /me/delete` | JWT valide | — | `204` |
 | `GET /games` | JWT valide | `?limit` (1 à 100, 50 par défaut), `?offset` | `200` `[{ id, name, description, images }]`, par ordre alphabétique |
 | `GET /games/{id}` | JWT valide | — | `200` `{ id, name, description, images }` |
@@ -50,7 +54,7 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `PATCH /teams/{id}` | JWT valide, **propriétaire** | `{ name?, tag?, picture_url? }` (chaîne vide : efface `tag` / `picture_url`) | `200` l'équipe |
 | `DELETE /teams/{id}` | JWT valide, **propriétaire** | — | `204` ; supprime les membres, garde les équipes de tournoi copiées |
 | `GET /teams/{id}/members` | JWT valide | — | `200` `[{ user_id, role, joined_at, left_at }]`, anciens membres compris |
-| `POST /teams/{id}/members` | JWT valide, **propriétaire** | `{ user_id, role }` (`member` ou `substitute`) | `201` le membre ; `409` s'il est déjà membre actif |
+| `POST /teams/{id}/members` | JWT valide, **administrateur** | `{ user_id, role }` (`member` ou `substitute`) | `201` le membre ; `409` s'il est déjà membre actif |
 | `PATCH /teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | `{ role }` (`member` ou `substitute`) | `200` le membre |
 | `DELETE /teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | — | `204` ; la ligne est gardée avec `left_at` |
 | `GET /tournaments/{tournament_id}/teams` | JWT valide | `?limit`, `?offset` | `200` `[{ id, tournament_id, team_id, name, tag, picture_url, owner_id, created_at }]` |
@@ -59,7 +63,7 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `PATCH /tournament-teams/{id}` | JWT valide, **propriétaire** | `{ name?, tag?, picture_url? }` | `200` l'équipe de tournoi |
 | `DELETE /tournament-teams/{id}` | JWT valide, **propriétaire** | — | `204` |
 | `GET /tournament-teams/{id}/members` | JWT valide | — | `200` `[{ user_id, role }]` |
-| `POST /tournament-teams/{id}/members` | JWT valide, **propriétaire** | `{ user_id, role }` (`member` ou `substitute`) | `201` le membre ; `409` s'il est déjà dans une équipe du tournoi |
+| `POST /tournament-teams/{id}/members` | JWT valide, **administrateur** | `{ user_id, role }` (`member` ou `substitute`) | `201` le membre ; `409` s'il est déjà dans une équipe du tournoi |
 | `PATCH /tournament-teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | `{ role }` | `200` le membre |
 | `DELETE /tournament-teams/{id}/members/{user_id}` | JWT valide, **propriétaire** | — | `204` |
 | `GET /tournaments/export` | JWT valide, **administrateur** | `?format=json` (défaut) ou `csv` | `200` fichier en pièce jointe |
@@ -216,10 +220,10 @@ Un moteur unique invite à une équipe globale (`team`), une équipe de tournoi 
 - **Cycle de vie :** `pending` → `accepted`, `declined`, `revoked` ou `expired`, vérifié côté serveur. Une invitation à un compte n'a qu'une réponse. Un lien reste `pending` jusqu'à `max_uses` acceptations (1 par défaut, 1000 au plus) ; passée l'échéance, la première lecture, réponse ou purge périodique (toutes les 5 minutes) l'enregistre `expired`. Une seule invitation `pending` existe par invité et ressource (index unique partiel).
 - **Droits :** le propriétaire invite dans son équipe (administrateur compris : il n'a pas de droit particulier sur elle), seul un administrateur invite à un tournoi (solo, `draft` ou `registration`). Le rôle attribué est `member` (par défaut) ou `substitute`, jamais `owner`. Seul l'invité répond ; seuls l'invitant et les administrateurs révoquent ; une invitation étrangère est un `404`, sans fuite.
 - **Liens :** jeton aléatoire de 256 bits, montré à la création seulement ; seule son empreinte SHA-256 est stockée. `GET /invitation-links/{token}` ne révèle que le type, le nom de la ressource, le nom de l'invitant, le rôle et l'échéance.
-- **Acceptation :** dans une seule transaction qui verrouille l'invitation (et le tournoi pour sa capacité), elle revalide le statut, l'échéance, l'existence et l'état de la ressource (équipe de tournoi : `draft` ou `registration` ; tournoi : `registration` et fenêtre d'inscription, capacité `max_participants`), les doublons, puis crée l'adhésion (`team_member`, `tournament_team_member`) ou l'inscription (`tournament_participant`). Deux acceptations simultanées d'un lien à usage unique n'admettent qu'un compte.
+- **Acceptation :** dans une seule transaction qui verrouille l'invitation (et le tournoi pour sa capacité), elle revalide le statut, l'échéance, les droits actuels de l'invitant, l'existence et l'état de la ressource (équipe de tournoi : `draft` ou `registration` ; tournoi : `registration` et fenêtre d'inscription), les doublons, puis crée l'adhésion (`team_member`, `tournament_team_member`) ou l'inscription (`tournament_participant`). Une invitation à un tournoi respecte `registration_policy`, `waiting_list_enabled` et `max_participants`. Deux acceptations simultanées d'un lien à usage unique n'admettent qu'un compte.
 - **Durées :** `INVITATION_DEFAULT_TTL_HOURS` (168) et `INVITATION_MAX_TTL_HOURS` (720) ; `expires_in_hours` les respecte.
-- **Notifications :** chaque événement (création, acceptation, refus, révocation, expiration) est publié, après validation de la transaction et en tâche de fond, vers l'`InvitationNotifier` de l'`AppState` (`with_invitation_notifier`). Son échec est journalisé et n'affecte jamais l'invitation. Le moteur de notifications (#141) s'y branche ; par défaut les événements sont ignorés.
-- **Routes d'administration existantes :** `POST /teams/{id}/members` et `POST /tournament-teams/{id}/members` restent inchangées (ajout direct par le propriétaire).
+- **Notifications :** chaque événement (création, acceptation, refus, révocation, expiration) est publié, après validation de la transaction et en tâche de fond, vers l'`InvitationNotifier` de l'`AppState`. Au démarrage, l'adaptateur `EngineInvitationNotifier` le relie au moteur de notifications (e-mail Resend et push, selon les préférences). Son échec est journalisé et n'affecte jamais l'invitation.
+- **Ajout direct :** `POST /teams/{id}/members` et `POST /tournament-teams/{id}/members` sont réservées aux administrateurs. Les propriétaires ordinaires passent par une invitation, afin que le destinataire puisse accepter ou refuser.
 
 ### Cache des exports
 

@@ -690,6 +690,133 @@ async fn tournament_invitations_register_solo_players_within_the_rules() {
 }
 
 #[actix_web::test]
+async fn tournament_invitation_rechecks_the_inviters_current_role() {
+    let (app, s) = setup().await;
+    let tournament = open_tournament(&app, &s, 4, "registration").await;
+    let (_, invitation) = invite(
+        &app,
+        &s.admin,
+        json!({ "type": "tournament", "resource_id": tournament, "recipient_id": s.bob.id }),
+    )
+    .await;
+
+    s.store.set_role("root", Role::User);
+    let (status, error) = post(
+        &app,
+        &format!("/invitations/{}/accept", id(&invitation)),
+        &s.bob.token,
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        (status, error_code(&error)),
+        (StatusCode::CONFLICT, "invitation_unavailable")
+    );
+}
+
+#[actix_web::test]
+async fn tournament_invitations_apply_approval_and_waiting_list_policies() {
+    let (app, s) = setup().await;
+
+    let approval = open_tournament(&app, &s, 1, "draft").await;
+    let (status, body) = send(
+        &app,
+        TestRequest::patch(),
+        &format!("/tournaments/{approval}"),
+        &s.admin,
+        Some(json!({ "registration_policy": "approval_required" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = post(
+        &app,
+        &format!("/tournaments/{approval}/status"),
+        &s.admin,
+        json!({ "status": "registration" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, invitation) = invite(
+        &app,
+        &s.admin,
+        json!({ "type": "tournament", "resource_id": approval, "recipient_id": s.bob.id }),
+    )
+    .await;
+    assert_eq!(
+        post(
+            &app,
+            &format!("/invitations/{}/accept", id(&invitation)),
+            &s.bob.token,
+            json!({}),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, participants) = get(
+        &app,
+        &format!("/tournaments/{approval}/participants"),
+        &s.admin,
+    )
+    .await;
+    assert_eq!(participants[0]["status"], "pending");
+
+    let waiting = open_tournament(&app, &s, 1, "draft").await;
+    let (status, body) = send(
+        &app,
+        TestRequest::patch(),
+        &format!("/tournaments/{waiting}"),
+        &s.admin,
+        Some(json!({ "waiting_list_enabled": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        post(
+            &app,
+            &format!("/tournaments/{waiting}/status"),
+            &s.admin,
+            json!({ "status": "registration" }),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    for account in [&s.bob, &s.carol] {
+        let (_, invitation) = invite(
+            &app,
+            &s.admin,
+            json!({ "type": "tournament", "resource_id": waiting, "recipient_id": account.id }),
+        )
+        .await;
+        assert_eq!(
+            post(
+                &app,
+                &format!("/invitations/{}/accept", id(&invitation)),
+                &account.token,
+                json!({}),
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+    }
+    let (_, participants) = get(
+        &app,
+        &format!("/tournaments/{waiting}/participants"),
+        &s.admin,
+    )
+    .await;
+    let statuses: Vec<_> = participants
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|participant| participant["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["registered", "waitlisted"]);
+}
+
+#[actix_web::test]
 async fn tournament_team_invitations_add_members_with_the_chosen_role() {
     let (app, s) = setup().await;
     let tournament = open_tournament(&app, &s, 8, "registration").await;

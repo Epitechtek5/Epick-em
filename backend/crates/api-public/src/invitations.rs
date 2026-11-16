@@ -12,6 +12,7 @@
 
 use crate::auth::{AppState, Claims, hash_token, new_token};
 use crate::error::{ApiError, ErrorResponse};
+use crate::notifications::{Audience, Event, Notifier};
 use crate::store::{
     Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
     InvitationInput, InvitationStatus, InvitationType, ParticipantType, StoreError, TeamRole,
@@ -77,6 +78,62 @@ pub struct NoopInvitationNotifier;
 #[async_trait]
 impl InvitationNotifier for NoopInvitationNotifier {
     async fn notify(&self, _: InvitationNotification) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Adapte les événements d'invitation au moteur de notifications de production.
+pub struct EngineInvitationNotifier {
+    notifier: Notifier,
+}
+
+impl EngineInvitationNotifier {
+    pub fn from_state(state: &AppState) -> Self {
+        Self {
+            notifier: Notifier::from_state(state),
+        }
+    }
+}
+
+#[async_trait]
+impl InvitationNotifier for EngineInvitationNotifier {
+    async fn notify(&self, notification: InvitationNotification) -> Result<(), String> {
+        let invitation = &notification.invitation;
+        let (kind, recipients) = match notification.kind {
+            InvitationEventKind::Created => (
+                "invitation.created",
+                invitation.recipient_id.into_iter().collect(),
+            ),
+            InvitationEventKind::Accepted => ("invitation.accepted", vec![invitation.inviter_id]),
+            InvitationEventKind::Declined => ("invitation.declined", vec![invitation.inviter_id]),
+            InvitationEventKind::Revoked => (
+                "invitation.revoked",
+                invitation.recipient_id.into_iter().collect(),
+            ),
+            InvitationEventKind::Expired => {
+                let mut recipients = vec![invitation.inviter_id];
+                recipients.extend(invitation.recipient_id);
+                ("invitation.expired", recipients)
+            }
+        };
+        if recipients.is_empty() {
+            return Ok(());
+        }
+        let actor = notification
+            .actor_id
+            .map_or_else(|| "system".to_string(), |id| id.to_string());
+        self.notifier
+            .deliver(Event {
+                kind,
+                key: format!("{kind}:{}:{actor}", invitation.id),
+                audience: Audience::Users(recipients),
+                payload: serde_json::json!({
+                    "invitation_id": invitation.id,
+                    "resource_id": invitation.resource_id,
+                    "invitation_type": invitation.kind.as_str(),
+                }),
+            })
+            .await;
         Ok(())
     }
 }
