@@ -2,9 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import ArrowLeft01Icon from '@hugeicons/core-free-icons/ArrowLeft01Icon';
+import ArrowRight01Icon from '@hugeicons/core-free-icons/ArrowRight01Icon';
+import Calendar03Icon from '@hugeicons/core-free-icons/Calendar03Icon';
+import TrophyIcon from '@hugeicons/core-free-icons/TrophyIcon';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { ScreenState } from '@/components/ui/feedback';
+import { Icon } from '@/components/ui/icon';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { Text } from '@/components/ui/text';
 import {
   getPublicPlayerRanking,
@@ -36,37 +42,49 @@ export function PublicTournamentsScreen() {
     <SafeAreaView className="flex-1 bg-background" edges={['top', 'bottom']}>
       <ScrollView
         className="flex-1"
-        contentContainerClassName="gap-4 px-5 pb-8"
+        contentContainerClassName="gap-4 px-5 pb-8 pt-2"
       >
         <Button
           variant="ghost"
-          size="sm"
-          className="-ml-3 self-start"
+          size="icon"
+          className="self-start rounded-full border border-border bg-card"
           onPress={() => router.replace('/login')}
           accessibilityLabel={t('tournaments.public.backToLogin')}
         >
-          <Text>{t('tournaments.public.backToLogin')}</Text>
+          <Icon icon={ArrowLeft01Icon} tone="foreground" />
         </Button>
-        <View className="gap-1">
-          <Text className="text-2xl font-semibold">
-            {t('tournaments.public.title')}
-          </Text>
-          <Text variant="muted">{t('tournaments.public.help')}</Text>
+        <View className="gap-4 rounded-3xl border border-primary/20 bg-primary/10 p-5">
+          <View className="h-12 w-12 items-center justify-center rounded-2xl bg-primary">
+            <Icon icon={TrophyIcon} tone="primary-foreground" size={26} />
+          </View>
+          <View className="gap-1.5">
+            <Text className="text-3xl font-bold">
+              {t('tournaments.public.title')}
+            </Text>
+            <Text variant="muted">{t('tournaments.public.help')}</Text>
+          </View>
         </View>
         {data.map((tournament) => (
-          <Card key={tournament.id}>
-            <CardContent className="gap-3 pt-5">
-              <View className="gap-1">
-                <Text className="text-lg font-semibold">{tournament.name}</Text>
-                <Text variant="muted">
-                  {formatTournamentDate(tournament.start_date, i18n.language)}
-                </Text>
+          <Card key={tournament.id} className="border-primary/15 py-0">
+            <CardContent className="gap-5 py-5">
+              <View className="gap-3">
+                <StatusBadge
+                  status={tournament.status}
+                  label={t(`tournaments.status.${tournament.status}`)}
+                />
+                <Text className="text-xl font-semibold">{tournament.name}</Text>
+                <View className="flex-row items-center gap-2">
+                  <Icon icon={Calendar03Icon} size={18} />
+                  <Text variant="muted" className="text-sm">
+                    {formatTournamentDate(tournament.start_date, i18n.language)}
+                  </Text>
+                </View>
               </View>
               <Button
-                variant="outline"
+                className="w-full"
                 onPress={() =>
                   router.push({
-                    pathname: '/tournaments/[tournamentId]',
+                    pathname: '/public-tournaments/[tournamentId]',
                     params: { tournamentId: tournament.id },
                   })
                 }
@@ -75,6 +93,7 @@ export function PublicTournamentsScreen() {
                 })}
               >
                 <Text>{t('tournaments.public.detailsAction')}</Text>
+                <Icon icon={ArrowRight01Icon} tone="primary-foreground" />
               </Button>
             </CardContent>
           </Card>
@@ -125,17 +144,22 @@ export function PublicTournamentDetailsScreen() {
     <SafeAreaView className="flex-1 bg-background" edges={['top', 'bottom']}>
       <ScrollView
         className="flex-1"
-        contentContainerClassName="gap-4 px-5 pb-8"
+        contentContainerClassName="gap-4 px-5 pb-8 pt-2"
       >
         <Button
           variant="ghost"
-          size="sm"
-          className="-ml-3 self-start"
-          onPress={() => router.replace('/tournaments')}
+          size="icon"
+          className="self-start rounded-full border border-border bg-card"
+          onPress={() => router.replace('/public-tournaments')}
+          accessibilityLabel={t('common.back')}
         >
-          <Text>{t('common.back')}</Text>
+          <Icon icon={ArrowLeft01Icon} tone="foreground" />
         </Button>
-        <View className="gap-1">
+        <View className="gap-3 rounded-3xl border border-primary/20 bg-primary/10 p-5">
+          <StatusBadge
+            status={tournament.status}
+            label={t(`tournaments.status.${tournament.status}`)}
+          />
           <Text className="text-2xl font-semibold">{tournament.name}</Text>
           {tournament.description ? (
             <Text variant="muted">{tournament.description}</Text>

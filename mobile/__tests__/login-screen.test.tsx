@@ -34,7 +34,7 @@ it('validates missing credentials without making a login request', async () => {
 it('opens the unauthenticated public tournament catalog', async () => {
   await render(<LoginScreen />);
   await fireEvent.press(screen.getByLabelText('Browse public tournaments'));
-  expect(router.push).toHaveBeenCalledWith('/tournaments');
+  expect(router.push).toHaveBeenCalledWith('/public-tournaments');
 });
 it('submits credentials and displays invalid credentials without exposing secrets', async () => {
   signIn.mockRejectedValue(new ApiError(401, 'secret'));

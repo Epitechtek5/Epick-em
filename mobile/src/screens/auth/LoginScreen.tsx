@@ -133,7 +133,7 @@ export default function LoginScreen() {
 
         <Button
           variant="outline"
-          onPress={() => router.push('/tournaments')}
+          onPress={() => router.push('/public-tournaments')}
           accessibilityLabel={t('tournaments.public.browse')}
         >
           <Text>{t('tournaments.public.browse')}</Text>

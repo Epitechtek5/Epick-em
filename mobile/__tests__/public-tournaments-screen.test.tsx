@@ -56,7 +56,7 @@ it('navigates from the public catalog to details and back to login', async () =>
     await screen.findByLabelText('View Demo public tournament'),
   );
   expect(router.push).toHaveBeenCalledWith({
-    pathname: '/tournaments/[tournamentId]',
+    pathname: '/public-tournaments/[tournamentId]',
     params: { tournamentId: '11111111-1111-4111-8111-111111111111' },
   });
 
