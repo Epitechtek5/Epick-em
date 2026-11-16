@@ -4,3 +4,6 @@ backend/crates/api-public/tests/export_cache.rs:generic-api-key:35
 
 # False positive: synthetic reset token used by a frontend test in this historical commit.
 39519dcea9da752ac93546a1caca5d751eb13dfb:web/src/pages/ResetPasswordPage.test.tsx:generic-api-key:13
+
+# Vecteur de test de la RFC 6238 (secret « 12345678901234567890 » en base32), pas un secret.
+221f69dbdb7105eb087e5eee87f9c4543c9fea04:backend/crates/api-public/src/totp.rs:generic-api-key:258
