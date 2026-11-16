@@ -19,6 +19,11 @@ pub fn with_test_mailer(state: AppState) -> AppState {
     state.with_mailer(MAILBOX.with_borrow(Arc::clone), PUBLIC_URL)
 }
 
+/// Remplace la boîte aux lettres partagée de ce thread.
+pub fn set_test_mailbox(mailer: Arc<MemoryMailer>) {
+    MAILBOX.set(mailer);
+}
+
 pub const PUBLIC_URL: &str = "https://epickem.test";
 pub const SECRET: &str = "0123456789abcdef0123456789abcdef";
 

@@ -17,6 +17,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+mod security;
+
 struct RefreshToken {
     user_id: Uuid,
     expires_at: Instant,
@@ -61,6 +63,18 @@ struct State {
     verification_limits: HashMap<String, (Instant, u32)>,
     verification: HashMap<String, (Uuid, String, Instant, VerificationStatus)>,
     reset_tokens: HashMap<String, ResetToken>,
+    /// Liaisons `(compte, fournisseur, sub)`.
+    identities: Vec<(Uuid, String, String)>,
+    oauth_states: HashMap<String, (super::OAuthState, Instant)>,
+    /// Secret chiffré, actif, dernier pas consommé.
+    totp: HashMap<Uuid, (Vec<u8>, bool, i64)>,
+    /// Empreinte -> (compte, utilisé).
+    recovery_codes: HashMap<String, (Uuid, bool)>,
+    /// Empreinte -> (compte, tentatives, expiration, consommé).
+    mfa_challenges: HashMap<String, (Uuid, u32, Instant, bool)>,
+    attempt_limits: HashMap<String, (Instant, u32)>,
+    /// Comptes sans mot de passe choisi (inscription Google).
+    passwordless: HashSet<Uuid>,
 }
 
 #[derive(Default)]
@@ -393,6 +407,7 @@ impl AuthStore for MemoryStore {
             }
         }
         if password_changed {
+            state.passwordless.remove(&id);
             for token in state.tokens.values_mut() {
                 if token.user_id == id {
                     token.revoked = true;
@@ -408,6 +423,7 @@ impl AuthStore for MemoryStore {
         state.users.retain(|user| user.id != id);
         state.tokens.retain(|_, token| token.user_id != id);
         state.reset_tokens.retain(|_, token| token.user_id != id);
+        state.forget_security(id);
         Ok(state.users.len() != before)
     }
 
@@ -2053,6 +2069,7 @@ impl AuthStore for MemoryStore {
         if let Some(user) = state.users.iter_mut().find(|user| user.id == user_id) {
             user.password_hash = password_hash.to_string();
         }
+        state.passwordless.remove(&user_id);
         for token in state.tokens.values_mut() {
             if token.user_id == user_id {
                 token.revoked = true;

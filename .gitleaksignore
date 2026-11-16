@@ -1,3 +1,11 @@
 # Synthetic JWT signing key in the export-cache integration test (not a credential).
 # Sans hash de commit pour rester valable après un rebase.
 backend/crates/api-public/tests/export_cache.rs:generic-api-key:35
+
+# False positive: synthetic reset token used by a frontend test in this historical commit.
+39519dcea9da752ac93546a1caca5d751eb13dfb:web/src/pages/ResetPasswordPage.test.tsx:generic-api-key:13
+
+# Vecteur de test de la RFC 6238 (secret « 12345678901234567890 » en base32), pas un secret.
+221f69dbdb7105eb087e5eee87f9c4543c9fea04:backend/crates/api-public/src/totp.rs:generic-api-key:258
+# Clé JWT factice d'un test unitaire (remplacée depuis par "s".repeat(32)), pas un secret.
+a59ff1e56a2dab322af8330a4a8c9ad1847323c4:backend/crates/api-public/src/security.rs:generic-api-key:855

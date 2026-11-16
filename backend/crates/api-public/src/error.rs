@@ -68,6 +68,30 @@ pub enum ApiError {
     InvalidResetToken,
     EmailUnverified,
     VerificationLimited,
+    /// Action sensible : l'authentification date de plus de dix minutes.
+    ReauthenticationRequired,
+    /// Code TOTP ou de récupération refusé.
+    InvalidSecondFactor,
+    /// Trop de tentatives (connexion Google, codes de double authentification).
+    TooManyAttempts,
+    /// Connexion Google ou double authentification non configurée sur ce serveur.
+    NotConfigured,
+    /// Le fournisseur d'identité est injoignable ou a refusé l'échange.
+    ProviderUnavailable,
+    /// `state` OAuth inconnu, expiré, déjà utilisé ou d'un autre usage.
+    InvalidOAuthState,
+    /// Un compte utilise déjà l'adresse du compte Google : se connecter puis lier Google.
+    AccountExists,
+    /// Le compte Google n'a pas d'adresse e-mail vérifiée.
+    ProviderEmailUnverified,
+    /// Le compte Google est lié à un autre compte, ou ce compte est déjà lié à Google.
+    IdentityTaken,
+    /// Refus de retirer la dernière méthode de connexion du compte.
+    LastLoginMethod,
+    TwoFactorAlreadyEnabled,
+    TwoFactorNotEnabled,
+    /// Aucun enrôlement TOTP en attente de confirmation.
+    TwoFactorNotPending,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -190,6 +214,71 @@ impl ApiError {
                 StatusCode::BAD_REQUEST,
                 "invalid_reset_token",
                 "Lien de réinitialisation invalide ou expiré",
+            ),
+            ApiError::ReauthenticationRequired => (
+                StatusCode::FORBIDDEN,
+                "reauthentication_required",
+                "Reconnectez-vous pour effectuer cette action",
+            ),
+            ApiError::InvalidSecondFactor => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_second_factor",
+                "Code de vérification invalide",
+            ),
+            ApiError::TooManyAttempts => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_attempts",
+                "Trop de tentatives, réessayez plus tard",
+            ),
+            ApiError::NotConfigured => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "not_configured",
+                "Fonctionnalité non configurée sur ce serveur",
+            ),
+            ApiError::ProviderUnavailable => (
+                StatusCode::BAD_GATEWAY,
+                "provider_unavailable",
+                "Le fournisseur d'identité n'a pas pu être contacté",
+            ),
+            ApiError::InvalidOAuthState => (
+                StatusCode::BAD_REQUEST,
+                "invalid_oauth_state",
+                "Demande de connexion inconnue ou expirée, recommencez",
+            ),
+            ApiError::AccountExists => (
+                StatusCode::CONFLICT,
+                "account_exists",
+                "Un compte utilise déjà cette adresse : connectez-vous puis liez Google depuis les paramètres",
+            ),
+            ApiError::ProviderEmailUnverified => (
+                StatusCode::FORBIDDEN,
+                "provider_email_unverified",
+                "L'adresse e-mail de ce compte Google n'est pas vérifiée",
+            ),
+            ApiError::IdentityTaken => (
+                StatusCode::CONFLICT,
+                "identity_taken",
+                "Ce compte Google est déjà lié à un compte, ou ce compte est déjà lié à Google",
+            ),
+            ApiError::LastLoginMethod => (
+                StatusCode::CONFLICT,
+                "last_login_method",
+                "Définissez d'abord un mot de passe : c'est la dernière méthode de connexion du compte",
+            ),
+            ApiError::TwoFactorAlreadyEnabled => (
+                StatusCode::CONFLICT,
+                "two_factor_enabled",
+                "La double authentification est déjà activée",
+            ),
+            ApiError::TwoFactorNotEnabled => (
+                StatusCode::CONFLICT,
+                "two_factor_not_enabled",
+                "La double authentification n'est pas activée",
+            ),
+            ApiError::TwoFactorNotPending => (
+                StatusCode::CONFLICT,
+                "two_factor_not_pending",
+                "Aucune activation de double authentification en cours",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

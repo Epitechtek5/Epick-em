@@ -7,6 +7,7 @@ mod games;
 mod matches;
 mod memory;
 mod postgres;
+mod security;
 mod stats;
 mod steps;
 mod teams;
@@ -19,6 +20,9 @@ pub use self::matches::{
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
+pub use self::security::{
+    GOOGLE, OAuthPurpose, OAuthState, SecurityStatus, SecurityStore, TotpRecord, Unlink,
+};
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::steps::{
     MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
@@ -152,6 +156,8 @@ pub enum StoreError {
     MatchState,
     /// L'adresse e-mail est déjà utilisée par un autre compte.
     EmailTaken,
+    /// L'identité externe est déjà liée à un compte, ou le compte déjà lié à ce fournisseur.
+    IdentityTaken,
     Other(String),
 }
 
@@ -178,6 +184,7 @@ impl fmt::Display for StoreError {
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
+            StoreError::IdentityTaken => f.write_str("identité externe déjà liée"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -192,7 +199,7 @@ impl From<sqlx::Error> for StoreError {
 }
 
 #[async_trait]
-pub trait AuthStore: Send + Sync {
+pub trait AuthStore: SecurityStore + Send + Sync {
     /// Crée le compte ; [`StoreError::UsernameTaken`] si le nom est déjà utilisé,
     /// [`StoreError::EmailTaken`] si l'adresse e-mail (en minuscules) l'est.
     async fn create_user(
