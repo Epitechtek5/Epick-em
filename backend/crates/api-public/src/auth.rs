@@ -13,7 +13,9 @@ use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
 use crate::mail::{Mailer, NoopMailer};
 use crate::match_io::InSteps;
+use crate::notifications::{Catalog, DEFAULT_RETRY_DELAY};
 use crate::password_reset::{email_error, normalize_email};
+use crate::push::{NoopPush, PushSender};
 use crate::stat_io::StoreStats;
 use crate::step_io::StoreSteps;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
@@ -63,6 +65,12 @@ pub struct AppState {
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
     pub(crate) public_url: Arc<str>,
+    /// Envoi des notifications push ; par défaut [`NoopPush`] (canal ignoré).
+    pub(crate) push: Arc<dyn PushSender>,
+    /// Types d'événements du moteur de notifications.
+    pub(crate) catalog: Arc<Catalog>,
+    /// Attente entre deux essais d'une livraison de notification.
+    pub(crate) retry_delay: std::time::Duration,
 }
 
 impl AppState {
@@ -82,7 +90,28 @@ impl AppState {
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
+            push: Arc::new(NoopPush),
+            catalog: Arc::new(Catalog::builtin()),
+            retry_delay: DEFAULT_RETRY_DELAY,
         })
+    }
+
+    /// Branche l'envoi des notifications push (Expo en production).
+    pub fn with_push(mut self, push: Arc<dyn PushSender>) -> Self {
+        self.push = push;
+        self
+    }
+
+    /// Remplace le catalogue des événements, pour y enregistrer ceux d'une nouvelle fonction.
+    pub fn with_catalog(mut self, catalog: Catalog) -> Self {
+        self.catalog = Arc::new(catalog);
+        self
+    }
+
+    /// Règle l'attente entre deux essais d'une livraison de notification.
+    pub fn with_retry_delay(mut self, delay: std::time::Duration) -> Self {
+        self.retry_delay = delay;
+        self
     }
 
     /// Branche le sous-niveau qui importe et exporte les équipes des tournois.
@@ -552,6 +581,7 @@ mod tests {
             email: None,
             email_verified_at: None,
             pending_email: None,
+            picture_url: None,
         };
         let response = token_response(&config, &user, "r".into()).unwrap();
         let claims = decode_access_token(&response.access_token, secret).unwrap();
