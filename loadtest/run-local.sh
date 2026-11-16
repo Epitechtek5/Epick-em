@@ -76,7 +76,7 @@ echo "› k6 ($k6_image)"
 docker run --rm --network host -u "$(id -u):$(id -g)" -v "$root/loadtest:/loadtest:z" \
   -e BASE_URL="http://127.0.0.1:$api_port" -e ADMIN_EMAIL=referee@load.test -e PASSWORD="$password" \
   -e SPECTATORS="$spectators" -e PLAYERS="$player_ids" -e GROUPS="$groups" \
-  -e MATCHES_PER_GROUP="${MATCHES_PER_GROUP:-10}" -e PEAK_VUS="${PEAK_VUS:-200}" \
+  -e MATCHES_PER_GROUP="${MATCHES_PER_GROUP:-}" -e PEAK_VUS="${PEAK_VUS:-200}" \
   -e DURATION="${DURATION:-3m}" -e RESULTS_RATE="${RESULTS_RATE:-1}" \
   -e SUMMARY="/loadtest/results/$(basename "$summary")" \
   "$k6_image" run /loadtest/tournament-live.js && status=0 || status=$?

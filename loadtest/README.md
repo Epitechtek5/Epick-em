@@ -22,4 +22,9 @@ Variables : `PEAK_VUS`, `DURATION`, `SPECTATORS` (comptes distincts), `LOAD_GROU
 `MATCHES_PER_GROUP`, `RESULTS_RATE` (matchs terminés par seconde), `K6_IMAGE`, ports `PG_PORT`,
 `REDIS_PORT`, `API_PORT`.
 
+L'arbitre termine `RESULTS_RATE` matchs par seconde pendant `DURATION` : sans `MATCHES_PER_GROUP`,
+le scénario prépare juste assez de matchs pour écrire jusqu'au bout (180 pour 3 min à 1 par
+seconde) ; une valeur fixée trop petite est refusée avant le lancement, pour que la charge mixte
+lecture et écriture couvre toute la durée.
+
 Résultats mesurés, seuils et limites : [`docs/exploitation/tests-de-charge.md`](../docs/exploitation/tests-de-charge.md).

@@ -8,6 +8,10 @@
 // spectateurs `spectator<i>@load.test`, vérifiés par le script de lancement), PLAYERS (identifiants
 // des joueurs, séparés par des virgules), GROUPS, MATCHES_PER_GROUP, PEAK_VUS, DURATION, RESULTS_RATE,
 // SUMMARY (fichier du résumé JSON).
+//
+// L'arbitre termine RESULTS_RATE matchs par seconde pendant DURATION : il faut au moins autant de
+// matchs préparés pour que l'écriture dure tout le scénario. Sans MATCHES_PER_GROUP, le nombre de
+// matchs par poule en est déduit ; un MATCHES_PER_GROUP trop petit est refusé avant le lancement.
 import http from 'k6/http'
 import { check, fail, sleep } from 'k6'
 import exec from 'k6/execution'
@@ -18,10 +22,32 @@ const PASSWORD = __ENV.PASSWORD || 'loadtest-password'
 const SPECTATORS = Number(__ENV.SPECTATORS || 50)
 const GROUPS = Number(__ENV.GROUPS || 8)
 const GROUP_SIZE = 8
-const MATCHES_PER_GROUP = Number(__ENV.MATCHES_PER_GROUP || 10)
 const PEAK_VUS = Number(__ENV.PEAK_VUS || 200)
 const DURATION = __ENV.DURATION || '3m'
 const RESULTS_RATE = Number(__ENV.RESULTS_RATE || 1)
+
+/** Durée k6 (`90s`, `3m`, `1m30s`, `1h`) en secondes. */
+function seconds(duration) {
+  const units = { h: 3600, m: 60, s: 1, ms: 0.001 }
+  const parts = [...String(duration).matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)]
+  if (parts.length === 0 || parts.map((p) => p[0]).join('') !== String(duration)) {
+    throw new Error(`DURATION illisible : ${duration}`)
+  }
+  return parts.reduce((total, [, value, unit]) => total + Number(value) * units[unit], 0)
+}
+
+// Matchs terminés par l'arbitre sur toute la durée (constant-arrival-rate).
+const RESULTS_NEEDED = Math.ceil(RESULTS_RATE * seconds(DURATION))
+const MATCHES_PER_GROUP = __ENV.MATCHES_PER_GROUP
+  ? Number(__ENV.MATCHES_PER_GROUP)
+  : Math.ceil(RESULTS_NEEDED / GROUPS)
+if (GROUPS * MATCHES_PER_GROUP < RESULTS_NEEDED) {
+  throw new Error(
+    `${GROUPS * MATCHES_PER_GROUP} matchs préparés (GROUPS × MATCHES_PER_GROUP) pour ${RESULTS_NEEDED} ` +
+      `résultats (RESULTS_RATE × DURATION) : l'écriture s'arrêterait avant la fin. ` +
+      `Augmenter MATCHES_PER_GROUP à ${Math.ceil(RESULTS_NEEDED / GROUPS)} ou ne pas le fixer.`,
+  )
+}
 
 const readLatency = new Trend('spectator_read_ms', true)
 const propagation = new Trend('ranking_propagation_ms', true)
@@ -189,7 +215,8 @@ export function spectate(data) {
 // les nouveaux points ; le délai mesuré va de l'envoi de la fin du match à cette lecture.
 export function referee(data) {
   const index = exec.scenario.iterationInTest
-  if (index >= data.matches.length) return
+  // Ne devrait pas arriver (voir RESULTS_NEEDED) : compté comme un échec plutôt que masqué.
+  if (!check(index, { 'match à jouer': (i) => i < data.matches.length })) return
   const match = data.matches[index]
   const base = `${BASE}/tournaments/${data.tournament}/steps/${data.step}`
   const results = match.participants.map((participant_id, rank) => ({
