@@ -919,6 +919,20 @@ impl AuthStore for PgStore {
         .transpose()?)
     }
 
+    async fn find_user_by_verification_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserRecord>, StoreError> {
+        Ok(sqlx::query_as::<_, UserRow>(
+            "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url FROM users WHERE COALESCE(pending_email, email) = $1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(user)
+        .transpose()?)
+    }
+
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError> {
         Ok(sqlx::query_as::<_, UserRow>(
             "SELECT id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url FROM users WHERE id = $1",

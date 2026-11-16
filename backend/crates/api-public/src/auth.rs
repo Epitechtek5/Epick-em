@@ -182,6 +182,8 @@ struct RegisterRequest {
     #[serde(default)]
     #[schema(required = true, max_length = 254, format = Email, example = "alice@example.com")]
     email: String,
+    /// Preferred language for account emails; defaults to French.
+    language: Option<crate::store::Language>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -280,6 +282,19 @@ async fn register(
             StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?;
+    if let Some(language) = request.language {
+        state
+            .store
+            .update_user_settings(
+                user.id,
+                crate::store::SettingsUpdate {
+                    language: Some(language),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(ApiError::internal)?;
+    }
     crate::verification::send(&state, email, token, Some(user.username.clone()));
     Ok(HttpResponse::Created().json(RegisterResponse {
         id: user.id,
