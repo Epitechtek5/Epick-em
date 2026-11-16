@@ -27,7 +27,7 @@ async fn wait_for_verification_emails(mailer: &MemoryMailer, expected: usize) {
 
 #[actix_web::test]
 async fn account_emails_use_persisted_language_including_pending_addresses() {
-    use api_public::store::{Language, SettingsUpdate};
+    use api_public::store::{Language, UserSettingsUpdate};
     for language in [Language::Fr, Language::En, Language::Es] {
         let mailer = Arc::new(MemoryMailer::new());
         let store = Arc::new(MemoryStore::new());
@@ -66,7 +66,7 @@ async fn account_emails_use_persisted_language_including_pending_addresses() {
         store
             .update_user_settings(
                 id,
-                SettingsUpdate {
+                UserSettingsUpdate {
                     language: Some(next),
                     ..Default::default()
                 },
@@ -102,7 +102,7 @@ async fn account_emails_use_persisted_language_including_pending_addresses() {
         store
             .update_user_settings(
                 id,
-                SettingsUpdate {
+                UserSettingsUpdate {
                     language: Some(next),
                     ..Default::default()
                 },

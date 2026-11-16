@@ -12,7 +12,7 @@ use api_public::notifications::{
 };
 use api_public::push::MemoryPush;
 use api_public::store::{
-    AuthStore, Category, Channel, MemoryStore, Platform, Role, SettingsUpdate, UserSettings,
+    AuthStore, Category, Channel, MemoryStore, Platform, Role, UserSettings, UserSettingsUpdate,
 };
 use common::{
     PUBLIC_URL, SECRET, access, app_with_services, call, eventually, logged_in_as, login, request,
@@ -628,7 +628,7 @@ async fn preferences_are_enforced_per_category_and_channel() {
         (1, 1)
     );
 
-    let off = |category, channel| SettingsUpdate {
+    let off = |category, channel| UserSettingsUpdate {
         notifications: vec![(category, channel, false)],
         ..Default::default()
     };
@@ -669,7 +669,7 @@ async fn preferences_are_enforced_per_category_and_channel() {
     e.store
         .update_user_settings(
             e.alice_id,
-            SettingsUpdate {
+            UserSettingsUpdate {
                 notifications: vec![(Category::Teams, Channel::Email, true)],
                 ..Default::default()
             },
@@ -835,7 +835,7 @@ async fn only_verified_addresses_receive_email_and_security_mail_ignores_prefere
     e.store
         .update_user_settings(
             e.alice_id,
-            SettingsUpdate {
+            UserSettingsUpdate {
                 notifications: every_email,
                 ..Default::default()
             },
