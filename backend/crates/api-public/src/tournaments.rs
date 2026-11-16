@@ -384,7 +384,7 @@ async fn update_tournament(
     }
     let team_size_given = request.settings.team_size;
     let settings_given = !request.settings.is_empty();
-    let merged_settings = request.settings.merge(current.settings.clone());
+    let merged_settings = request.settings.clone().merge(current.settings.clone());
     let mut merged = TournamentInput {
         game_id: current.game_id,
         name: request.name.clone().unwrap_or(current.name),
@@ -440,7 +440,7 @@ async fn update_tournament(
         max_participants: request.max_participants.map(|_| merged.max_participants),
         team_scoring_mode: request.team_scoring_mode.map(|_| merged.team_scoring_mode),
         team_scoring_n: request.team_scoring_n.map(|_| merged.team_scoring_n),
-        settings: settings_given.then(|| merged.settings.clone()),
+        settings: request.settings.store_update(&merged.settings),
     };
     let tournament = state
         .store
@@ -925,14 +925,16 @@ async fn update_participant(
         }
         require_actor(&state, &claims, &participant).await?;
     }
-    let participant = state
+    let mutation = state
         .store
         .set_participant_status(participant.id, status)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(participant_error)?
         .ok_or(ApiError::NotFound)?;
-    release_seat(&state, &tournament, &participant).await?;
-    Ok(HttpResponse::Ok().json(participant))
+    for promoted in &mutation.promoted {
+        emit(&state, EventKind::Promoted, promoted);
+    }
+    Ok(HttpResponse::Ok().json(mutation.participant))
 }
 
 /// Retire une inscription (l'inscrit, le propriétaire de son équipe ou un administrateur).
@@ -973,13 +975,15 @@ async fn remove_participant(
     ) {
         return Err(ApiError::TournamentLocked);
     }
-    if state
+    let removal = state
         .store
         .delete_participant(participant.id)
         .await
-        .map_err(ApiError::internal)?
-    {
-        release_seat(&state, &tournament, &participant).await?;
+        .map_err(ApiError::internal)?;
+    if removal.deleted {
+        for promoted in &removal.promoted {
+            emit(&state, EventKind::Promoted, promoted);
+        }
         Ok(HttpResponse::NoContent().finish())
     } else {
         Err(ApiError::NotFound)
@@ -1030,14 +1034,14 @@ async fn check_in(
         ParticipantStatus::Registered => {}
         _ => return Err(ApiError::InvalidTransition),
     }
-    let participant = state
+    let mutation = state
         .store
         .set_participant_status(participant.id, ParticipantStatus::CheckedIn)
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
-    emit(&state, EventKind::CheckedIn, &participant);
-    Ok(HttpResponse::Ok().json(participant))
+    emit(&state, EventKind::CheckedIn, &mutation.participant);
+    Ok(HttpResponse::Ok().json(mutation.participant))
 }
 
 /// Classement des joueurs (tournoi solo), par points décroissants. Le gagnant est le premier
@@ -1666,24 +1670,6 @@ pub(crate) async fn settle_if_due(
         }
     }
     find_tournament(state, tournament.id).await
-}
-
-/// Une place libérée (retrait, suppression, disqualification) profite à la liste d'attente ;
-/// la promotion est bornée par la capacité, elle ne fait rien s'il n'y a pas de place.
-async fn release_seat(
-    state: &AppState,
-    tournament: &Tournament,
-    _participant: &TournamentParticipant,
-) -> Result<(), ApiError> {
-    if tournament.settings.waiting_list_enabled
-        && matches!(
-            tournament.status,
-            TournamentStatus::Registration | TournamentStatus::Draft
-        )
-    {
-        promote_and_emit(state, tournament.id).await?;
-    }
-    Ok(())
 }
 
 pub(crate) async fn promote_and_emit(

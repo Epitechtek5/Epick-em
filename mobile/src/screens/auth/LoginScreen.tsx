@@ -144,6 +144,11 @@ export default function LoginScreen() {
           </Text>
         </Link>
       </View>
+      <Link href="/tournaments" className="self-center">
+        <Text className="font-semibold text-primary">
+          {t('tournaments.public.browse')}
+        </Text>
+      </Link>
     </AuthScreen>
   );
 }

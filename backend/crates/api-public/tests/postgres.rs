@@ -809,20 +809,20 @@ async fn tournament_teams_are_independent_copies() {
         .unwrap();
     assert!(matches!(
         store
-            .add_tournament_team_member(scratch.id, bob, TeamRole::Member)
+            .add_tournament_team_member(scratch.id, bob, TeamRole::Member, None, None)
             .await,
         Err(StoreError::PlayerAlreadyRegistered)
     ));
     assert!(
         store
-            .add_tournament_team_member(scratch.id, Uuid::new_v4(), TeamRole::Member)
+            .add_tournament_team_member(scratch.id, Uuid::new_v4(), TeamRole::Member, None, None)
             .await
             .unwrap()
             .is_none()
     );
     assert!(
         store
-            .add_tournament_team_member(Uuid::new_v4(), bob, TeamRole::Member)
+            .add_tournament_team_member(Uuid::new_v4(), bob, TeamRole::Member, None, None)
             .await
             .unwrap()
             .is_none()
@@ -880,7 +880,7 @@ async fn tournament_teams_are_independent_copies() {
     );
 
     let role = store
-        .set_tournament_team_member_role(copy.id, bob, TeamRole::Substitute)
+        .set_tournament_team_member_role(copy.id, bob, TeamRole::Substitute, None, None)
         .await
         .unwrap()
         .unwrap();
@@ -1282,7 +1282,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(withdrawn.status, ParticipantStatus::Withdrawn);
+    assert_eq!(withdrawn.participant.status, ParticipantStatus::Withdrawn);
     store.add_participant(solo(carol)).await.unwrap().unwrap();
     let listed = store.list_participants(tournament.id, 10, 0).await.unwrap();
     assert_eq!(listed.len(), 3);
@@ -1299,8 +1299,8 @@ async fn participants_are_unique_and_capped_by_max_participants() {
             .is_empty()
     );
 
-    assert!(store.delete_participant(first.id).await.unwrap());
-    assert!(!store.delete_participant(first.id).await.unwrap());
+    assert!(store.delete_participant(first.id).await.unwrap().deleted);
+    assert!(!store.delete_participant(first.id).await.unwrap().deleted);
     assert!(
         store
             .set_participant_status(first.id, ParticipantStatus::CheckedIn)
@@ -1895,7 +1895,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     ));
 
     // Retirer un inscrit retire sa participation aux étapes ; supprimer une étape, ses groupes.
-    assert!(store.delete_participant(players[3]).await.unwrap());
+    assert!(store.delete_participant(players[3]).await.unwrap().deleted);
     assert_eq!(
         store.list_step_participants(first.id).await.unwrap().len(),
         3
@@ -2548,7 +2548,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
     );
 
     // Retirer un inscrit retire sa participation aux matchs, pas les matchs.
-    assert!(store.delete_participant(players[0]).await.unwrap());
+    assert!(store.delete_participant(players[0]).await.unwrap().deleted);
     assert!(store.find_match(semi.id).await.unwrap().is_some());
     let remaining = store.list_step_match_participants(step.id).await.unwrap();
     assert!(remaining.iter().all(|p| p.participant_id != players[0]));

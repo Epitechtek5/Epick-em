@@ -93,7 +93,7 @@ impl SettingsRequest {
 }
 
 /// Configuration à la modification : champs facultatifs, `null` efface une valeur facultative.
-#[derive(Debug, Default, Deserialize, ToSchema)]
+#[derive(Debug, Default, Clone, Deserialize, ToSchema)]
 pub(crate) struct UpdateSettingsRequest {
     pub mode: Option<TournamentMode>,
     #[serde(default, deserialize_with = "nullable")]
@@ -123,6 +123,42 @@ pub(crate) struct UpdateSettingsRequest {
 }
 
 impl UpdateSettingsRequest {
+    pub fn store_update(
+        &self,
+        merged: &TournamentSettings,
+    ) -> crate::store::TournamentSettingsUpdate {
+        crate::store::TournamentSettingsUpdate {
+            mode: self.mode.map(|_| merged.mode),
+            location: self.location.as_ref().map(|_| merged.location.clone()),
+            visibility: self.visibility.map(|_| merged.visibility),
+            rules: self.rules.as_ref().map(|_| merged.rules.clone()),
+            team_min_starters: (self.team_min_starters.is_some() || self.team_size.is_some())
+                .then_some(merged.team_min_starters),
+            team_max_starters: (self.team_max_starters.is_some() || self.team_size.is_some())
+                .then_some(merged.team_max_starters),
+            team_max_substitutes: self
+                .team_max_substitutes
+                .as_ref()
+                .map(|_| merged.team_max_substitutes),
+            registration_policy: self.registration_policy.map(|_| merged.registration_policy),
+            waiting_list_enabled: self
+                .waiting_list_enabled
+                .map(|_| merged.waiting_list_enabled),
+            registration_fields: self
+                .registration_fields
+                .as_ref()
+                .map(|_| merged.registration_fields.clone()),
+            check_in_open_at: self
+                .check_in_open_at
+                .as_ref()
+                .map(|_| merged.check_in_open_at.clone()),
+            check_in_close_at: self
+                .check_in_close_at
+                .as_ref()
+                .map(|_| merged.check_in_close_at.clone()),
+        }
+    }
+
     /// Vrai si la requête touche la composition des équipes ou le pointage (verrouillés dès que
     /// le tournoi est en cours).
     pub fn touches_team_composition(&self) -> bool {

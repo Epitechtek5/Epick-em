@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { Alert, FlatList, RefreshControl, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { TeamImage } from '@/components/teams/team-image';
 import { TournamentTeamSelect } from '@/components/tournaments/team-select';
@@ -11,8 +12,13 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { useAuth } from '@/features/auth/session';
 import { useGameResource } from '@/features/games/use-game-resource';
 import {
+  approveParticipant,
+  closeCheckIn,
   getTournament,
+  listTournamentRoles,
+  promoteWaitingList,
   registerParticipant,
+  rejectParticipant,
   checkInParticipant,
   removeParticipant,
   updateParticipantStatus,
@@ -21,6 +27,7 @@ import { tournamentErrorKey } from '@/features/tournaments/errors';
 import { listAllTournamentParticipants } from '@/features/tournaments/catalog';
 import type {
   ParticipantStatus,
+  RegistrationField,
   TournamentParticipant,
 } from '@/features/tournaments/types';
 import {
@@ -44,18 +51,22 @@ export default function TournamentParticipantsScreen() {
   const [page, setPage] = useState(0);
   const [teamPage, setTeamPage] = useState(0);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+  const [responses, setResponses] = useState<
+    Record<string, string | number | boolean>
+  >({});
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState(false);
   const load = useCallback(
     async (accessToken: string) => {
-      const [tournament, allParticipants, teams] = await Promise.all([
+      const [tournament, allParticipants, teams, roles] = await Promise.all([
         getTournament(accessToken, tournamentId),
         listAllTournamentParticipants(accessToken, tournamentId),
         listTournamentTeams(accessToken, tournamentId, {
           limit: PAGE_SIZE,
           offset: teamPage * PAGE_SIZE,
         }),
+        listTournamentRoles(accessToken, tournamentId).catch(() => null),
       ]);
       const participants = participantId
         ? allParticipants.filter(
@@ -136,7 +147,8 @@ export default function TournamentParticipantsScreen() {
               ).length;
               const eligible =
                 tournament.participant_type === 'solo' ||
-                starters === tournament.team_size;
+                (starters >= (tournament.team_min_starters ?? 0) &&
+                  starters <= (tournament.team_max_starters ?? starters));
               const memberNames = await Promise.all(
                 members.map(async (member) => {
                   try {
@@ -172,6 +184,7 @@ export default function TournamentParticipantsScreen() {
         referencedTeams: referencedTeams.filter(
           (team): team is TournamentTeam => team !== null,
         ),
+        roles,
       };
     },
     [participantId, tournamentId, page, teamPage, user?.id, user?.role],
@@ -238,6 +251,12 @@ export default function TournamentParticipantsScreen() {
       />
     );
   const { tournament, participants, teams, names } = data;
+  const canManage =
+    user?.role === 'admin' ||
+    data.roles?.owner_id === user?.id ||
+    data.roles?.roles.some(
+      (role) => role.user_id === user?.id && role.role === 'admin',
+    );
   const teamById = new Map(
     [...teams, ...data.referencedTeams].map((team) => [team.id, team]),
   );
@@ -274,7 +293,17 @@ export default function TournamentParticipantsScreen() {
     registrationOpen &&
     registrationActive &&
     !hasRegistration &&
-    !full;
+    (!full || tournament.waiting_list_enabled);
+  const missingRequiredResponse = tournament.registration_fields.some(
+    (field) =>
+      field.required &&
+      (responses[field.key] === undefined || responses[field.key] === ''),
+  );
+  const checkInOpen =
+    (!tournament.check_in_open_at ||
+      data.loadedAt >= Date.parse(tournament.check_in_open_at)) &&
+    (!tournament.check_in_close_at ||
+      data.loadedAt <= Date.parse(tournament.check_in_close_at));
 
   return (
     <View className="flex-1 bg-background px-5 pt-5">
@@ -303,6 +332,17 @@ export default function TournamentParticipantsScreen() {
         />
       </View>
       {error ? <FormMessage>{t(error)}</FormMessage> : null}
+      {tournament.check_in_open_at && tournament.check_in_close_at ? (
+        <Text variant="muted" className="mb-3">
+          {t(
+            checkInOpen
+              ? 'tournaments.registration.checkInAvailable'
+              : data.loadedAt < Date.parse(tournament.check_in_open_at)
+                ? 'tournaments.registration.checkInUpcoming'
+                : 'tournaments.registration.checkInClosed',
+          )}
+        </Text>
+      ) : null}
       {!registerable && !hasRegistration ? (
         <Card className="mb-4">
           <CardContent className="gap-2 pt-5">
@@ -358,7 +398,7 @@ export default function TournamentParticipantsScreen() {
                     option.team.id,
                     `${t('tournaments.registration.teamSummary', {
                       starters: option.starters,
-                      required: tournament.team_size ?? option.starters,
+                      required: `${tournament.team_min_starters ?? 0}–${tournament.team_max_starters ?? option.starters}`,
                       members: option.members.length,
                     })}\n${t('tournaments.registration.teamMembers', {
                       names: (option.memberNames ?? []).join(', '),
@@ -394,9 +434,17 @@ export default function TournamentParticipantsScreen() {
                   : t('tournaments.registration.soloWithoutTeam')}
               </Text>
             ) : null}
+            {tournament.registration_fields.length ? (
+              <RegistrationFields
+                fields={tournament.registration_fields}
+                values={responses}
+                onChange={setResponses}
+              />
+            ) : null}
             <Button
               disabled={
                 busy ||
+                missingRequiredResponse ||
                 (tournament.participant_type === 'team' &&
                   (!selectedTeam ||
                     !data.teamOptions.some(
@@ -412,6 +460,7 @@ export default function TournamentParticipantsScreen() {
                       token,
                       tournamentId,
                       selectedTeam ?? undefined,
+                      responses,
                     ),
                   'tournaments.registration.success',
                 )
@@ -448,7 +497,7 @@ export default function TournamentParticipantsScreen() {
             ? teamById.get(item.tournament_team_id)
             : null;
           const actor =
-            user?.role === 'admin' ||
+            canManage ||
             item.user_id === user?.id ||
             (item.user_id === null && team?.owner_id === user?.id);
           return (
@@ -488,8 +537,70 @@ export default function TournamentParticipantsScreen() {
                     label={t(`tournaments.participantStatus.${item.status}`)}
                   />
                 </View>
+                {item.status === 'waitlisted' ? (
+                  <Text variant="muted">
+                    {t('tournaments.registration.waitingPosition', {
+                      position:
+                        data.allParticipants
+                          .filter((entry) => entry.status === 'waitlisted')
+                          .findIndex((entry) => entry.id === item.id) + 1,
+                    })}
+                  </Text>
+                ) : null}
+                {Object.entries(item.responses).map(([key, value]) => (
+                  <Text key={key} variant="muted">
+                    {key}: {String(value)}
+                  </Text>
+                ))}
+                {canManage && item.status === 'pending' ? (
+                  <View className="flex-row gap-2">
+                    <Button
+                      className="flex-1"
+                      size="sm"
+                      disabled={busy}
+                      onPress={() =>
+                        token &&
+                        void mutate(() =>
+                          approveParticipant(token, tournamentId, item.id),
+                        )
+                      }
+                    >
+                      <Text>{t('tournaments.registration.approve')}</Text>
+                    </Button>
+                    <Button
+                      className="flex-1"
+                      size="sm"
+                      variant="destructive"
+                      disabled={busy}
+                      onPress={() =>
+                        token &&
+                        void mutate(() =>
+                          rejectParticipant(token, tournamentId, item.id),
+                        )
+                      }
+                    >
+                      <Text>{t('tournaments.registration.reject')}</Text>
+                    </Button>
+                  </View>
+                ) : null}
+                {canManage && item.status === 'waitlisted' ? (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={busy}
+                    onPress={() =>
+                      token &&
+                      void mutate(() =>
+                        rejectParticipant(token, tournamentId, item.id),
+                      )
+                    }
+                  >
+                    <Text>{t('tournaments.registration.reject')}</Text>
+                  </Button>
+                ) : null}
                 {actor &&
                 item.status === 'registered' &&
+                checkInOpen &&
                 tournament.status === 'registration' ? (
                   <Button
                     size="sm"
@@ -519,7 +630,7 @@ export default function TournamentParticipantsScreen() {
                     </Text>
                   </Button>
                 ) : null}
-                {user?.role === 'admin' ? (
+                {canManage ? (
                   <View className="flex-row flex-wrap gap-2">
                     {(
                       [
@@ -581,6 +692,106 @@ export default function TournamentParticipantsScreen() {
           </Button>
         </View>
       ) : null}
+      {canManage && tournament.status === 'registration' ? (
+        <View className="flex-row gap-2 pb-4">
+          <Button
+            className="flex-1"
+            variant="outline"
+            disabled={busy}
+            onPress={() =>
+              token &&
+              void mutate(() => promoteWaitingList(token, tournamentId))
+            }
+          >
+            <Text>{t('tournaments.registration.promote')}</Text>
+          </Button>
+          <Button
+            className="flex-1"
+            variant="outline"
+            disabled={busy}
+            onPress={() =>
+              token && void mutate(() => closeCheckIn(token, tournamentId))
+            }
+          >
+            <Text>{t('tournaments.registration.closeCheckIn')}</Text>
+          </Button>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function RegistrationFields({
+  fields,
+  values,
+  onChange,
+}: {
+  fields: RegistrationField[];
+  values: Record<string, string | number | boolean>;
+  onChange: React.Dispatch<
+    React.SetStateAction<Record<string, string | number | boolean>>
+  >;
+}) {
+  const { t } = useTranslation();
+  const setValue = (key: string, value: string | number | boolean) =>
+    onChange((current) => ({ ...current, [key]: value }));
+
+  return (
+    <View className="gap-3">
+      {fields.map((field) => (
+        <View key={field.key} className="gap-1">
+          <Text className="font-medium">
+            {field.label}
+            {field.required ? ' *' : ''}
+          </Text>
+          {field.field_type === 'select' || field.field_type === 'boolean' ? (
+            <View className="flex-row flex-wrap gap-2">
+              {(field.field_type === 'boolean'
+                ? ['true', 'false']
+                : field.options
+              ).map((option) => (
+                <Button
+                  key={option}
+                  size="sm"
+                  variant={
+                    String(values[field.key]) === option ? 'default' : 'outline'
+                  }
+                  onPress={() =>
+                    setValue(
+                      field.key,
+                      field.field_type === 'boolean'
+                        ? option === 'true'
+                        : option,
+                    )
+                  }
+                >
+                  <Text>
+                    {field.field_type === 'boolean'
+                      ? t(`common.${option}`)
+                      : option}
+                  </Text>
+                </Button>
+              ))}
+            </View>
+          ) : (
+            <Input
+              accessibilityLabel={field.label}
+              keyboardType={
+                field.field_type === 'number' ? 'numeric' : 'default'
+              }
+              value={
+                values[field.key] === undefined ? '' : String(values[field.key])
+              }
+              onChangeText={(value) =>
+                setValue(
+                  field.key,
+                  field.field_type === 'number' ? Number(value) : value,
+                )
+              }
+            />
+          )}
+        </View>
+      ))}
     </View>
   );
 }

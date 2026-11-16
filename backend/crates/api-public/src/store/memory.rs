@@ -4,14 +4,14 @@ use super::teams::now_rfc3339;
 use super::{
     AuthStore, CheckInSettlement, Game, GameInput, GameUpdate, Invitation, Match, MatchFinish,
     MatchImport, MatchInput, MatchParticipant, MatchScore, MatchStatus, MatchUpdate,
-    ParticipantImport, ParticipantInput, ParticipantStatus, RegistrationPolicy, Role,
-    RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringRule, ScoringRuleDefinition,
-    ScoringRuleInput, Stat, StatInput, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
-    StepInput, StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Team,
-    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
-    TournamentInput, TournamentParticipant, TournamentRole, TournamentStatus, TournamentTeam,
-    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
-    UserUpdate,
+    ParticipantImport, ParticipantInput, ParticipantMutation, ParticipantRemoval,
+    ParticipantStatus, RegistrationPolicy, Role, RoleAssignment, RoleAuditAction, RoleAuditEntry,
+    ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step,
+    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepParticipantStatus,
+    StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole,
+    TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentParticipant,
+    TournamentRole, TournamentStatus, TournamentTeam, TournamentTeamInput, TournamentTeamMember,
+    TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -409,6 +409,9 @@ impl AuthStore for MemoryStore {
 
     async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError> {
         let mut state = self.state();
+        if state.tournaments.iter().any(|t| t.owner_id == Some(id)) {
+            return Err(StoreError::TournamentOwner);
+        }
         let before = state.users.len();
         state.users.retain(|user| user.id != id);
         state.tokens.retain(|_, token| token.user_id != id);
@@ -1065,6 +1068,8 @@ impl AuthStore for MemoryStore {
         id: Uuid,
         user_id: Uuid,
         role: TeamRole,
+        starter_limit: Option<i32>,
+        substitute_limit: Option<i32>,
     ) -> Result<Option<TournamentTeamMember>, StoreError> {
         let mut state = self.state();
         let Some(tournament_id) = state
@@ -1081,6 +1086,7 @@ impl AuthStore for MemoryStore {
         if state.player_registered(tournament_id, user_id) {
             return Err(StoreError::PlayerAlreadyRegistered);
         }
+        state.require_team_room(id, role, None, starter_limit, substitute_limit)?;
         let member = TournamentTeamMember { user_id, role };
         state.tournament_team_members.push((id, member.clone()));
         Ok(Some(member))
@@ -1091,8 +1097,11 @@ impl AuthStore for MemoryStore {
         id: Uuid,
         user_id: Uuid,
         role: TeamRole,
+        starter_limit: Option<i32>,
+        substitute_limit: Option<i32>,
     ) -> Result<Option<TournamentTeamMember>, StoreError> {
         let mut state = self.state();
+        state.require_team_room(id, role, Some(user_id), starter_limit, substitute_limit)?;
         Ok(state
             .tournament_team_members
             .iter_mut()
@@ -1221,8 +1230,42 @@ impl AuthStore for MemoryStore {
         if let Some(close) = update.registration_close_at {
             t.registration_close_at = close;
         }
-        if let Some(settings) = update.settings {
-            t.settings = settings;
+        let settings = update.settings;
+        if let Some(value) = settings.mode {
+            t.settings.mode = value;
+        }
+        if let Some(value) = settings.location {
+            t.settings.location = value;
+        }
+        if let Some(value) = settings.visibility {
+            t.settings.visibility = value;
+        }
+        if let Some(value) = settings.rules {
+            t.settings.rules = value;
+        }
+        if let Some(value) = settings.team_min_starters {
+            t.settings.team_min_starters = value;
+        }
+        if let Some(value) = settings.team_max_starters {
+            t.settings.team_max_starters = value;
+        }
+        if let Some(value) = settings.team_max_substitutes {
+            t.settings.team_max_substitutes = value;
+        }
+        if let Some(value) = settings.registration_policy {
+            t.settings.registration_policy = value;
+        }
+        if let Some(value) = settings.waiting_list_enabled {
+            t.settings.waiting_list_enabled = value;
+        }
+        if let Some(value) = settings.registration_fields {
+            t.settings.registration_fields = value;
+        }
+        if let Some(value) = settings.check_in_open_at {
+            t.settings.check_in_open_at = value;
+        }
+        if let Some(value) = settings.check_in_close_at {
+            t.settings.check_in_close_at = value;
         }
         if let Some(max) = update.max_participants {
             t.max_participants = max;
@@ -1381,6 +1424,33 @@ impl AuthStore for MemoryStore {
             .cloned())
     }
 
+    async fn list_active_participants(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentParticipant>, StoreError> {
+        let mut participants: Vec<_> = self
+            .state()
+            .participants
+            .iter()
+            .filter(|p| {
+                p.tournament_id == tournament_id
+                    && matches!(
+                        p.status,
+                        ParticipantStatus::Registered | ParticipantStatus::CheckedIn
+                    )
+            })
+            .cloned()
+            .collect();
+        participants.sort_by_key(|p| (p.registered_at.clone(), p.id));
+        Ok(participants
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(0))
+            .take(usize::try_from(limit).unwrap_or(0))
+            .collect())
+    }
+
     async fn add_participant(
         &self,
         input: ParticipantInput,
@@ -1441,21 +1511,95 @@ impl AuthStore for MemoryStore {
         &self,
         id: Uuid,
         status: ParticipantStatus,
-    ) -> Result<Option<TournamentParticipant>, StoreError> {
+    ) -> Result<Option<ParticipantMutation>, StoreError> {
         let mut state = self.state();
-        Ok(state.participants.iter_mut().find(|p| p.id == id).map(|p| {
-            p.status = status;
-            p.clone()
+        let Some(found) = state.participants.iter().find(|p| p.id == id).cloned() else {
+            return Ok(None);
+        };
+        let occupied = |value: ParticipantStatus| {
+            matches!(
+                value,
+                ParticipantStatus::Registered
+                    | ParticipantStatus::CheckedIn
+                    | ParticipantStatus::Disqualified
+            )
+        };
+        if occupied(status) && !occupied(found.status) {
+            let max = state
+                .tournaments
+                .iter()
+                .find(|t| t.id == found.tournament_id)
+                .map(|t| t.max_participants)
+                .unwrap_or(0);
+            if state.seats_used(found.tournament_id) >= i64::from(max) {
+                return Err(StoreError::TournamentFull);
+            }
+        }
+        let participant = state
+            .participants
+            .iter_mut()
+            .find(|p| p.id == id)
+            .map(|p| {
+                p.status = status;
+                p.clone()
+            })
+            .unwrap();
+        let should_promote = state
+            .tournaments
+            .iter()
+            .find(|t| t.id == found.tournament_id)
+            .is_some_and(|t| {
+                t.settings.waiting_list_enabled
+                    && matches!(
+                        t.status,
+                        TournamentStatus::Draft | TournamentStatus::Registration
+                    )
+            });
+        let promoted = if occupied(found.status) && !occupied(status) && should_promote {
+            state.promote(found.tournament_id)
+        } else {
+            Vec::new()
+        };
+        Ok(Some(ParticipantMutation {
+            participant,
+            promoted,
         }))
     }
 
-    async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError> {
+    async fn delete_participant(&self, id: Uuid) -> Result<ParticipantRemoval, StoreError> {
         let mut state = self.state();
+        let found = state.participants.iter().find(|p| p.id == id).cloned();
         let before = state.participants.len();
         state.participants.retain(|p| p.id != id);
         state.step_participants.retain(|p| p.participant_id != id);
         state.match_participants.retain(|p| p.participant_id != id);
-        Ok(state.participants.len() != before)
+        let deleted = state.participants.len() != before;
+        let promoted = found
+            .filter(|p| {
+                matches!(
+                    p.status,
+                    ParticipantStatus::Registered
+                        | ParticipantStatus::CheckedIn
+                        | ParticipantStatus::Disqualified
+                )
+            })
+            .and_then(|p| {
+                state
+                    .tournaments
+                    .iter()
+                    .find(|t| t.id == p.tournament_id)
+                    .filter(|t| {
+                        t.settings.waiting_list_enabled
+                            && matches!(
+                                t.status,
+                                TournamentStatus::Draft | TournamentStatus::Registration
+                            )
+                    })
+                    .map(|_| p.tournament_id)
+            })
+            .map(|tournament_id| state.promote(tournament_id))
+            .unwrap_or_default();
+        Ok(ParticipantRemoval { deleted, promoted })
     }
 
     async fn approve_participant(
@@ -2623,6 +2767,37 @@ impl State {
                     .iter()
                     .any(|t| t.id == *team && t.tournament_id == tournament_id)
         })
+    }
+
+    fn require_team_room(
+        &self,
+        team_id: Uuid,
+        role: TeamRole,
+        moving: Option<Uuid>,
+        starter_limit: Option<i32>,
+        substitute_limit: Option<i32>,
+    ) -> Result<(), StoreError> {
+        let substitutes = role == TeamRole::Substitute;
+        let limit = if substitutes {
+            substitute_limit
+        } else {
+            starter_limit
+        };
+        let count = self
+            .tournament_team_members
+            .iter()
+            .filter(|(id, member)| {
+                *id == team_id
+                    && Some(member.user_id) != moving
+                    && (member.role == TeamRole::Substitute) == substitutes
+            })
+            .count();
+        if let Some(limit) = limit
+            && i64::try_from(count).unwrap_or(i64::MAX) >= i64::from(limit)
+        {
+            return Err(StoreError::TeamCapacity { limit, substitutes });
+        }
+        Ok(())
     }
 
     fn upsert_stat(&mut self, input: StatInput) -> (Stat, bool) {

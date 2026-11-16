@@ -193,26 +193,25 @@ async fn public_participants(
 ) -> Result<HttpResponse, ApiError> {
     let tournament = public_tournament(&state, id.into_inner()).await?;
     let (limit, offset) = page.bounds();
-    let teams: HashMap<Uuid, String> = state
+    let participants = state
         .store
-        .list_tournament_teams(tournament.id, i64::MAX, 0)
-        .await
-        .map_err(ApiError::internal)?
-        .into_iter()
-        .map(|team| (team.id, team.name))
-        .collect();
-    let all = state
-        .store
-        .list_participants(tournament.id, i64::MAX, 0)
+        .list_active_participants(tournament.id, limit, offset)
         .await
         .map_err(ApiError::internal)?;
+    let mut teams = HashMap::new();
+    for team_id in participants.iter().filter_map(|p| p.tournament_team_id) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = teams.entry(team_id)
+            && let Some(team) = state
+                .store
+                .find_tournament_team(team_id)
+                .await
+                .map_err(ApiError::internal)?
+        {
+            entry.insert(team.name);
+        }
+    }
     let mut out = Vec::new();
-    for participant in all.into_iter().filter(|p| {
-        matches!(
-            p.status,
-            ParticipantStatus::Registered | ParticipantStatus::CheckedIn
-        )
-    }) {
+    for participant in participants {
         let team = participant
             .tournament_team_id
             .and_then(|id| teams.get(&id).cloned());
@@ -228,11 +227,6 @@ async fn public_participants(
             status: participant.status,
         });
     }
-    let out: Vec<PublicParticipant> = out
-        .into_iter()
-        .skip(usize::try_from(offset).unwrap_or(0))
-        .take(usize::try_from(limit).unwrap_or(0))
-        .collect();
     Ok(HttpResponse::Ok().json(out))
 }
 

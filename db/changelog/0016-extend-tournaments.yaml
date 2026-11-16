@@ -20,7 +20,7 @@ databaseChangeLog:
                 ADD COLUMN check_in_open_at timestamptz,
                 ADD COLUMN check_in_close_at timestamptz,
                 ADD COLUMN check_in_settled_at timestamptz,
-                ADD COLUMN owner_id uuid REFERENCES users(id) ON DELETE SET NULL,
+                ADD COLUMN owner_id uuid REFERENCES users(id) ON DELETE RESTRICT,
                 ADD COLUMN is_template boolean NOT NULL DEFAULT false;
               -- L'ancien team_size devient une fourchette de titulaires [team_size, team_size] ;
               -- le nombre de remplaçants reste illimité (NULL), comme avant.
@@ -32,6 +32,7 @@ databaseChangeLog:
               UPDATE tournaments SET owner_id = (
                 SELECT id FROM users WHERE role = 'admin' ORDER BY created_at, id LIMIT 1);
               ALTER TABLE tournaments
+                ALTER COLUMN owner_id SET NOT NULL,
                 ADD CONSTRAINT tournaments_mode_check CHECK (mode IN ('online', 'in_person', 'hybrid')),
                 ADD CONSTRAINT tournaments_visibility_check CHECK (visibility IN ('public', 'invitation_only')),
                 ADD CONSTRAINT tournaments_registration_policy_check CHECK (registration_policy IN ('open', 'approval_required')),

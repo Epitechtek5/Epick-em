@@ -500,6 +500,17 @@ async fn the_waiting_list_is_ordered_and_never_exceeds_the_capacity() {
     assert_eq!(second["status"], "waitlisted");
     assert_eq!(third["status"], "waitlisted");
 
+    // Le setter générique ne permet pas à un administrateur de contourner la capacité.
+    let (status, error) = patch(
+        &app,
+        &format!("/tournaments/{tid}/participants/{}", id(&second)),
+        &s.admin,
+        json!({ "status": "registered" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"], "tournament_full");
+
     // Plein : rien à promouvoir.
     let (status, promoted) = post(
         &app,
@@ -556,6 +567,18 @@ async fn the_waiting_list_is_ordered_and_never_exceeds_the_capacity() {
     let (status, error) = register(&app, &full, &s.bob, json!({})).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(error["error"], "tournament_full");
+}
+
+#[actix_web::test]
+async fn an_owner_must_transfer_tournaments_before_deleting_their_account() {
+    let (app, s) = setup().await;
+    open(&app, &s, json!({})).await;
+
+    let (status, _) = delete(&app, "/me/delete", &s.admin).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, profile) = get(&app, "/me", &s.admin).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(profile["id"], s.admin.id);
 }
 
 #[actix_web::test]

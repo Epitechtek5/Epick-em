@@ -308,8 +308,26 @@ pub struct TournamentUpdate {
     pub max_participants: Option<i32>,
     pub team_scoring_mode: Option<TeamScoringMode>,
     pub team_scoring_n: Option<Option<i32>>,
-    /// Remplace l'ensemble de la configuration (l'appelant fusionne avec l'existante).
-    pub settings: Option<TournamentSettings>,
+    /// Ne modifie que les champs de configuration présents dans le PATCH HTTP.
+    pub settings: TournamentSettingsUpdate,
+}
+
+/// Modification partielle de la configuration. Les doubles `Option` distinguent un champ absent
+/// d'un champ explicitement mis à `null`.
+#[derive(Debug, Default, Clone)]
+pub struct TournamentSettingsUpdate {
+    pub mode: Option<TournamentMode>,
+    pub location: Option<Option<String>>,
+    pub visibility: Option<Visibility>,
+    pub rules: Option<Option<String>>,
+    pub team_min_starters: Option<Option<i32>>,
+    pub team_max_starters: Option<Option<i32>>,
+    pub team_max_substitutes: Option<Option<i32>>,
+    pub registration_policy: Option<RegistrationPolicy>,
+    pub waiting_list_enabled: Option<bool>,
+    pub registration_fields: Option<Vec<RegistrationField>>,
+    pub check_in_open_at: Option<Option<String>>,
+    pub check_in_close_at: Option<Option<String>>,
 }
 
 /// Règle de barème à créer ; `coefficient` est renseigné pour `linear`, `points_table` pour
@@ -397,6 +415,18 @@ pub struct RoleAuditEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckInSettlement {
     pub absent: Vec<TournamentParticipant>,
+    pub promoted: Vec<TournamentParticipant>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParticipantMutation {
+    pub participant: TournamentParticipant,
+    pub promoted: Vec<TournamentParticipant>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParticipantRemoval {
+    pub deleted: bool,
     pub promoted: Vec<TournamentParticipant>,
 }
 

@@ -4,13 +4,14 @@
 use super::{
     AuthStore, CheckInSettlement, Game, GameInput, GameUpdate, Invitation, Match, MatchFinish,
     MatchImport, MatchInput, MatchParticipant, MatchScore, MatchStatus, MatchUpdate,
-    ParticipantImport, ParticipantInput, ParticipantStatus, RegistrationField, Role,
-    RoleAssignment, RoleAuditEntry, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat,
-    StatInput, StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput,
-    StepParticipant, StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole,
-    TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentParticipant,
-    TournamentRole, TournamentSettings, TournamentStatus, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
+    ParticipantImport, ParticipantInput, ParticipantMutation, ParticipantRemoval,
+    ParticipantStatus, RegistrationField, Role, RoleAssignment, RoleAuditEntry, ScoringRule,
+    ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step, StepClosing,
+    StepDefinition, StepGroup, StepInput, StepParticipant, StepStart, StoreError, Team, TeamImport,
+    TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput,
+    TournamentParticipant, TournamentRole, TournamentSettings, TournamentStatus, TournamentTeam,
+    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
+    UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
@@ -642,6 +643,39 @@ async fn seats_used(
     .await?)
 }
 
+async fn require_team_room_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: Uuid,
+    role: TeamRole,
+    moving: Option<Uuid>,
+    starter_limit: Option<i32>,
+    substitute_limit: Option<i32>,
+) -> Result<(), StoreError> {
+    let substitutes = role == TeamRole::Substitute;
+    let limit = if substitutes {
+        substitute_limit
+    } else {
+        starter_limit
+    };
+    let Some(limit) = limit else {
+        return Ok(());
+    };
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM tournament_team_member \
+         WHERE tournament_team_id = $1 AND user_id != COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid) \
+         AND (role = 'substitute') = $3",
+    )
+    .bind(team_id)
+    .bind(moving)
+    .bind(substitutes)
+    .fetch_one(&mut **tx)
+    .await?;
+    if count >= i64::from(limit) {
+        return Err(StoreError::TeamCapacity { limit, substitutes });
+    }
+    Ok(())
+}
+
 /// Promeut la liste d'attente (verrou sur le tournoi), dans l'ordre d'inscription.
 async fn promote_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -1097,7 +1131,16 @@ impl AuthStore for PgStore {
                     .execute(&pool)
                     .await
             })
-            .await?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(sqlx::Error::Database(db))
+                if db.constraint() == Some("tournaments_owner_id_fkey") =>
+            {
+                return Err(StoreError::TournamentOwner);
+            }
+            Err(err) => return Err(err.into()),
+        };
         Ok(result.rows_affected() > 0)
     }
 
@@ -1846,7 +1889,21 @@ impl AuthStore for PgStore {
         id: Uuid,
         user_id: Uuid,
         role: TeamRole,
+        starter_limit: Option<i32>,
+        substitute_limit: Option<i32>,
     ) -> Result<Option<TournamentTeamMember>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        if !sqlx::query_scalar::<_, bool>(
+            "SELECT true FROM tournament_teams WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+        require_team_room_in(&mut tx, id, role, None, starter_limit, substitute_limit).await?;
         let row = sqlx::query_as::<_, (Uuid, String)>(
             "INSERT INTO tournament_team_member (tournament_team_id, tournament_id, user_id, role) \
              SELECT id, tournament_id, $2, $3 FROM tournament_teams WHERE id = $1 \
@@ -1855,10 +1912,13 @@ impl AuthStore for PgStore {
         .bind(id)
         .bind(user_id)
         .bind(role.as_str())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await;
         match row {
-            Ok(row) => row.map(tournament_member).transpose(),
+            Ok(row) => {
+                tx.commit().await?;
+                row.map(tournament_member).transpose()
+            }
             // Le compte n'existe pas.
             Err(err) if is_foreign_key_violation(&err) => Ok(None),
             Err(err) => Err(team_conflict(err)),
@@ -1870,18 +1930,40 @@ impl AuthStore for PgStore {
         id: Uuid,
         user_id: Uuid,
         role: TeamRole,
+        starter_limit: Option<i32>,
+        substitute_limit: Option<i32>,
     ) -> Result<Option<TournamentTeamMember>, StoreError> {
-        sqlx::query_as::<_, (Uuid, String)>(
+        let mut tx = self.pool.begin().await?;
+        if !sqlx::query_scalar::<_, bool>(
+            "SELECT true FROM tournament_teams WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+        require_team_room_in(
+            &mut tx,
+            id,
+            role,
+            Some(user_id),
+            starter_limit,
+            substitute_limit,
+        )
+        .await?;
+        let row = sqlx::query_as::<_, (Uuid, String)>(
             "UPDATE tournament_team_member SET role = $3 \
              WHERE tournament_team_id = $1 AND user_id = $2 RETURNING user_id, role",
         )
         .bind(id)
         .bind(user_id)
         .bind(role.as_str())
-        .fetch_optional(&self.pool)
-        .await?
-        .map(tournament_member)
-        .transpose()
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        row.map(tournament_member).transpose()
     }
 
     async fn remove_tournament_team_member(
@@ -1988,8 +2070,7 @@ impl AuthStore for PgStore {
         id: Uuid,
         update: TournamentUpdate,
     ) -> Result<Option<Tournament>, StoreError> {
-        let has_settings = update.settings.is_some();
-        let settings = update.settings.unwrap_or_else(TournamentSettings::solo);
+        let settings = update.settings;
         sqlx::query_as::<_, TournamentRow>(&format!(
             "UPDATE tournaments SET \
                  name = COALESCE($2, name), \
@@ -2002,17 +2083,17 @@ impl AuthStore for PgStore {
                  team_scoring_mode = COALESCE($12, team_scoring_mode), \
                  team_scoring_n = CASE WHEN $13 THEN $14 ELSE team_scoring_n END, \
                  mode = CASE WHEN $15 THEN $16 ELSE mode END, \
-                 location = CASE WHEN $15 THEN $17 ELSE location END, \
-                 visibility = CASE WHEN $15 THEN $18 ELSE visibility END, \
-                 rules = CASE WHEN $15 THEN $19 ELSE rules END, \
-                 team_min_starters = CASE WHEN $15 THEN $20 ELSE team_min_starters END, \
-                 team_max_starters = CASE WHEN $15 THEN $21 ELSE team_max_starters END, \
-                 team_max_substitutes = CASE WHEN $15 THEN $22 ELSE team_max_substitutes END, \
-                 registration_policy = CASE WHEN $15 THEN $23 ELSE registration_policy END, \
-                 waiting_list_enabled = CASE WHEN $15 THEN $24 ELSE waiting_list_enabled END, \
-                 registration_fields = CASE WHEN $15 THEN $25::jsonb ELSE registration_fields END, \
-                 check_in_open_at = CASE WHEN $15 THEN $26::timestamptz ELSE check_in_open_at END, \
-                 check_in_close_at = CASE WHEN $15 THEN $27::timestamptz ELSE check_in_close_at END, \
+                 location = CASE WHEN $17 THEN $18 ELSE location END, \
+                 visibility = CASE WHEN $19 THEN $20 ELSE visibility END, \
+                 rules = CASE WHEN $21 THEN $22 ELSE rules END, \
+                 team_min_starters = CASE WHEN $23 THEN $24 ELSE team_min_starters END, \
+                 team_max_starters = CASE WHEN $25 THEN $26 ELSE team_max_starters END, \
+                 team_max_substitutes = CASE WHEN $27 THEN $28 ELSE team_max_substitutes END, \
+                 registration_policy = CASE WHEN $29 THEN $30 ELSE registration_policy END, \
+                 waiting_list_enabled = CASE WHEN $31 THEN $32 ELSE waiting_list_enabled END, \
+                 registration_fields = CASE WHEN $33 THEN $34::jsonb ELSE registration_fields END, \
+                 check_in_open_at = CASE WHEN $35 THEN $36::timestamptz ELSE check_in_open_at END, \
+                 check_in_close_at = CASE WHEN $37 THEN $38::timestamptz ELSE check_in_close_at END, \
                  updated_at = now() \
              WHERE id = $1 RETURNING {}",
             tournament_columns()
@@ -2031,19 +2112,30 @@ impl AuthStore for PgStore {
         .bind(update.team_scoring_mode.map(|mode| mode.as_str()))
         .bind(update.team_scoring_n.is_some())
         .bind(update.team_scoring_n.flatten())
-        .bind(has_settings)
-        .bind(settings.mode.as_str())
-        .bind(settings.location)
-        .bind(settings.visibility.as_str())
-        .bind(settings.rules)
-        .bind(settings.team_min_starters)
-        .bind(settings.team_max_starters)
-        .bind(settings.team_max_substitutes)
-        .bind(settings.registration_policy.as_str())
+        .bind(settings.mode.is_some())
+        .bind(settings.mode.map(|value| value.as_str()))
+        .bind(settings.location.is_some())
+        .bind(settings.location.flatten())
+        .bind(settings.visibility.is_some())
+        .bind(settings.visibility.map(|value| value.as_str()))
+        .bind(settings.rules.is_some())
+        .bind(settings.rules.flatten())
+        .bind(settings.team_min_starters.is_some())
+        .bind(settings.team_min_starters.flatten())
+        .bind(settings.team_max_starters.is_some())
+        .bind(settings.team_max_starters.flatten())
+        .bind(settings.team_max_substitutes.is_some())
+        .bind(settings.team_max_substitutes.flatten())
+        .bind(settings.registration_policy.is_some())
+        .bind(settings.registration_policy.map(|value| value.as_str()))
+        .bind(settings.waiting_list_enabled.is_some())
         .bind(settings.waiting_list_enabled)
-        .bind(fields_json(&settings.registration_fields))
-        .bind(settings.check_in_open_at)
-        .bind(settings.check_in_close_at)
+        .bind(settings.registration_fields.is_some())
+        .bind(settings.registration_fields.map(|fields| fields_json(&fields)))
+        .bind(settings.check_in_open_at.is_some())
+        .bind(settings.check_in_open_at.flatten())
+        .bind(settings.check_in_close_at.is_some())
+        .bind(settings.check_in_close_at.flatten())
         .fetch_optional(&self.pool)
         .await
         .map_err(tournament_conflict)?
@@ -2194,6 +2286,28 @@ impl AuthStore for PgStore {
         .transpose()
     }
 
+    async fn list_active_participants(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentParticipant>, StoreError> {
+        sqlx::query_as::<_, ParticipantRow>(&format!(
+            "SELECT {} FROM tournament_participant WHERE tournament_id = $1 \
+             AND status IN ('registered', 'checked_in') \
+             ORDER BY registered_at, id LIMIT $2 OFFSET $3",
+            participant_columns()
+        ))
+        .bind(tournament_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(participant)
+        .collect()
+    }
+
     async fn add_participant(
         &self,
         input: ParticipantInput,
@@ -2243,25 +2357,101 @@ impl AuthStore for PgStore {
         &self,
         id: Uuid,
         status: ParticipantStatus,
-    ) -> Result<Option<TournamentParticipant>, StoreError> {
-        sqlx::query_as::<_, ParticipantRow>(&format!(
+    ) -> Result<Option<ParticipantMutation>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let Some(tournament_id) = sqlx::query_scalar::<_, Uuid>(
+            "SELECT tournament_id FROM tournament_participant WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let (max, waiting, tournament_status) = sqlx::query_as::<_, (i32, bool, String)>(
+            "SELECT max_participants, waiting_list_enabled, status FROM tournaments WHERE id = $1 FOR UPDATE",
+        )
+        .bind(tournament_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let Some(previous) = sqlx::query_scalar::<_, String>(
+            "SELECT status FROM tournament_participant WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let occupied = |value: &str| matches!(value, "registered" | "checked_in" | "disqualified");
+        if occupied(status.as_str())
+            && !occupied(&previous)
+            && seats_used(&mut tx, tournament_id).await? >= i64::from(max)
+        {
+            return Err(StoreError::TournamentFull);
+        }
+        let row = sqlx::query_as::<_, ParticipantRow>(&format!(
             "UPDATE tournament_participant SET status = $2 WHERE id = $1 RETURNING {}",
             participant_columns()
         ))
         .bind(id)
         .bind(status.as_str())
-        .fetch_optional(&self.pool)
-        .await?
-        .map(participant)
-        .transpose()
+        .fetch_one(&mut *tx)
+        .await?;
+        let promoted = if occupied(&previous)
+            && !occupied(status.as_str())
+            && waiting
+            && matches!(tournament_status.as_str(), "draft" | "registration")
+        {
+            promote_in(&mut tx, tournament_id).await?
+        } else {
+            Vec::new()
+        };
+        tx.commit().await?;
+        Ok(Some(ParticipantMutation {
+            participant: participant(row)?,
+            promoted,
+        }))
     }
 
-    async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError> {
-        let result = sqlx::query("DELETE FROM tournament_participant WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected() > 0)
+    async fn delete_participant(&self, id: Uuid) -> Result<ParticipantRemoval, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let Some(tournament_id) = sqlx::query_scalar::<_, Uuid>(
+            "SELECT tournament_id FROM tournament_participant WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(ParticipantRemoval::default());
+        };
+        let (waiting, tournament_status) = sqlx::query_as::<_, (bool, String)>(
+            "SELECT waiting_list_enabled, status FROM tournaments WHERE id = $1 FOR UPDATE",
+        )
+        .bind(tournament_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let previous = sqlx::query_scalar::<_, String>(
+            "DELETE FROM tournament_participant WHERE id = $1 RETURNING status",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let promoted = if previous
+            .as_deref()
+            .is_some_and(|value| matches!(value, "registered" | "checked_in" | "disqualified"))
+            && waiting
+            && matches!(tournament_status.as_str(), "draft" | "registration")
+        {
+            promote_in(&mut tx, tournament_id).await?
+        } else {
+            Vec::new()
+        };
+        tx.commit().await?;
+        Ok(ParticipantRemoval {
+            deleted: previous.is_some(),
+            promoted,
+        })
     }
 
     async fn approve_participant(

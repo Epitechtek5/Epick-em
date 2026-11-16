@@ -31,11 +31,12 @@ pub use self::teams::{
 };
 pub use self::tournaments::{
     CheckInSettlement, FieldType, Invitation, ParticipantImport, ParticipantInput,
-    ParticipantStatus, ParticipantType, RegistrationField, RegistrationPolicy, RoleAssignment,
-    RoleAuditAction, RoleAuditEntry, ScoringMode, ScoringRule, ScoringRuleDefinition,
-    ScoringRuleImport, ScoringRuleInput, TeamScoringMode, Tournament, TournamentImport,
-    TournamentInput, TournamentMode, TournamentParticipant, TournamentRole, TournamentSettings,
-    TournamentStatus, TournamentUpdate, Visibility, no_responses,
+    ParticipantMutation, ParticipantRemoval, ParticipantStatus, ParticipantType, RegistrationField,
+    RegistrationPolicy, RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringMode, ScoringRule,
+    ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, TeamScoringMode, Tournament,
+    TournamentImport, TournamentInput, TournamentMode, TournamentParticipant, TournamentRole,
+    TournamentSettings, TournamentSettingsUpdate, TournamentStatus, TournamentUpdate, Visibility,
+    no_responses,
 };
 
 use async_trait::async_trait;
@@ -138,6 +139,11 @@ pub enum StoreError {
     TeamAlreadyRegistered,
     /// Le joueur est déjà dans une équipe de ce tournoi.
     PlayerAlreadyRegistered,
+    /// La composition maximale de l'équipe est atteinte pour ce rôle.
+    TeamCapacity {
+        limit: i32,
+        substitutes: bool,
+    },
     /// Le nom de tournoi existe déjà pour ce jeu (sans tenir compte de la casse).
     TournamentNameTaken,
     /// Une règle de barème existe déjà pour cette statistique dans ce tournoi.
@@ -146,6 +152,8 @@ pub enum StoreError {
     AlreadyParticipant,
     /// Le tournoi a atteint son nombre maximum de participants.
     TournamentFull,
+    /// Le compte possède encore au moins un tournoi et doit en transférer la propriété.
+    TournamentOwner,
     /// L'inscrit n'est pas dans le statut attendu pour cette opération.
     ParticipantState,
     /// Une étape occupe déjà cette position dans le tournoi.
@@ -172,12 +180,24 @@ impl fmt::Display for StoreError {
             StoreError::PlayerAlreadyRegistered => {
                 f.write_str("joueur déjà dans une équipe du tournoi")
             }
+            StoreError::TeamCapacity { limit, substitutes } => write!(
+                f,
+                "équipe limitée à {limit} {}",
+                if *substitutes {
+                    "remplaçants"
+                } else {
+                    "titulaires"
+                }
+            ),
             StoreError::TournamentNameTaken => f.write_str("nom de tournoi déjà pris"),
             StoreError::ScoringRuleTaken => {
                 f.write_str("règle de barème déjà définie pour cette statistique")
             }
             StoreError::AlreadyParticipant => f.write_str("participant déjà inscrit au tournoi"),
             StoreError::TournamentFull => f.write_str("tournoi complet"),
+            StoreError::TournamentOwner => {
+                f.write_str("transfert de propriété requis avant suppression")
+            }
             StoreError::ParticipantState => f.write_str("l'inscrit n'est pas dans l'état attendu"),
             StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
@@ -438,6 +458,8 @@ pub trait AuthStore: Send + Sync {
         id: Uuid,
         user_id: Uuid,
         role: TeamRole,
+        starter_limit: Option<i32>,
+        substitute_limit: Option<i32>,
     ) -> Result<Option<TournamentTeamMember>, StoreError>;
 
     /// Change le rôle d'un membre ; `None` s'il n'est pas dans l'équipe.
@@ -446,6 +468,8 @@ pub trait AuthStore: Send + Sync {
         id: Uuid,
         user_id: Uuid,
         role: TeamRole,
+        starter_limit: Option<i32>,
+        substitute_limit: Option<i32>,
     ) -> Result<Option<TournamentTeamMember>, StoreError>;
 
     /// Retire un membre de l'équipe de tournoi ; `false` s'il n'y était pas.
@@ -523,6 +547,14 @@ pub trait AuthStore: Send + Sync {
         offset: i64,
     ) -> Result<Vec<TournamentParticipant>, StoreError>;
 
+    /// Inscrits publiquement visibles (`registered` ou `checked_in`), paginés en base.
+    async fn list_active_participants(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TournamentParticipant>, StoreError>;
+
     async fn find_participant(&self, id: Uuid)
     -> Result<Option<TournamentParticipant>, StoreError>;
 
@@ -543,10 +575,10 @@ pub trait AuthStore: Send + Sync {
         &self,
         id: Uuid,
         status: ParticipantStatus,
-    ) -> Result<Option<TournamentParticipant>, StoreError>;
+    ) -> Result<Option<ParticipantMutation>, StoreError>;
 
     /// Supprime l'inscription ; `false` si elle n'existait pas.
-    async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError>;
+    async fn delete_participant(&self, id: Uuid) -> Result<ParticipantRemoval, StoreError>;
 
     /// Approuve un inscrit `pending` : `registered` s'il reste une place, sinon `waitlisted`
     /// (liste d'attente activée) ou [`StoreError::TournamentFull`]. `None` s'il n'existe pas,

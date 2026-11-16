@@ -349,12 +349,11 @@ async fn update(
 }
 
 async fn delete(state: &AppState, id: Uuid) -> Result<(), ApiError> {
-    if state
-        .store
-        .delete_user(id)
-        .await
-        .map_err(ApiError::internal)?
-    {
+    let deleted = state.store.delete_user(id).await.map_err(|err| match err {
+        StoreError::TournamentOwner => ApiError::Conflict,
+        other => ApiError::internal(other),
+    })?;
+    if deleted {
         Ok(())
     } else {
         Err(ApiError::NotFound)

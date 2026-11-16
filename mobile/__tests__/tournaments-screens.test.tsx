@@ -49,11 +49,25 @@ const tournament = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo',
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 32,
   team_scoring_mode: 'none',
   team_scoring_n: null,
   status: 'draft',
+  owner_id: null,
+  is_template: false,
+  check_in_settled_at: null,
   created_at: '',
   updated_at: '',
 };
@@ -133,6 +147,7 @@ it('shows a registered team member their enrollment without owner actions', asyn
     tournament_team_id: '44444444-4444-4444-8444-444444444444',
     status: 'registered' as const,
     registered_at: '',
+    responses: {},
   };
   jest.mocked(useGameResource).mockReturnValue({
     data: {
@@ -140,7 +155,8 @@ it('shows a registered team member their enrollment without owner actions', asyn
         ...tournament,
         status: 'registration',
         participant_type: 'team',
-        team_size: 2,
+        team_min_starters: 2,
+        team_max_starters: 2,
       },
       gameName: 'Counter-Strike',
       participants: [participant],
@@ -244,6 +260,7 @@ it('checks in the signed-in participant through the API', async () => {
     tournament_team_id: null,
     status: 'registered' as const,
     registered_at: '',
+    responses: {},
   };
   jest.mocked(tournamentApi.checkInParticipant).mockResolvedValue(participant);
   jest.mocked(useGameResource).mockReturnValue({
@@ -285,6 +302,7 @@ it('registers the current solo player without requiring a team', async () => {
     tournament_team_id: null,
     status: 'registered',
     registered_at: '',
+    responses: {},
   });
   jest.mocked(useGameResource).mockReturnValue({
     data: {
@@ -314,6 +332,7 @@ it('registers the current solo player without requiring a team', async () => {
     'token',
     id,
     undefined,
+    {},
   );
 });
 
@@ -334,7 +353,8 @@ it('explains why an owned team with the wrong starter count is ineligible', asyn
         ...tournament,
         status: 'registration',
         participant_type: 'team',
-        team_size: 3,
+        team_min_starters: 3,
+        team_max_starters: 3,
       },
       participants: [],
       allParticipants: [],
