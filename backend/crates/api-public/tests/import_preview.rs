@@ -341,6 +341,88 @@ async fn a_preview_is_single_use() {
 }
 
 #[actix_web::test]
+async fn concurrent_confirmations_apply_a_preview_once() {
+    let (app, s) = setup().await;
+    let (_, body) = preview(&app, &s.admin, &document(vec![bracket("Cup")])).await;
+    let id = body["preview_id"].clone();
+    let (first, second) = tokio::join!(
+        apply(&app, &s.admin, &id, true),
+        apply(&app, &s.admin, &id, true)
+    );
+    let mut statuses = [first.0, second.0];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::GONE]);
+}
+
+#[actix_web::test]
+async fn emptying_an_existing_scoring_needs_a_confirmation() {
+    let (app, s) = setup().await;
+    let only_rules = |rules: Value| {
+        let mut t = bracket("Rules");
+        t["scoring_rules"] = rules;
+        for key in ["participants", "steps"] {
+            t.as_object_mut().unwrap().remove(key);
+        }
+        document(vec![t])
+    };
+    let rules = json!([{ "stat": "kills", "mode": "linear", "coefficient": 1.5 }]);
+    let (_, body) = preview(&app, &s.admin, &only_rules(rules)).await;
+    assert_eq!(body["requires_confirmation"], false, "{body}");
+    apply(&app, &s.admin, &body["preview_id"], false).await;
+
+    let (_, body) = preview(&app, &s.admin, &only_rules(json!([]))).await;
+    assert_eq!(body["valid"], true, "{body}");
+    assert_eq!(body["requires_confirmation"], true, "{body}");
+    let id = body["preview_id"].clone();
+    let (status, error) = apply(&app, &s.admin, &id, false).await;
+    assert_eq!(
+        (status, error["error"].as_str().unwrap()),
+        (StatusCode::CONFLICT, "import_confirmation_required")
+    );
+    assert_eq!(apply(&app, &s.admin, &id, true).await.0, StatusCode::OK);
+}
+
+#[actix_web::test]
+async fn a_later_step_follows_the_qualifications_recomputed_from_results() {
+    let (app, s) = setup().await;
+    // Le fichier qualifie player0 et player1, mais le match de l'étape 1 qualifie player2 et
+    // player3 : l'étape 2, déjà lancée avec player0 et player1, est refusée.
+    let member = |user: &str, rank: i32, status: &str| {
+        json!({ "user": user, "final_rank": rank, "status": status })
+    };
+    let mut t = bracket("Qualifs");
+    t["steps"] = json!([
+        {
+            "position": 1, "format": "pool", "match_type": "ffa",
+            "group_count": 1, "group_size": 4, "advance_per_group": 2, "status": "finished",
+            "groups": [{ "index": 1, "participants": [
+                member("player0", 1, "qualified"), member("player1", 2, "qualified"),
+                member("player2", 3, "eliminated"), member("player3", 4, "eliminated"),
+            ] }],
+            "matches": [{ "group": 1, "status": "finished", "participants": [
+                { "user": "player0", "stats": { "kills": 1 } },
+                { "user": "player1", "stats": { "kills": 0 } },
+                { "user": "player2", "stats": { "kills": 5 } },
+                { "user": "player3", "stats": { "kills": 4 } },
+            ] }],
+        },
+        {
+            "position": 2, "format": "single_elim", "match_type": "duel",
+            "group_count": 1, "group_size": 2, "advance_per_group": 1, "status": "ongoing",
+            "groups": [{ "index": 1, "participants": [{ "user": "player0" }, { "user": "player1" }] }],
+        },
+    ]);
+    let (_, body) = preview(&app, &s.admin, &document(vec![t])).await;
+    assert_eq!(body["valid"], false, "{body}");
+    assert!(
+        body["errors"]
+            .to_string()
+            .contains("n'est pas qualifié à l'étape 1 d'après ses résultats"),
+        "{body}"
+    );
+}
+
+#[actix_web::test]
 async fn replacing_existing_data_needs_an_explicit_confirmation() {
     let (app, s) = setup().await;
     let (_, body) = preview(&app, &s.admin, &document(vec![bracket("Cup")])).await;
@@ -527,6 +609,8 @@ async fn a_failing_plan_leaves_existing_data_unchanged() {
         matches: Vec::new(),
     };
     use api_public::store::AuthStore;
+    let id: uuid::Uuid = tournament["id"].as_str().unwrap().parse().unwrap();
+    let expected = Some(s.store.tournament_digest(id).await.unwrap());
     let result = s
         .store
         .apply_import(ImportPlan {
@@ -535,6 +619,7 @@ async fn a_failing_plan_leaves_existing_data_unchanged() {
                 teams: Vec::new(),
                 participants: Vec::new(),
                 steps: vec![step(), step()],
+                expected,
             }],
         })
         .await;

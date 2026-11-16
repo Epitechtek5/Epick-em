@@ -265,12 +265,15 @@ fn problems(
         if status == MatchStatus::Finished {
             match settle(&members) {
                 Err(problem) => reasons.push(format!("participants : {problem}")),
-                // Sans rang, résultat ni points dans le fichier, le vainqueur dépend du barème : il
-                // n'est contrôlé qu'à la planification.
+                // Sans rang ni résultat, le vainqueur se déduit des points. Ceux d'un participant
+                // qui a des statistiques sont recalculés d'après le barème : le vainqueur n'est
+                // alors contrôlé qu'à la planification, sur les points recalculés.
                 Ok(scores)
                     if members.iter().all(|m| m.rank.is_some())
                         || members.iter().any(|m| m.result.is_some())
-                        || item.participants.iter().all(|p| p.points.is_some()) =>
+                        || item.participants.iter().all(|p| {
+                            p.points.is_some() && p.stats().as_object().is_none_or(|o| o.is_empty())
+                        }) =>
                 {
                     let mut won = scores
                         .iter()
@@ -1019,6 +1022,25 @@ mod tests {
     }
 
     #[test]
+    fn progression_uses_the_points_recomputed_from_the_scoring() {
+        // Les points du fichier (0 partout) disent égalité ; le barème donne 3 contre 0.
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        let items = vec![
+            json!({ "group": 1, "round": 1, "status": "finished", "next": 1, "participants": [
+                { "user": "ann", "stats": { "kills": 2 }, "points": 0 },
+                { "user": "bob", "stats": { "kills": 0 }, "points": 0 },
+            ] }),
+            json!({ "group": 1, "round": 2 }),
+        ];
+        assert_eq!(problems_of(&single, items.clone()), "");
+        let plan = planned(&single, items).unwrap();
+        assert_eq!(
+            plan.matches[1].participants[0].who,
+            Entrant::User(Uuid::from_u128(1))
+        );
+    }
+
+    #[test]
     fn winners_advance_once_in_an_elimination() {
         let single = scope(MatchType::Duel, StepFormat::SingleElim);
         let semi = |a: &str, b: &str| {
@@ -1048,10 +1070,12 @@ mod tests {
     #[test]
     fn progression_order_and_consistency_are_checked() {
         let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        // Les rangs du fichier désignent le vainqueur dès la validation (des points accompagnés de
+        // statistiques sont recalculés : ils ne sont contrôlés qu'à la planification).
         let semi = |status: &str| {
             json!({ "group": 1, "status": status, "next": 1, "participants": [
-                { "user": "ann", "stats": { "kills": 3 }, "points": 4.5 },
-                { "user": "bob", "stats": { "kills": 1 }, "points": 1.5 },
+                { "user": "ann", "stats": { "kills": 3 }, "rank": 1 },
+                { "user": "bob", "stats": { "kills": 1 }, "rank": 2 },
             ] })
         };
         // La finale se joue avant la fin de la demi-finale.
@@ -1089,8 +1113,8 @@ mod tests {
         assert!(found.contains("plus de place"), "{found}");
         // Un match d'élimination terminé à égalité n'a pas de vainqueur.
         let tie = json!({ "group": 1, "status": "finished", "next": 1, "participants": [
-            { "user": "ann", "stats": { "kills": 2 }, "points": 3.0 },
-            { "user": "bob", "stats": { "kills": 2 }, "points": 3.0 },
+            { "user": "ann", "stats": { "kills": 2 }, "rank": 1 },
+            { "user": "bob", "stats": { "kills": 2 }, "rank": 1 },
         ] });
         let found = problems_of(&single, vec![tie, json!({ "group": 1 })]);
         assert!(found.contains("un seul vainqueur"), "{found}");

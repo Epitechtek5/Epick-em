@@ -2674,6 +2674,10 @@ impl AuthStore for PgStore {
         Ok(true)
     }
 
+    async fn tournament_digest(&self, tournament_id: Uuid) -> Result<String, StoreError> {
+        tournament_digest_in(&self.pool, tournament_id).await
+    }
+
     async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
         let mut tx = self.pool.begin().await?;
         let mut result = Vec::with_capacity(plan.tournaments.len());
@@ -2683,20 +2687,31 @@ impl AuthStore for PgStore {
                 teams,
                 participants,
                 steps,
+                expected,
             } = tournament_plan;
             let game_id = import.input.game_id;
             // Le verrou d'un tournoi existant interdit toute modification concurrente pendant
-            // l'import ; son statut est revérifié sous ce verrou.
-            let locked = sqlx::query_scalar::<_, String>(
-                "SELECT status FROM tournaments WHERE game_id = $1 AND lower(name) = lower($2) \
+            // l'import ; son statut et tout son contenu sont revérifiés sous ce verrou.
+            let locked = sqlx::query_as::<_, (Uuid, String)>(
+                "SELECT id, status FROM tournaments WHERE game_id = $1 AND lower(name) = lower($2) \
                  FOR UPDATE",
             )
             .bind(game_id)
             .bind(&import.input.name)
             .fetch_optional(&mut *tx)
             .await?;
-            if matches!(locked.as_deref(), Some("ongoing" | "finished")) {
+            if matches!(
+                locked.as_ref().map(|(_, s)| s.as_str()),
+                Some("ongoing" | "finished")
+            ) {
                 return Err(StoreError::TournamentLocked);
+            }
+            let found = match &locked {
+                Some((id, _)) => Some(tournament_digest_in(&mut *tx, *id).await?),
+                None => None,
+            };
+            if found != expected {
+                return Err(StoreError::ImportStale);
             }
             let (saved, created) = upsert_tournament_in(&mut tx, import).await?;
             let id = saved.id;
@@ -2989,4 +3004,41 @@ impl AuthStore for PgStore {
         tx.commit().await?;
         Ok(true)
     }
+}
+
+/// Empreinte du contenu complet d'un tournoi, lue par `executor` (le pool, ou la transaction
+/// d'un import pour la revérifier sous verrou). Chaque table est réduite à ses lignes JSON triées.
+async fn tournament_digest_in<'e, E>(executor: E, tournament_id: Uuid) -> Result<String, StoreError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let steps = "SELECT id FROM step WHERE tournament_id = $1";
+    let rows = |table: &str, filter: &str| {
+        format!(
+            "(SELECT coalesce(string_agg(x, ',' ORDER BY x), '') FROM \
+               (SELECT row_to_json(r)::text AS x FROM {table} r WHERE {filter}) s)"
+        )
+    };
+    let parts = [
+        rows("tournaments", "r.id = $1"),
+        rows("scoring_rule", "r.tournament_id = $1"),
+        rows("tournament_participant", "r.tournament_id = $1"),
+        rows("tournament_teams", "r.tournament_id = $1"),
+        rows("tournament_team_member", "r.tournament_id = $1"),
+        rows("step", "r.tournament_id = $1"),
+        rows("step_group", &format!("r.step_id IN ({steps})")),
+        rows("step_participant", &format!("r.step_id IN ({steps})")),
+        rows("match", &format!("r.step_id IN ({steps})")),
+        rows(
+            "match_participant",
+            &format!("r.match_id IN (SELECT id FROM match WHERE step_id IN ({steps}))"),
+        ),
+    ];
+    Ok(sqlx::query_scalar::<_, String>(&format!(
+        "SELECT md5(concat_ws('|', {}))",
+        parts.join(", ")
+    ))
+    .bind(tournament_id)
+    .fetch_one(executor)
+    .await?)
 }

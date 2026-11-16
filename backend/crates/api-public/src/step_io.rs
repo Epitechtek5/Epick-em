@@ -883,6 +883,35 @@ impl StoreSteps {
                     }
                 }
             }
+            // Les qualifications de l'étape précédente viennent d'être recalculées d'après ses
+            // matchs : les participants de cette étape doivent en être, pas seulement les
+            // qualifiés que déclarait le fichier.
+            if let Some(previous) = planned
+                .last()
+                .filter(|previous: &&StepPlan| previous.status == StepStatus::Finished)
+            {
+                let qualified: HashSet<Entrant> = previous
+                    .groups
+                    .iter()
+                    .flatten()
+                    .filter(|m| m.status == StepParticipantStatus::Qualified)
+                    .map(|m| m.who)
+                    .collect();
+                if let Some(intruder) = members
+                    .iter()
+                    .flatten()
+                    .find(|m| !qualified.contains(&m.who))
+                {
+                    let who = entrants
+                        .iter()
+                        .find(|(_, e)| **e == intruder.who)
+                        .map_or_else(|| "un participant".to_string(), |(who, _)| who.to_string());
+                    return Err(StoreError::InvalidPlan(format!(
+                        "{label} : {who} n'est pas qualifié à l'étape {} d'après ses résultats.",
+                        previous.definition.position
+                    )));
+                }
+            }
             planned.push(StepPlan {
                 definition,
                 status,

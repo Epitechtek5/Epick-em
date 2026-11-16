@@ -2006,6 +2006,10 @@ impl AuthStore for MemoryStore {
         Ok(true)
     }
 
+    async fn tournament_digest(&self, tournament_id: Uuid) -> Result<String, StoreError> {
+        Ok(self.state().tournament_digest(tournament_id))
+    }
+
     async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
         let mut state = self.state();
         // Tout ou rien : l'état d'avant est restauré si une écriture échoue.
@@ -2204,6 +2208,76 @@ impl State {
     }
 
     /// Écrit tout le plan d'import ; l'appelant restaure l'état en cas d'erreur.
+    /// Empreinte de tout le contenu d'un tournoi (voir `AuthStore::tournament_digest`).
+    fn tournament_digest(&self, id: Uuid) -> String {
+        use sha2::{Digest, Sha256};
+        let steps: HashSet<Uuid> = self
+            .steps
+            .iter()
+            .filter(|s| s.tournament_id == id)
+            .map(|s| s.id)
+            .collect();
+        let matches: HashSet<Uuid> = self
+            .matches
+            .iter()
+            .filter(|m| steps.contains(&m.step_id))
+            .map(|m| m.id)
+            .collect();
+        let participants: Vec<_> = self
+            .participants
+            .iter()
+            .filter(|p| p.tournament_id == id)
+            .collect();
+        let mut points: Vec<_> = participants
+            .iter()
+            .filter_map(|p| self.points.get(&p.id).map(|v| (p.id, *v)))
+            .collect();
+        points.sort_by_key(|(id, _)| *id);
+        let content = format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            self.tournaments.iter().find(|t| t.id == id),
+            self.scoring_rules
+                .iter()
+                .filter(|r| r.tournament_id == id)
+                .collect::<Vec<_>>(),
+            participants,
+            points,
+            self.tournament_teams
+                .iter()
+                .filter(|t| t.tournament_id == id)
+                .collect::<Vec<_>>(),
+            self.tournament_team_members
+                .iter()
+                .filter(|(team, _)| {
+                    self.tournament_teams
+                        .iter()
+                        .any(|t| t.id == *team && t.tournament_id == id)
+                })
+                .collect::<Vec<_>>(),
+            self.steps
+                .iter()
+                .filter(|s| steps.contains(&s.id))
+                .collect::<Vec<_>>(),
+            self.step_groups
+                .iter()
+                .filter(|g| steps.contains(&g.step_id))
+                .collect::<Vec<_>>(),
+            self.step_participants
+                .iter()
+                .filter(|p| steps.contains(&p.step_id))
+                .collect::<Vec<_>>(),
+            self.matches
+                .iter()
+                .filter(|m| matches.contains(&m.id))
+                .collect::<Vec<_>>(),
+            self.match_participants
+                .iter()
+                .filter(|p| matches.contains(&p.match_id))
+                .collect::<Vec<_>>(),
+        );
+        format!("{:x}", Sha256::digest(content.as_bytes()))
+    }
+
     fn apply_import(&mut self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
         let mut result = Vec::with_capacity(plan.tournaments.len());
         for tournament_plan in plan.tournaments {
@@ -2212,18 +2286,27 @@ impl State {
                 teams,
                 participants,
                 steps,
+                expected,
             } = tournament_plan;
             let game_id = import.input.game_id;
-            let locked = self.tournaments.iter().any(|t| {
-                t.game_id == game_id
-                    && t.name.to_lowercase() == import.input.name.to_lowercase()
-                    && matches!(
-                        t.status,
-                        TournamentStatus::Ongoing | TournamentStatus::Finished
-                    )
-            });
-            if locked {
+            let existing = self
+                .tournaments
+                .iter()
+                .find(|t| {
+                    t.game_id == game_id
+                        && t.name.to_lowercase() == import.input.name.to_lowercase()
+                })
+                .cloned();
+            if existing.as_ref().is_some_and(|t| {
+                matches!(
+                    t.status,
+                    TournamentStatus::Ongoing | TournamentStatus::Finished
+                )
+            }) {
                 return Err(StoreError::TournamentLocked);
+            }
+            if existing.map(|t| self.tournament_digest(t.id)) != expected {
+                return Err(StoreError::ImportStale);
             }
             let (saved, created) = self.upsert_tournament(import);
             let id = saved.id;

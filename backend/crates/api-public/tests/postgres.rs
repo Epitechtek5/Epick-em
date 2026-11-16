@@ -2770,6 +2770,7 @@ fn import_plan(
                 })
                 .collect(),
             steps: (0..steps).map(|_| step()).collect(),
+            expected: None,
         }],
     }
 }
@@ -2815,17 +2816,28 @@ async fn apply_import_is_one_transaction_with_seeds_and_lock() {
             4
         );
 
+        // L'état vu par l'aperçu est revérifié sous verrou : un plan qui croit le tournoi absent,
+        // ou qui en attend un autre état, est refusé sans rien écrire.
+        let stale = store
+            .apply_import(import_plan(game_id, &name, "périmé", &users, 1))
+            .await;
+        assert!(matches!(stale, Err(StoreError::ImportStale)), "{stale:?}");
+        let mut stale = import_plan(game_id, &name, "périmé", &users, 1);
+        stale.tournaments[0].expected = Some("autre état".into());
+        let stale = store.apply_import(stale).await;
+        assert!(matches!(stale, Err(StoreError::ImportStale)), "{stale:?}");
+        let digest = store.tournament_digest(tournament.id).await.unwrap();
+        let existing = |description: &str, steps: usize| {
+            let mut plan = import_plan(game_id, &name, description, &users, steps);
+            plan.tournaments[0].expected = Some(digest.clone());
+            plan
+        };
+
         // Deux étapes à la même position : l'écriture échoue en cours de route et rien ne change,
         // ni le tournoi mis à jour (description), ni ses étapes ou ses inscrits.
-        let failed = store
-            .apply_import(import_plan(
-                game_id,
-                &name.to_uppercase(),
-                "écrasée ?",
-                &users,
-                2,
-            ))
-            .await;
+        let mut failed = existing("écrasée ?", 2);
+        failed.tournaments[0].import.input.name = name.to_uppercase();
+        let failed = store.apply_import(failed).await;
         assert!(
             matches!(failed, Err(StoreError::StepPositionTaken)),
             "{failed:?}"
@@ -2843,17 +2855,18 @@ async fn apply_import_is_one_transaction_with_seeds_and_lock() {
         );
 
         // Une tête de série en double est refusée par la base, avec le même retour en arrière.
-        let mut duplicated = import_plan(game_id, &name, "doublon", &users, 1);
+        let mut duplicated = existing("doublon", 1);
         duplicated.tournaments[0].steps[0].groups[0][1].seed = Some(1);
         assert!(store.apply_import(duplicated).await.is_err());
         let unchanged = store.find_tournament(tournament.id).await.unwrap().unwrap();
         assert_eq!(unchanged.description.as_deref(), Some("première"));
 
         // Remplacer un tournoi existant : mêmes étapes, nouvelles lignes, une seule étape.
-        let replaced = store
-            .apply_import(import_plan(game_id, &name, "seconde", &users, 1))
-            .await
-            .unwrap();
+        assert_eq!(
+            store.tournament_digest(tournament.id).await.unwrap(),
+            digest
+        );
+        let replaced = store.apply_import(existing("seconde", 1)).await.unwrap();
         assert!(!replaced[0].1);
         assert_eq!(store.list_steps(tournament.id).await.unwrap().len(), 1);
 

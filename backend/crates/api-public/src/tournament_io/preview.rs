@@ -10,9 +10,9 @@
 //! ([`AuthStore::apply_import`]) ; le plan est recalculé en entier depuis le fichier, si bien
 //! qu'une confirmation répétée ne peut ni dupliquer d'opérations ni cumuler des points.
 //!
-//! Limite : la comparaison de l'état de la base précède l'écriture ; un tournoi modifié entre les
-//! deux est tout de même protégé par le verrou et la revérification de son statut dans la
-//! transaction, mais pas ses autres données.
+//! L'état de chaque tournoi existant vu par l'aperçu (son empreinte complète) est revérifié sous
+//! verrou dans la transaction qui applique le plan : une modification concurrente entre la
+//! comparaison et l'écriture fait échouer l'import (`import_preview_stale`) sans rien écrire.
 
 use super::*;
 use crate::store::{ImportPlan, ParticipantPlan, TournamentPlan};
@@ -57,7 +57,8 @@ pub(super) struct TournamentChanges {
     name: String,
     /// `create` ou `update`.
     action: ChangeAction,
-    /// Vrai si l'import remplace ou supprime des inscrits, équipes, étapes ou matchs existants.
+    /// Vrai si l'import remplace ou supprime un barème, des inscrits, équipes, étapes ou matchs
+    /// existants.
     destructive: bool,
     changes: Vec<ResourceChange>,
     /// Conséquences en aval : résultats traités, classements recalculés, données écrasées.
@@ -340,6 +341,8 @@ pub(super) async fn analyze(
                         })
                         .collect(),
                     steps,
+                    // Renseigné à la comparaison avec la base, plus bas.
+                    expected: None,
                 });
             }
             _ => atomic = false,
@@ -365,6 +368,16 @@ pub(super) async fn analyze(
             None => None,
         };
         signatures.push(current.as_ref().map(|(_, c)| c.signature.to_string()));
+        // L'état vu par l'aperçu est revérifié dans la transaction qui applique le plan.
+        if let (Some(tournament), Some(plan)) = (existing, plans.get_mut(index)) {
+            plan.expected = Some(
+                state
+                    .store
+                    .tournament_digest(tournament.id)
+                    .await
+                    .map_err(ApiError::internal)?,
+            );
+        }
         let after_matches = item.matches.len()
             + item
                 .steps
@@ -424,9 +437,10 @@ pub(super) async fn analyze(
             .into_iter()
             .flatten(),
         );
+        // Le barème existant compte aussi : le remplacer ou le vider efface des règles.
         let replaces = current
             .as_ref()
-            .is_some_and(|(_, c)| c.participants + c.teams + c.steps + c.matches > 0);
+            .is_some_and(|(_, c)| c.rules + c.participants + c.teams + c.steps + c.matches > 0);
         destructive |= replaces;
         let mut downstream = Vec::new();
         if let Some((_, c)) = &current {
@@ -444,7 +458,7 @@ pub(super) async fn analyze(
             }
             if replaces {
                 warnings.push(format!(
-                    "« {} » existe : ses inscrits, équipes, étapes et matchs seront remplacés.",
+                    "« {} » existe : son barème, ses inscrits, équipes, étapes et matchs seront remplacés.",
                     input.name
                 ));
             }
@@ -585,21 +599,36 @@ pub(super) async fn confirm(
     request: ApplyRequest,
 ) -> Result<ImportReport, ApiError> {
     let key = cache_key(request.preview_id);
+    // À usage unique : l'aperçu est lu et retiré du cache en une seule opération atomique, si
+    // bien que de deux confirmations concurrentes, une seule peut l'appliquer.
     let bytes = state
         .cache
-        .get(&key)
+        .take(&key)
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::ImportPreviewExpired)?;
     let stored: Stored =
         serde_json::from_slice(&bytes).map_err(|_| ApiError::ImportPreviewExpired)?;
-    let forget = || async {
-        if let Err(err) = state.cache.delete(&[&key]).await {
-            eprintln!("cache : échec de la suppression de {key} : {err}");
+    let now = unix_now();
+    if stored.expires_at < now {
+        return Err(ApiError::ImportPreviewExpired);
+    }
+    // Rend l'aperçu intact quand il n'a pas été consommé (autre auteur, confirmation manquante).
+    let restore = || async {
+        if let Err(err) = state
+            .cache
+            .set(
+                &key,
+                bytes.clone(),
+                Ttl::from_secs((stored.expires_at - now).max(1)),
+            )
+            .await
+        {
+            eprintln!("cache : échec de la remise de {key} : {err}");
         }
     };
-    if stored.owner != owner || stored.expires_at < unix_now() {
-        forget().await;
+    if stored.owner != owner {
+        restore().await;
         return Err(ApiError::ImportPreviewExpired);
     }
     let format = if stored.csv {
@@ -609,16 +638,12 @@ pub(super) async fn confirm(
     };
     let analysis = match analyze(state, format, stored.text.as_bytes()).await? {
         Ok(analysis) if analysis.fingerprint == stored.fingerprint => analysis,
-        _ => {
-            forget().await;
-            return Err(ApiError::ImportPreviewStale);
-        }
+        _ => return Err(ApiError::ImportPreviewStale),
     };
     if analysis.destructive && !request.confirm_destructive {
+        restore().await;
         return Err(ApiError::ImportConfirmationRequired);
     }
-    // À usage unique : l'aperçu disparaît avant l'écriture.
-    forget().await;
     apply(state, analysis).await
 }
 
@@ -636,6 +661,7 @@ pub(super) async fn apply(state: &AppState, analysis: Analysis) -> Result<Import
             .map_err(|err| match err {
                 StoreError::TournamentLocked => ApiError::TournamentLocked,
                 StoreError::StepPositionTaken => ApiError::StepPositionTaken,
+                StoreError::ImportStale => ApiError::ImportPreviewStale,
                 other => ApiError::internal(other),
             })?;
         for (_, created) in saved {

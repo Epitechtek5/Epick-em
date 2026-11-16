@@ -156,6 +156,8 @@ pub enum StoreError {
     /// Le contenu d'un fichier d'import est incohérent : détecté en planifiant l'import, pas une
     /// panne.
     InvalidPlan(String),
+    /// Le tournoi a changé depuis l'aperçu de l'import : rien n'est écrit.
+    ImportStale,
     /// L'étape n'est pas dans l'état attendu pour cette opération.
     StepState,
     /// Le match n'est pas dans l'état attendu pour cette opération.
@@ -186,6 +188,7 @@ impl fmt::Display for StoreError {
             StoreError::TournamentFull => f.write_str("tournoi complet"),
             StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
             StoreError::InvalidPlan(detail) => f.write_str(detail),
+            StoreError::ImportStale => f.write_str("le tournoi a changé depuis l'aperçu"),
             StoreError::TournamentLocked => {
                 f.write_str("tournoi en cours ou terminé : résultats verrouillés")
             }
@@ -693,9 +696,15 @@ pub trait AuthStore: Send + Sync {
     /// Écrit tout le plan d'import en **une seule transaction** : en cas d'erreur, rien n'est
     /// modifié. Un tournoi existant (même jeu et même nom) est mis à jour et ses barème, équipes,
     /// inscrits, étapes et matchs sont remplacés ; sinon il est créé. Un tournoi existant
-    /// `ongoing` ou `finished` est refusé ([`StoreError::TournamentLocked`]). Renvoie chaque
-    /// tournoi avec `true` s'il vient d'être créé, dans l'ordre du plan.
+    /// `ongoing` ou `finished` est refusé ([`StoreError::TournamentLocked`]). Sous le verrou du
+    /// tournoi, son état doit être celui de l'aperçu (`expected`, ou absent s'il devait être créé),
+    /// sinon [`StoreError::ImportStale`]. Renvoie chaque tournoi avec `true` s'il vient d'être
+    /// créé, dans l'ordre du plan.
     async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Empreinte de tout ce que contient le tournoi (lui-même, barème, inscrits, équipes, étapes,
+    /// groupes, matchs et leurs participants) : elle change à la moindre modification.
+    async fn tournament_digest(&self, tournament_id: Uuid) -> Result<String, StoreError>;
 
     /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
     /// et les équipes existent, et les équipes sont celles du tournoi.

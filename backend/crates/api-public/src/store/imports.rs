@@ -96,6 +96,10 @@ pub struct TournamentPlan {
     pub teams: Vec<TeamPlan>,
     pub participants: Vec<ParticipantPlan>,
     pub steps: Vec<StepPlan>,
+    /// État attendu du tournoi ([`super::AuthStore::tournament_digest`]) au moment de l'aperçu,
+    /// revérifié dans la transaction qui applique le plan ; `None` : le tournoi ne doit pas
+    /// exister.
+    pub expected: Option<String>,
 }
 
 /// Tout ce qu'un import écrit.
