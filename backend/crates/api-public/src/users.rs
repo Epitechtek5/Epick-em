@@ -6,6 +6,7 @@
 
 use crate::auth::{AppState, Claims, hash_password_blocking, password_error, username_error};
 use crate::error::{ApiError, ErrorResponse};
+use crate::games::is_image_url;
 use crate::password_reset::{email_error, normalize_email};
 use crate::store::{Role, StoreError, UserProfile, UserUpdate};
 use actix_web::{HttpResponse, delete, get, patch, web};
@@ -39,6 +40,10 @@ struct UpdateUserRequest {
     /// Sert à réinitialiser le mot de passe.
     #[schema(max_length = 254, format = Email, example = "alice@example.com")]
     email: Option<String>,
+    /// URL `http(s)` de la photo de profil (2048 caractères au maximum) ; une chaîne vide
+    /// l'efface.
+    #[schema(max_length = 2048, example = "https://cdn.example.com/alice.png")]
+    picture_url: Option<String>,
 }
 
 /// Private account view, only returned to the authenticated owner.
@@ -50,6 +55,7 @@ struct SelfProfile {
     username: String,
     role: Role,
     email: Option<String>,
+    picture_url: Option<String>,
 }
 
 impl From<crate::store::UserRecord> for SelfProfile {
@@ -61,6 +67,7 @@ impl From<crate::store::UserRecord> for SelfProfile {
             email: user.email,
             pending_email: user.pending_email,
             email_verified_at: user.email_verified_at,
+            picture_url: user.picture_url,
         }
     }
 }
@@ -298,9 +305,18 @@ async fn update(
         password,
         role,
         email,
+        picture_url,
     } = request;
     let email = email.as_deref().map(normalize_email);
-    if username.is_none() && password.is_none() && role.is_none() && email.is_none() {
+    // Une chaîne vide efface la photo, comme pour les équipes.
+    let picture_url =
+        picture_url.map(|url| Some(url.trim().to_string()).filter(|url| !url.is_empty()));
+    if username.is_none()
+        && password.is_none()
+        && role.is_none()
+        && email.is_none()
+        && picture_url.is_none()
+    {
         return Err(ApiError::Validation(vec![(
             "body",
             "Renseignez au moins un champ à modifier.".to_string(),
@@ -315,6 +331,14 @@ async fn update(
     }
     if let Some(message) = email.as_deref().and_then(email_error) {
         errors.push(("email", message));
+    }
+    if let Some(Some(url)) = &picture_url
+        && !is_image_url(url)
+    {
+        errors.push((
+            "picture_url",
+            "La photo doit être une URL http(s) de 2048 caractères au maximum.".to_string(),
+        ));
     }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
@@ -333,6 +357,7 @@ async fn update(
                 password_hash,
                 role,
                 email: email.clone(),
+                picture_url,
             },
         )
         .await

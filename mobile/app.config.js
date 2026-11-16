@@ -12,6 +12,15 @@ const linkHost = validatePublicUrl(process.env, {
 
 module.exports = ({ config }) => ({
   ...config,
+  extra: {
+    ...config.extra,
+    eas: {
+      ...config.extra?.eas,
+      ...(process.env.EXPO_PUBLIC_EAS_PROJECT_ID
+        ? { projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID }
+        : {}),
+    },
+  },
   ios: {
     ...config.ios,
     ...(linkHost
@@ -51,6 +60,7 @@ module.exports = ({ config }) => ({
     ...(config.plugins || []),
     'expo-secure-store',
     'expo-localization',
+    'expo-notifications',
     '@react-native-community/datetimepicker',
     ['./plugins/with-android-network-security', { profile }],
   ],
