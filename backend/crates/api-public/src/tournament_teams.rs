@@ -351,18 +351,12 @@ async fn add_member(
     require_owner(&claims, team.owner_id)?;
     let AddMemberRequest { user_id, role } = body.into_inner();
     require_assignable(role)?;
-    let tournament = find_tournament(&state, team.tournament_id).await?;
+    // L'effectif est vérifié par le store, sous le verrou de l'équipe, avec l'ajout.
     let member = state
         .store
-        .add_tournament_team_member(
-            team.id,
-            user_id,
-            role,
-            tournament.settings.team_max_starters,
-            tournament.settings.team_max_substitutes,
-        )
+        .add_tournament_team_member(team.id, user_id, role)
         .await
-        .map_err(store_error)?
+        .map_err(|err| roster_error(err, role))?
         .ok_or_else(|| ApiError::Validation(vec![("user_id", "Compte introuvable.".into())]))?;
     Ok(HttpResponse::Created().json(member))
 }
@@ -400,18 +394,11 @@ async fn update_member(
     if user_id == team.owner_id {
         return Err(owner_is_fixed());
     }
-    let tournament = find_tournament(&state, team.tournament_id).await?;
     let member = state
         .store
-        .set_tournament_team_member_role(
-            team.id,
-            user_id,
-            body.role,
-            tournament.settings.team_max_starters,
-            tournament.settings.team_max_substitutes,
-        )
+        .set_tournament_team_member_role(team.id, user_id, body.role)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(|err| roster_error(err, body.role))?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(member))
 }
@@ -468,6 +455,24 @@ async fn require_team_visible(
     let tournament = find_tournament(state, team.tournament_id).await?;
     require_visible(state, claims, &tournament).await?;
     Ok(())
+}
+
+/// Traduit une limite d'effectif atteinte en erreur de validation sur le rôle.
+fn roster_error(err: StoreError, role: TeamRole) -> ApiError {
+    match err {
+        StoreError::TeamRosterFull(limit) => {
+            let kind = if role == TeamRole::Substitute {
+                "remplaçants"
+            } else {
+                "titulaires"
+            };
+            ApiError::Validation(vec![(
+                "role",
+                format!("Ce tournoi limite les équipes à {limit} {kind}."),
+            )])
+        }
+        other => store_error(other),
+    }
 }
 
 async fn find(state: &AppState, id: Uuid) -> Result<TournamentTeam, ApiError> {
@@ -544,17 +549,6 @@ fn store_error(err: StoreError) -> ApiError {
     match err {
         StoreError::TeamAlreadyRegistered => ApiError::TeamAlreadyRegistered,
         StoreError::PlayerAlreadyRegistered => ApiError::PlayerAlreadyRegistered,
-        StoreError::TeamCapacity { limit, substitutes } => ApiError::Validation(vec![(
-            "role",
-            format!(
-                "Ce tournoi limite les équipes à {limit} {}.",
-                if substitutes {
-                    "remplaçants"
-                } else {
-                    "titulaires"
-                }
-            ),
-        )]),
         other => ApiError::internal(other),
     }
 }

@@ -440,7 +440,7 @@ async fn update_tournament(
         max_participants: request.max_participants.map(|_| merged.max_participants),
         team_scoring_mode: request.team_scoring_mode.map(|_| merged.team_scoring_mode),
         team_scoring_n: request.team_scoring_n.map(|_| merged.team_scoring_n),
-        settings: request.settings.store_update(&merged.settings),
+        settings: request.settings.to_update(&merged.settings),
     };
     let tournament = state
         .store
@@ -906,6 +906,7 @@ async fn register(
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé à l'administrateur, ou à l'inscrit pour se retirer", body = ErrorResponse),
         (status = 404, description = "Tournoi ou inscription introuvable", body = ErrorResponse),
+        (status = 409, description = "Le statut demandé occupe une place et le tournoi est complet", body = ErrorResponse),
     ),
 )]
 #[patch("/tournaments/{id}/participants/{participant_id}")]
@@ -925,16 +926,15 @@ async fn update_participant(
         }
         require_actor(&state, &claims, &participant).await?;
     }
-    let mutation = state
+    // Capacité et promotion de la liste d'attente sont traitées sous le verrou du tournoi.
+    let change = state
         .store
         .set_participant_status(participant.id, status)
         .await
-        .map_err(participant_error)?
+        .map_err(tournament_error)?
         .ok_or(ApiError::NotFound)?;
-    for promoted in &mutation.promoted {
-        emit(&state, EventKind::Promoted, promoted);
-    }
-    Ok(HttpResponse::Ok().json(mutation.participant))
+    emit_promoted(&state, &change.promoted);
+    Ok(HttpResponse::Ok().json(change.participant))
 }
 
 /// Retire une inscription (l'inscrit, le propriétaire de son équipe ou un administrateur).
@@ -975,19 +975,14 @@ async fn remove_participant(
     ) {
         return Err(ApiError::TournamentLocked);
     }
-    let removal = state
+    let promoted = state
         .store
         .delete_participant(participant.id)
         .await
-        .map_err(ApiError::internal)?;
-    if removal.deleted {
-        for promoted in &removal.promoted {
-            emit(&state, EventKind::Promoted, promoted);
-        }
-        Ok(HttpResponse::NoContent().finish())
-    } else {
-        Err(ApiError::NotFound)
-    }
+        .map_err(ApiError::internal)?
+        .ok_or(ApiError::NotFound)?;
+    emit_promoted(&state, &promoted);
+    Ok(HttpResponse::NoContent().finish())
 }
 
 /// Pointe un inscrit (l'inscrit, le propriétaire de son équipe, un arbitre ou un administrateur),
@@ -1034,14 +1029,15 @@ async fn check_in(
         ParticipantStatus::Registered => {}
         _ => return Err(ApiError::InvalidTransition),
     }
-    let mutation = state
+    let participant = state
         .store
         .set_participant_status(participant.id, ParticipantStatus::CheckedIn)
         .await
-        .map_err(ApiError::internal)?
-        .ok_or(ApiError::NotFound)?;
-    emit(&state, EventKind::CheckedIn, &mutation.participant);
-    Ok(HttpResponse::Ok().json(mutation.participant))
+        .map_err(tournament_error)?
+        .ok_or(ApiError::NotFound)?
+        .participant;
+    emit(&state, EventKind::CheckedIn, &participant);
+    Ok(HttpResponse::Ok().json(participant))
 }
 
 /// Classement des joueurs (tournoi solo), par points décroissants. Le gagnant est le premier
@@ -1672,6 +1668,14 @@ pub(crate) async fn settle_if_due(
     find_tournament(state, tournament.id).await
 }
 
+/// Une place libérée (retrait, suppression, disqualification) profite à la liste d'attente ;
+/// la promotion est bornée par la capacité, elle ne fait rien s'il n'y a pas de place.
+fn emit_promoted(state: &AppState, promoted: &[TournamentParticipant]) {
+    for participant in promoted {
+        emit(state, EventKind::Promoted, participant);
+    }
+}
+
 pub(crate) async fn promote_and_emit(
     state: &AppState,
     tournament_id: Uuid,
@@ -1681,9 +1685,7 @@ pub(crate) async fn promote_and_emit(
         .promote_waitlist(tournament_id)
         .await
         .map_err(ApiError::internal)?;
-    for participant in &promoted {
-        emit(state, EventKind::Promoted, participant);
-    }
+    emit_promoted(state, &promoted);
     Ok(promoted)
 }
 
