@@ -81,3 +81,5 @@ front/mobile ──HTTP/WS──▶ api-public ──écrit──▶ PostgreSQL
   - Définir le schéma des événements dans un module partagé (`domain::events`) et le documenter.
   - Tests : idempotence de chaque handler, recalcul en cascade, rejeu complet d'un tournoi.
   - Mesurer le délai « saisie du résultat → classement mis à jour » lors des tests de charge.
+- **Mise en œuvre :** `docs/temps-reel.md` (flux `epickem:events`, canaux `live.*`, WebSocket
+  `GET /ws`).

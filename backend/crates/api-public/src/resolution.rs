@@ -25,6 +25,8 @@ pub struct ResolutionReport {
     pub tournament_id: Uuid,
     pub predictions: usize,
     pub answers: usize,
+    /// Pronostics et réponses dont l'issue ou les points ont changé.
+    pub changed: u64,
     /// Plus rien ne changera : le tournoi ne sera plus relu.
     pub settled: bool,
 }
@@ -296,13 +298,8 @@ pub async fn resolve_tournament(
     );
     let imported = store.imports().summary(tournament_id).await.is_some();
     let settled = over && all_final && !imported;
-    let report = ResolutionReport {
-        tournament_id,
-        predictions: resolved_predictions.len(),
-        answers: resolved_answers.len(),
-        settled,
-    };
-    pickem
+    let (predictions, answers) = (resolved_predictions.len(), resolved_answers.len());
+    let changed = pickem
         .save_resolution(
             tournament_id,
             resolved_predictions,
@@ -310,7 +307,13 @@ pub async fn resolve_tournament(
             settled,
         )
         .await?;
-    Ok(Some(report))
+    Ok(Some(ResolutionReport {
+        tournament_id,
+        predictions,
+        answers,
+        changed,
+        settled,
+    }))
 }
 
 /// Résout jusqu'à `limit` tournois non réglés, les moins récemment résolus d'abord. Une erreur

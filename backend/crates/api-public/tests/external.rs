@@ -227,6 +227,8 @@ impl TournamentConnector for FakeSource {
 
 struct Setup {
     source: Arc<FakeSource>,
+    /// Bus en mémoire branché sur la synchronisation et sur l'API.
+    events: Arc<infra::MemoryBus>,
     admin: String,
     player: String,
     game: String,
@@ -270,12 +272,16 @@ async fn build<F: std::future::Future<Output = ()>>(
         down: AtomicBool::new(false),
         finished: AtomicBool::new(false),
     });
+    let events = Arc::new(infra::MemoryBus::new());
+    let live = Arc::new(infra::MemoryLive::new());
     let sync = SyncService::new(
         ConnectorRegistry::new().register(source.clone()),
         sync_store,
         SyncPolicy::default(),
     )
-    .with_projector(Arc::new(StoreProjector::new(store.clone())));
+    .with_projector(Arc::new(
+        StoreProjector::new(store.clone()).with_bus(events.clone(), live.clone()),
+    ));
     let config = AuthConfig {
         jwt_secret: common::SECRET.into(),
         access_token_ttl: Duration::from_secs(900),
@@ -284,7 +290,8 @@ async fn build<F: std::future::Future<Output = ()>>(
     let state = common::with_test_mailer(
         AppState::new(store, config)
             .unwrap()
-            .with_sync(Arc::new(sync)),
+            .with_sync(Arc::new(sync))
+            .with_bus(events.clone(), live),
     );
     let app = test::init_service(app(state)).await;
     logged_in_as(&app, root, "secret123").await;
@@ -306,6 +313,7 @@ async fn build<F: std::future::Future<Output = ()>>(
         app,
         Setup {
             source,
+            events,
             admin,
             player,
             game,
@@ -1062,4 +1070,36 @@ async fn check_predictions_in_db(
         count("SELECT count(*) FROM prediction WHERE tournament_id = $1::uuid").await,
         0
     );
+}
+
+/// Un instantané qui change le tournoi importé est publié comme un changement local, pour que
+/// les pronostics soient résolus ; une synchronisation sans changement ne publie rien.
+#[actix_web::test]
+async fn synchronisations_publish_only_real_changes() {
+    use domain::events::{ChangeCause, EventKind};
+    let (app, s) = setup().await;
+    let source = import(&app, &s).await;
+    let id = source["id"].as_str().unwrap().to_string();
+    let tournament: uuid::Uuid = source["tournament_id"].as_str().unwrap().parse().unwrap();
+    let changes = |s: &Setup| {
+        s.events
+            .published()
+            .into_iter()
+            .filter(|e| {
+                e.kind
+                    == EventKind::TournamentChanged {
+                        tournament_id: tournament,
+                        match_id: None,
+                        cause: ChangeCause::ExternalSync,
+                    }
+            })
+            .count()
+    };
+    assert_eq!(changes(&s), 1, "premier instantané");
+    let sync = format!("/external-tournaments/{id}/sync");
+    post(&app, &sync, &s.admin, json!({})).await;
+    assert_eq!(changes(&s), 1, "rien n'a changé chez la source");
+    s.source.finished.store(true, Ordering::SeqCst);
+    post(&app, &sync, &s.admin, json!({})).await;
+    assert_eq!(changes(&s), 2, "le set s'est terminé");
 }

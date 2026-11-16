@@ -6,6 +6,7 @@
 //! tournoi reste en lecture seule ([`crate::external::protect_external`]) : seule la
 //! synchronisation l'écrit.
 
+use crate::realtime::tournament_changed;
 use crate::store::{
     AuthStore, Bracket, MatchResult, MatchStatus, MatchType, ParticipantStatus, ProjectedEntry,
     ProjectedGroup, ProjectedMatch, ProjectedMember, ProjectedParticipant, ProjectedStep,
@@ -18,6 +19,8 @@ use connectors::model::{
     ExternalTournament, MatchState,
 };
 use connectors::sync::Projector;
+use domain::events::ChangeCause;
+use infra::{EventBus, LiveBus};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -26,14 +29,23 @@ use uuid::Uuid;
 /// Longueur maximale d'un nom affiché (colonne `display_name`).
 const NAME_MAX: usize = 255;
 
-/// [`Projector`] qui écrit dans le store de l'API.
+/// [`Projector`] qui écrit dans le store de l'API. Avec un bus, chaque instantané qui change le
+/// tournoi importé est signalé comme un changement local : événement dans le flux (résolution
+/// des pronostics par api-internal) et `tournament.updated` aux clients abonnés.
 pub struct StoreProjector {
     store: Arc<dyn AuthStore>,
+    bus: Option<(Arc<dyn EventBus>, Arc<dyn LiveBus>)>,
 }
 
 impl StoreProjector {
     pub fn new(store: Arc<dyn AuthStore>) -> Self {
-        StoreProjector { store }
+        StoreProjector { store, bus: None }
+    }
+
+    /// Signale les tournois importés modifiés sur le bus.
+    pub fn with_bus(mut self, events: Arc<dyn EventBus>, live: Arc<dyn LiveBus>) -> Self {
+        self.bus = Some((events, live));
+        self
     }
 }
 
@@ -44,12 +56,31 @@ impl Projector for StoreProjector {
         tournament_id: Uuid,
         snapshot: &ExternalTournament,
     ) -> Result<(), String> {
+        let before = match &self.bus {
+            Some(_) => self.store.imports().tournament(tournament_id).await,
+            None => None,
+        };
         match self
             .store
             .project_external(tournament_id, projection(snapshot))
             .await
         {
-            Ok(true) => Ok(()),
+            Ok(true) => {
+                if let Some((events, live)) = &self.bus {
+                    let after = self.store.imports().tournament(tournament_id).await;
+                    if after != before {
+                        tournament_changed(
+                            events.as_ref(),
+                            live.as_ref(),
+                            tournament_id,
+                            None,
+                            ChangeCause::ExternalSync,
+                        )
+                        .await;
+                    }
+                }
+                Ok(())
+            }
             Ok(false) => Err(format!("tournoi local {tournament_id} introuvable")),
             Err(err) => Err(err.to_string()),
         }

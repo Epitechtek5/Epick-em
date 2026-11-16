@@ -215,7 +215,72 @@ impl ImportedTournament {
             }
         }
         model.steps.sort_by_key(|s| s.position);
+        if let Some(previous) = previous {
+            model.keep_unchanged_timestamps(previous);
+        }
         model
+    }
+
+    /// Une étape ou un match identique à la synchronisation précédente (participants et
+    /// résultats compris) garde son `updated_at` : le modèle ne change que si la source a changé.
+    fn keep_unchanged_timestamps(&mut self, previous: &ImportedTournament) {
+        let match_rows = |model: &ImportedTournament, id: Uuid| -> Vec<MatchParticipant> {
+            model
+                .match_participants
+                .iter()
+                .filter(|p| p.match_id == id)
+                .cloned()
+                .collect()
+        };
+        let step_rows = |model: &ImportedTournament, id: Uuid| {
+            let participants: Vec<StepParticipant> = model
+                .step_participants
+                .iter()
+                .filter(|p| p.step_id == id)
+                .cloned()
+                .collect();
+            let groups: Vec<StepGroup> = model
+                .groups
+                .iter()
+                .filter(|g| g.step_id == id)
+                .cloned()
+                .collect();
+            (participants, groups)
+        };
+        let kept_matches: Vec<(usize, String)> = self
+            .matches
+            .iter()
+            .enumerate()
+            .filter_map(|(index, current)| {
+                let old = previous.matches.iter().find(|o| o.id == current.id)?;
+                let same = Match {
+                    updated_at: old.updated_at.clone(),
+                    ..current.clone()
+                } == *old
+                    && match_rows(self, current.id) == match_rows(previous, current.id);
+                same.then(|| (index, old.updated_at.clone()))
+            })
+            .collect();
+        for (index, updated_at) in kept_matches {
+            self.matches[index].updated_at = updated_at;
+        }
+        let kept_steps: Vec<(usize, String)> = self
+            .steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, current)| {
+                let old = previous.steps.iter().find(|o| o.id == current.id)?;
+                let same = Step {
+                    updated_at: old.updated_at.clone(),
+                    ..current.clone()
+                } == *old
+                    && step_rows(self, current.id) == step_rows(previous, current.id);
+                same.then(|| (index, old.updated_at.clone()))
+            })
+            .collect();
+        for (index, updated_at) in kept_steps {
+            self.steps[index].updated_at = updated_at;
+        }
     }
 
     pub fn summary(&self) -> ImportedSummary {

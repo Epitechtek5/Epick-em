@@ -1,12 +1,15 @@
 //! api-internal : se connecte à PostgreSQL et Redis, synchronise périodiquement les tournois
 //! externes (start.gg…, voir `docs/connecteurs.md`), résout les pronostics et le Pick'em (voir
-//! `docs/pickem.md`), et répond 200 sur toutes les routes en
+//! `docs/pickem.md`) à chaque événement du bus Redis et à intervalle régulier, et répond 200 sur toutes les routes en
 //! attendant le vrai serveur HTTP.
 
 use api_public::projection::StoreProjector;
+use api_public::realtime::{announce, consume};
 use api_public::resolution::resolve_pending;
 use api_public::store::{AuthStore, PgStore};
 use connectors::sync::{RedisSyncStore, SyncPolicy, SyncService};
+use infra::bus::{EVENTS_GROUP, EVENTS_STREAM};
+use infra::{EventBus, LiveBus, RedisEventBus, RedisEventStream, RedisLive};
 use std::error::Error;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -39,7 +42,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // tournoi importé vivent dans Redis ; la base ne garde que le lien source ↔ tournoi.
     let redis = infra::RedisCache::connect(&config.redis_url).await?;
     let store = Arc::new(PgStore::new(db.clone()));
-    let projector = StoreProjector::new(store.clone());
+    // Bus Redis (ADR-002) : les instantanés qui changent un tournoi importé sont publiés comme
+    // tout changement ; le flux est consommé ici, dans le groupe `api-internal`.
+    let events: Arc<dyn EventBus> = Arc::new(RedisEventBus::new(redis.connection(), EVENTS_STREAM));
+    let live: Arc<dyn LiveBus> = Arc::new(RedisLive::publisher(redis.connection()));
+    let stream = RedisEventStream::connect(
+        &config.redis_url,
+        EVENTS_STREAM,
+        EVENTS_GROUP,
+        &consumer_name(),
+    )
+    .await?;
+    let projector = StoreProjector::new(store.clone()).with_bus(events, live.clone());
     let sync = Arc::new(
         SyncService::new(
             registry,
@@ -49,7 +63,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .with_projector(Arc::new(projector)),
     );
     tokio::spawn(schedule(sync, sync_interval()));
-    tokio::spawn(resolve(store, resolve_interval()));
+    tokio::spawn(resolve(store.clone(), live.clone(), resolve_interval()));
+    {
+        let (store, live) = (store.clone(), live.clone());
+        tokio::spawn(async move {
+            let store: &dyn AuthStore = store.as_ref();
+            consume(store, &stream, live.as_ref()).await
+        });
+    }
 
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await?;
     println!(
@@ -111,6 +132,14 @@ async fn schedule(sync: Arc<SyncService>, every: Duration) {
     }
 }
 
+/// Nom de ce consommateur dans le groupe : le nom d'hôte (le pod en Kubernetes), sinon le PID.
+fn consumer_name() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| format!("api-internal-{}", std::process::id()))
+}
+
 /// Délai entre deux résolutions des pronostics (`RESOLVE_INTERVAL_SECS`, 30 s par défaut).
 fn resolve_interval() -> Duration {
     let secs = std::env::var("RESOLVE_INTERVAL_SECS")
@@ -127,7 +156,7 @@ const RESOLVE_BATCH: i64 = 50;
 /// Résout à intervalle régulier les pronostics et les réponses de Pick'em des tournois non
 /// réglés. La résolution recalcule tout à partir de l'état et n'écrit que ce qui change : un
 /// passage rejoué ou lancé par deux instances donne le même résultat.
-async fn resolve(store: Arc<PgStore>, every: Duration) {
+async fn resolve(store: Arc<PgStore>, live: Arc<dyn LiveBus>, every: Duration) {
     let mut ticker = tokio::time::interval(every);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -137,11 +166,15 @@ async fn resolve(store: Arc<PgStore>, every: Duration) {
             Ok(reports) => {
                 for report in reports {
                     match report {
-                        Ok(report) if report.settled => println!(
-                            "api-internal : pronostics du tournoi {} réglés",
-                            report.tournament_id
-                        ),
-                        Ok(_) => {}
+                        Ok(report) => {
+                            announce(live.as_ref(), &report).await;
+                            if report.settled {
+                                println!(
+                                    "api-internal : pronostics du tournoi {} réglés",
+                                    report.tournament_id
+                                );
+                            }
+                        }
                         Err((tournament_id, err)) => eprintln!(
                             "api-internal : échec de la résolution du tournoi {tournament_id} : {err}"
                         ),

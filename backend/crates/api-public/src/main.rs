@@ -1,4 +1,5 @@
-//! Point d'entrée de api-public : se connecte à PostgreSQL et Redis, puis sert l'API HTTP.
+//! Point d'entrée de api-public : se connecte à PostgreSQL et Redis, puis sert l'API HTTP et le
+//! WebSocket temps réel.
 
 use actix_web::HttpServer;
 use api_public::config::AuthConfig;
@@ -7,6 +8,8 @@ use api_public::projection::StoreProjector;
 use api_public::store::PgStore;
 use api_public::{AppState, app};
 use connectors::sync::{RedisSyncStore, SyncPolicy, SyncService};
+use infra::bus::EVENTS_STREAM;
+use infra::{EventBus, LiveBus, RedisEventBus, RedisLive};
 use std::error::Error;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -35,18 +38,25 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // L'état de synchronisation et le tournoi importé vivent dans Redis ; la base ne garde que
     // le lien source ↔ tournoi.
     let redis = infra::RedisCache::connect(&config.redis_url).await?;
+    // Bus Redis (ADR-002) : événements métier vers api-internal (Streams), temps réel vers les
+    // clients WebSocket de toutes les instances (Pub/Sub).
+    let events: Arc<dyn EventBus> = Arc::new(RedisEventBus::new(redis.connection(), EVENTS_STREAM));
+    let live: Arc<dyn LiveBus> = Arc::new(RedisLive::start(&config.redis_url, redis.connection())?);
     let sync = Arc::new(
         SyncService::new(
             registry,
             Arc::new(RedisSyncStore::new(db.clone(), redis.connection())),
             SyncPolicy::default(),
         )
-        .with_projector(Arc::new(StoreProjector::new(store.clone()))),
+        .with_projector(Arc::new(
+            StoreProjector::new(store.clone()).with_bus(events.clone(), live.clone()),
+        )),
     );
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
         .with_cache(cache)
-        .with_sync(sync);
+        .with_sync(sync)
+        .with_bus(events, live);
     let state = match MailConfig::from_env() {
         Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
         None => {

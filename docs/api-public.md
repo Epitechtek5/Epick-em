@@ -281,6 +281,14 @@ Format `{ "error", "message", "errors"? }` :
 | `503` | `external_unavailable` | la source externe ne répond pas, refuse la requête ou limite le débit (détail journalisé) |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
+## Temps réel
+
+`GET /ws` ouvre un WebSocket authentifié par son premier message
+(`{"type":"auth","token":"<access_token>"}`), sur lequel le client s'abonne à
+`tournament:<id>` ou `leaderboard` pour être prévenu des changements (`tournament.updated`,
+`predictions.updated`, `leaderboard.updated`…). Hors OpenAPI ; protocole complet :
+`docs/temps-reel.md`.
+
 ## Configuration
 
 | Variable | Défaut | Rôle |

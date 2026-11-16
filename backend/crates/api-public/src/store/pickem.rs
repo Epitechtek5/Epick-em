@@ -220,14 +220,15 @@ pub trait PickemStore: Send + Sync {
     -> Result<Vec<Answer>, StoreError>;
 
     /// Enregistre les issues calculées (seules celles qui changent sont écrites) et la date de
-    /// résolution du tournoi, en une seule opération. `settled` : plus rien ne changera.
+    /// résolution du tournoi, en une seule opération. `settled` : plus rien ne changera. Renvoie
+    /// le nombre de pronostics et de réponses modifiés.
     async fn save_resolution(
         &self,
         tournament_id: Uuid,
         predictions: Vec<Resolved>,
         answers: Vec<Resolved>,
         settled: bool,
-    ) -> Result<(), StoreError>;
+    ) -> Result<u64, StoreError>;
 
     /// Tournois qui ont des pronostics ou des questions et ne sont pas réglés, les moins
     /// récemment résolus d'abord.
