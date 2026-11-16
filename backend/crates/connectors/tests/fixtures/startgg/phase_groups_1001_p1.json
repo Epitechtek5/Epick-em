@@ -1,0 +1,18 @@
+{
+  "phase": {
+    "phaseGroups": {
+      "pageInfo": {
+        "totalPages": 1
+      },
+      "nodes": [
+        {
+          "id": 2001,
+          "displayIdentifier": "1",
+          "bracketType": null,
+          "state": 2,
+          "bracketUrl": null
+        }
+      ]
+    }
+  }
+}

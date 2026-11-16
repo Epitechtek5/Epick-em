@@ -24,11 +24,17 @@ pub const PHASES: &str = r#"query EventPhases($eventId: ID!) {
   event(id: $eventId) {
     id name slug startAt state numEntrants
     videogame { name }
-    phases {
-      id name phaseOrder bracketType state
-      phaseGroups(query: { page: 1, perPage: 128 }) {
-        nodes { id displayIdentifier bracketType state bracketUrl }
-      }
+    phases { id name phaseOrder bracketType state }
+  }
+}"#;
+
+/// Groupes d'une phase, paginés comme les autres listes (une phase peut en compter des
+/// centaines).
+pub const PHASE_GROUPS: &str = r#"query PhaseGroups($phaseId: ID!, $page: Int!, $perPage: Int!) {
+  phase(id: $phaseId) {
+    phaseGroups(query: { page: $page, perPage: $perPage }) {
+      pageInfo { totalPages }
+      nodes { id displayIdentifier bracketType state bracketUrl }
     }
   }
 }"#;

@@ -1,9 +1,11 @@
 //! Transport GraphQL vers start.gg, remplaçable par un double dans les tests.
 
 use crate::connector::ConnectorError;
+use crate::resilience::RateLimiter;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Point d'entrée fixe de l'API publique de start.gg.
@@ -14,6 +16,27 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 #[async_trait]
 pub trait GraphqlTransport: Send + Sync {
     async fn query(&self, query: &str, variables: Value) -> Result<Value, ConnectorError>;
+}
+
+/// Transport dont chaque requête prend un jeton du limiteur : la limite compte les requêtes
+/// GraphQL réellement envoyées, pas les opérations du connecteur (une par page).
+pub struct LimitedTransport {
+    inner: Arc<dyn GraphqlTransport>,
+    limiter: Arc<RateLimiter>,
+}
+
+impl LimitedTransport {
+    pub fn new(inner: Arc<dyn GraphqlTransport>, limiter: Arc<RateLimiter>) -> Self {
+        LimitedTransport { inner, limiter }
+    }
+}
+
+#[async_trait]
+impl GraphqlTransport for LimitedTransport {
+    async fn query(&self, query: &str, variables: Value) -> Result<Value, ConnectorError> {
+        self.limiter.acquire().await;
+        self.inner.query(query, variables).await
+    }
 }
 
 /// Accès HTTP réel, authentifié par le jeton d'API (`STARTGG_TOKEN`).

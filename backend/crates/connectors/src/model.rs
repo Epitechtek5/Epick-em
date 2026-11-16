@@ -191,15 +191,29 @@ pub struct ExternalMatch {
     pub url: Option<String>,
 }
 
+/// Ce qui définit le résultat d'un match (voir [`ExternalMatch::outcome`]).
+#[derive(Debug, PartialEq)]
+pub struct Outcome<'a> {
+    pub state: MatchState,
+    pub winner: Option<&'a str>,
+    /// Inscrits et scores, place par place : changer le perdant à score égal est une correction.
+    pub slots: &'a [ExternalSlot],
+    pub forfeit: bool,
+    /// Manches : vainqueur, stage et personnages.
+    pub games: &'a [ExternalGame],
+}
+
 impl ExternalMatch {
-    /// Ce qui définit le résultat : un changement ici est une correction de résultat.
-    pub fn outcome(&self) -> (MatchState, Option<&str>, Vec<Option<i32>>, bool) {
-        (
-            self.state,
-            self.winner_entrant_id.as_deref(),
-            self.slots.iter().map(|s| s.score).collect(),
-            self.forfeit,
-        )
+    /// Ce qui définit le résultat : un changement ici (état, vainqueur, inscrits et scores,
+    /// forfait, ou détail d'une manche : vainqueur, stage, personnages) est une correction.
+    pub fn outcome(&self) -> Outcome<'_> {
+        Outcome {
+            state: self.state,
+            winner: self.winner_entrant_id.as_deref(),
+            slots: &self.slots,
+            forfeit: self.forfeit,
+            games: &self.games,
+        }
     }
 }
 
@@ -248,7 +262,18 @@ pub enum ExternalDelta {
     /// Seulement les matchs modifiés depuis le curseur, et l'état courant des épreuves.
     Partial {
         state: CompetitionState,
+        /// Structure à jour de chaque épreuve (phases, groupes, inscrits), qui remplace celle de
+        /// l'instantané : une inscription ou un tableau ajoutés depuis l'import y figurent.
+        #[serde(default)]
+        structures: Vec<(String, EventStructure)>,
         matches: Vec<(String, ExternalMatch)>,
         standings: Vec<(String, Vec<ExternalStanding>)>,
     },
+}
+
+/// Phases (avec leurs groupes) et inscrits d'une épreuve.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventStructure {
+    pub phases: Vec<ExternalPhase>,
+    pub entrants: Vec<ExternalEntrant>,
 }

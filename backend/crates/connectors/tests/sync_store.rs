@@ -134,6 +134,7 @@ async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
     store
         .save_success(
             first.id,
+            now + 600,
             Success {
                 snapshot: snapshot(&a),
                 capabilities: Capabilities {
@@ -160,9 +161,38 @@ async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
     // Le succès relâche le bail.
     assert!(store.claim(first.id, now + 2, 600).await.unwrap().is_some());
 
+    // Une synchronisation qui n'a plus le bail (expiré, repris) n'écrit rien.
+    assert!(matches!(
+        store
+            .save_success(
+                first.id,
+                now + 600,
+                Success {
+                    snapshot: snapshot(&b),
+                    capabilities: Capabilities::default(),
+                    cursor: SyncCursor::default(),
+                    now: now + 3,
+                    next_sync_at: now + 3,
+                },
+                &[change("m3")],
+            )
+            .await,
+        Err(StoreError::LeaseLost)
+    ));
+    assert!(matches!(
+        store
+            .save_failure(first.id, now + 600, "ancien", now + 3, now + 3)
+            .await,
+        Err(StoreError::LeaseLost)
+    ));
+    assert_eq!(
+        store.find(first.id).await.unwrap().unwrap().snapshot,
+        Some(snapshot(&a))
+    );
+
     // Échec : l'instantané reste, l'erreur et le compteur sont enregistrés.
     store
-        .save_failure(first.id, "HTTP 503", now + 3, now + 63)
+        .save_failure(first.id, now + 602, "HTTP 503", now + 3, now + 63)
         .await
         .unwrap();
     let failed = store.find(first.id).await.unwrap().unwrap();

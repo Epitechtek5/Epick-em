@@ -146,6 +146,7 @@ impl SyncStore for MemorySyncStore {
     async fn save_success(
         &self,
         id: Uuid,
+        lease_until: i64,
         success: Success,
         changes: &[ChangeEvent],
     ) -> Result<(), StoreError> {
@@ -153,6 +154,9 @@ impl SyncStore for MemorySyncStore {
         let Some((source, lease)) = state.sources.iter_mut().find(|(s, _)| s.id == id) else {
             return Ok(());
         };
+        if *lease != Some(lease_until) {
+            return Err(StoreError::LeaseLost);
+        }
         source.snapshot = Some(success.snapshot);
         source.capabilities = success.capabilities;
         source.cursor = success.cursor;
@@ -172,11 +176,15 @@ impl SyncStore for MemorySyncStore {
     async fn save_failure(
         &self,
         id: Uuid,
+        lease_until: i64,
         error: &str,
         now: i64,
         next_sync_at: i64,
     ) -> Result<(), StoreError> {
         if let Some((source, lease)) = self.state().sources.iter_mut().find(|(s, _)| s.id == id) {
+            if *lease != Some(lease_until) {
+                return Err(StoreError::LeaseLost);
+            }
             source.last_attempt_at = Some(now);
             source.last_error = Some(error.to_string());
             source.consecutive_failures += 1;

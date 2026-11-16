@@ -1,7 +1,12 @@
 //! Résilience commune à tous les connecteurs (ADR-003) : limite de requêtes par fournisseur
-//! (seau à jetons), reprises avec backoff exponentiel et gigue, disjoncteur, et cache des
-//! lectures interactives (recherche, épreuves) avec repli sur la dernière réponse connue
-//! pendant une panne.
+//! (seau à jetons, [`RateLimiter`]), reprises avec backoff exponentiel et gigue, disjoncteur, et
+//! cache des lectures interactives (recherche, épreuves) avec repli sur la dernière réponse
+//! connue pendant une panne.
+//!
+//! La limite compte les requêtes réellement envoyées : un connecteur qui fait plusieurs requêtes
+//! par opération (start.gg : une par page) prend un jeton par requête dans son transport, sur un
+//! limiteur partagé par jeton d'API ([`RateLimiter::shared`]) ; il est alors enveloppé par
+//! [`ResilientConnector::limited_inside`], qui ne compte pas les opérations en plus.
 //!
 //! [`ResilientConnector`] enveloppe n'importe quel connecteur et implémente lui-même
 //! [`TournamentConnector`] : le reste du code ne voit pas la différence.
@@ -20,10 +25,11 @@ use infra::{Cache, Ttl};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::future::Future;
 use std::hash::BuildHasher;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -98,6 +104,49 @@ impl TokenBucket {
     }
 }
 
+/// Limite de débit : `limit` requêtes par `window`, rechargées uniformément.
+pub struct RateLimiter {
+    bucket: Mutex<TokenBucket>,
+}
+
+impl RateLimiter {
+    pub fn new(limit: u32, window: Duration) -> Self {
+        RateLimiter {
+            bucket: Mutex::new(TokenBucket::new(limit, window)),
+        }
+    }
+
+    /// Limiteur partagé par tous les connecteurs de même `key` (fournisseur et empreinte du jeton
+    /// d'API) dans le processus : deux connecteurs du même jeton se partagent son quota.
+    pub fn shared(key: &str, limit: u32, window: Duration) -> Arc<Self> {
+        static SHARED: OnceLock<Mutex<HashMap<String, Weak<RateLimiter>>>> = OnceLock::new();
+        let digest = Sha256::digest(key.as_bytes());
+        let key: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let mut shared = SHARED
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        shared.retain(|_, limiter| limiter.strong_count() > 0);
+        if let Some(limiter) = shared.get(&key).and_then(Weak::upgrade) {
+            return limiter;
+        }
+        let limiter = Arc::new(RateLimiter::new(limit, window));
+        shared.insert(key, Arc::downgrade(&limiter));
+        limiter
+    }
+
+    /// Attend un jeton.
+    pub async fn acquire(&self) {
+        loop {
+            let wait = self.bucket.lock().unwrap_or_else(|e| e.into_inner()).take();
+            match wait {
+                None => return,
+                Some(wait) => tokio::time::sleep(wait).await,
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BreakerState {
     Closed,
@@ -116,19 +165,42 @@ pub struct ResilientConnector {
     inner: Arc<dyn TournamentConnector>,
     policy: ResiliencePolicy,
     cache: Option<Arc<dyn Cache>>,
-    bucket: Mutex<TokenBucket>,
+    /// `None` : le connecteur limite lui-même chacune de ses requêtes.
+    limiter: Option<Arc<RateLimiter>>,
     breaker: Mutex<Breaker>,
     jitter: RandomState,
 }
 
 impl ResilientConnector {
+    /// Enveloppe un connecteur qui fait une requête par opération : la limite compte les
+    /// opérations.
     pub fn new(
         inner: Arc<dyn TournamentConnector>,
         policy: ResiliencePolicy,
         cache: Option<Arc<dyn Cache>>,
     ) -> Self {
+        let limiter = Arc::new(RateLimiter::new(policy.rate_limit, policy.rate_window));
+        Self::build(inner, policy, cache, Some(limiter))
+    }
+
+    /// Enveloppe un connecteur qui limite lui-même chacune de ses requêtes (voir
+    /// [`RateLimiter::shared`]) : reprises, disjoncteur et cache, sans compter les opérations.
+    pub fn limited_inside(
+        inner: Arc<dyn TournamentConnector>,
+        policy: ResiliencePolicy,
+        cache: Option<Arc<dyn Cache>>,
+    ) -> Self {
+        Self::build(inner, policy, cache, None)
+    }
+
+    fn build(
+        inner: Arc<dyn TournamentConnector>,
+        policy: ResiliencePolicy,
+        cache: Option<Arc<dyn Cache>>,
+        limiter: Option<Arc<RateLimiter>>,
+    ) -> Self {
         ResilientConnector {
-            bucket: Mutex::new(TokenBucket::new(policy.rate_limit, policy.rate_window)),
+            limiter,
             breaker: Mutex::new(Breaker {
                 failures: 0,
                 open_until: None,
@@ -150,12 +222,8 @@ impl ResilientConnector {
     }
 
     async fn acquire(&self) {
-        loop {
-            let wait = self.bucket.lock().unwrap_or_else(|e| e.into_inner()).take();
-            match wait {
-                None => return,
-                Some(wait) => tokio::time::sleep(wait).await,
-            }
+        if let Some(limiter) = &self.limiter {
+            limiter.acquire().await;
         }
     }
 
@@ -185,7 +253,9 @@ impl ResilientConnector {
             retry_after: Some(after),
         } = err
         {
-            return (*after).min(self.policy.max_delay);
+            // Le délai demandé par le fournisseur est respecté tel quel : le plafond du backoff
+            // local ne le raccourcit pas.
+            return *after;
         }
         let exponential = self
             .policy
@@ -450,6 +520,32 @@ mod tests {
         let started = Instant::now();
         assert!(connector.fetch(&reference("t"), &[]).await.is_ok());
         assert!(started.elapsed() >= Duration::from_secs(7));
+
+        // Un délai plus long que le plafond du backoff (30 s) n'est pas raccourci.
+        let source = Scripted::with(vec![Err(ConnectorError::RateLimited {
+            retry_after: Some(Duration::from_secs(120)),
+        })]);
+        let connector = ResilientConnector::new(source.clone(), policy(), None);
+        let started = Instant::now();
+        assert!(connector.fetch(&reference("t"), &[]).await.is_ok());
+        assert!(started.elapsed() >= Duration::from_secs(120));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_shared_limiter_is_shared_by_key() {
+        let a = RateLimiter::shared("startgg:jeton-a", 2, Duration::from_secs(10));
+        let b = RateLimiter::shared("startgg:jeton-a", 2, Duration::from_secs(10));
+        let other = RateLimiter::shared("startgg:jeton-b", 2, Duration::from_secs(10));
+        assert!(Arc::ptr_eq(&a, &b));
+        assert!(!Arc::ptr_eq(&a, &other));
+        let started = Instant::now();
+        a.acquire().await;
+        b.acquire().await;
+        other.acquire().await;
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        // Le quota du jeton A est épuisé par les deux connecteurs réunis.
+        a.acquire().await;
+        assert!(started.elapsed() >= Duration::from_secs(5));
     }
 
     #[tokio::test(start_paused = true)]

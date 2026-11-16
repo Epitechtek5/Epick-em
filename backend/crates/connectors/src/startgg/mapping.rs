@@ -108,20 +108,19 @@ pub fn phase(node: &Value) -> Option<ExternalPhase> {
         order: small(&node["phaseOrder"]),
         format,
         state: activity_state(&node["state"]),
-        groups: node["phaseGroups"]["nodes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|group| {
-                Some(ExternalGroup {
-                    external_id: id(&group["id"])?,
-                    label: text(&group["displayIdentifier"]),
-                    format: bracket_format(&group["bracketType"]).or(format),
-                    state: activity_state(&group["state"]),
-                    url: text(&group["bracketUrl"]),
-                })
-            })
-            .collect(),
+        // Lus page par page à part (requête `PhaseGroups`), puis rattachés par `group`.
+        groups: Vec::new(),
+    })
+}
+
+/// Groupe d'une phase ; sans format propre, il hérite de celui de la phase.
+pub fn group(node: &Value, phase_format: Option<BracketFormat>) -> Option<ExternalGroup> {
+    Some(ExternalGroup {
+        external_id: id(&node["id"])?,
+        label: text(&node["displayIdentifier"]),
+        format: bracket_format(&node["bracketType"]).or(phase_format),
+        state: activity_state(&node["state"]),
+        url: text(&node["bracketUrl"]),
     })
 }
 

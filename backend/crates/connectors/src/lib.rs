@@ -15,7 +15,7 @@ pub mod sync;
 
 pub use connector::{ConnectorError, TournamentConnector};
 pub use registry::ConnectorRegistry;
-pub use resilience::{ResiliencePolicy, ResilientConnector};
+pub use resilience::{RateLimiter, ResiliencePolicy, ResilientConnector};
 
 use infra::Cache;
 use std::sync::Arc;
@@ -45,9 +45,21 @@ pub fn registry_from_lookup(
         ))
     };
     if let Some(token) = get("STARTGG_TOKEN") {
-        registry = registry.register(wrap(Arc::new(startgg::StartGgConnector::with_token(
-            token.trim(),
-        )?)));
+        // start.gg compte chaque requête GraphQL : le limiteur est dans le transport, partagé
+        // par jeton d'API.
+        let token = token.trim();
+        let policy = ResiliencePolicy::default();
+        let limiter = RateLimiter::shared(
+            &format!("{}:{token}", startgg::PROVIDER),
+            policy.rate_limit,
+            policy.rate_window,
+        );
+        let connector = startgg::StartGgConnector::with_token(token, limiter)?;
+        registry = registry.register(Arc::new(ResilientConnector::limited_inside(
+            Arc::new(connector),
+            policy,
+            cache.clone(),
+        )));
     }
     if let Some(dir) = get("EXTERNAL_JSON_DIR") {
         registry = registry.register(wrap(Arc::new(json_file::JsonFileConnector::new(dir))));

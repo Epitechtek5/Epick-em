@@ -4,8 +4,8 @@
 //!   épreuves à importer ;
 //! - instantané complet : phases et groupes, inscrits (seeds, joueurs), sets (manches,
 //!   personnages, stages, forfaits) et classements, page par page ;
-//! - synchronisation incrémentale : sets modifiés depuis le curseur (`updatedAfter`) et
-//!   classements à jour.
+//! - synchronisation incrémentale : sets modifiés depuis le curseur (`updatedAfter`), structure
+//!   (phases, groupes, inscrits et seeds) et classements à jour.
 //!
 //! Le jeton d'API ne sert qu'au transport ([`HttpTransport`]) ; les tests utilisent un double
 //! hors ligne ([`GraphqlTransport`]).
@@ -16,12 +16,12 @@ pub mod transport;
 pub mod url;
 
 pub use self::mapping::PROVIDER;
-pub use self::transport::{GraphqlTransport, HttpTransport};
+pub use self::transport::{GraphqlTransport, HttpTransport, LimitedTransport};
 
 use crate::connector::{ConnectorError, TournamentConnector};
 use crate::model::{
-    Capabilities, ExternalDelta, ExternalEvent, ExternalEventRef, ExternalTournament,
-    ExternalTournamentRef, SyncCursor,
+    Capabilities, EventStructure, ExternalDelta, ExternalEvent, ExternalEventRef, ExternalPhase,
+    ExternalTournament, ExternalTournamentRef, SyncCursor,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -36,6 +36,7 @@ const SEARCH_RESULTS: u32 = 20;
 pub struct StartGgConnector {
     transport: Arc<dyn GraphqlTransport>,
     entrants_per_page: u32,
+    groups_per_page: u32,
     sets_per_page: u32,
     standings_per_page: u32,
 }
@@ -45,15 +46,29 @@ impl StartGgConnector {
         StartGgConnector {
             transport,
             entrants_per_page: 64,
+            groups_per_page: 128,
             // Chaque set embarque ses manches et sélections : petites pages.
             sets_per_page: 24,
             standings_per_page: 128,
         }
     }
 
-    /// Connecteur réel, authentifié par `token`.
-    pub fn with_token(token: &str) -> Result<Self, reqwest::Error> {
-        Ok(Self::new(Arc::new(HttpTransport::new(token)?)))
+    /// Connecteur réel, authentifié par `token` ; chaque requête GraphQL prend un jeton de
+    /// `limiter` (partagé par jeton d'API, voir [`crate::resilience::RateLimiter::shared`]).
+    pub fn with_token(
+        token: &str,
+        limiter: Arc<crate::resilience::RateLimiter>,
+    ) -> Result<Self, reqwest::Error> {
+        Ok(Self::new(Arc::new(LimitedTransport::new(
+            Arc::new(HttpTransport::new(token)?),
+            limiter,
+        ))))
+    }
+
+    /// Taille des pages de groupes de phase (tests de pagination).
+    pub fn with_groups_per_page(mut self, per_page: u32) -> Self {
+        self.groups_per_page = per_page.max(1);
+        self
     }
 
     /// Taille des pages de sets (tests de pagination).
@@ -81,8 +96,7 @@ impl StartGgConnector {
             .ok_or(ConnectorError::InvalidUrl("slug start.gg absent".into()))
     }
 
-    /// Tous les nœuds d'une liste paginée `event.<field>`. Si start.gg trouve une page trop
-    /// coûteuse, la taille des pages est divisée par deux et la lecture reprend au même endroit.
+    /// Tous les nœuds d'une liste paginée `event.<field>`.
     async fn paginate(
         &self,
         query: &str,
@@ -91,11 +105,32 @@ impl StartGgConnector {
         per_page: u32,
         extra: Value,
     ) -> Result<Vec<Value>, ConnectorError> {
+        self.paginate_in(
+            query,
+            ("event", "eventId", event_id),
+            field,
+            per_page,
+            extra,
+        )
+        .await
+    }
+
+    /// Tous les nœuds d'une liste paginée `<root>.<field>`, l'objet `root` étant désigné par la
+    /// variable `id_var` = `id`. Si start.gg trouve une page trop coûteuse, la taille des pages
+    /// est divisée par deux et la lecture reprend au même endroit.
+    async fn paginate_in(
+        &self,
+        query: &str,
+        (root, id_var, id): (&str, &str, &str),
+        field: &str,
+        per_page: u32,
+        extra: Value,
+    ) -> Result<Vec<Value>, ConnectorError> {
         let mut nodes = Vec::new();
         let mut per_page = per_page.max(1);
         let mut page = 1;
         while page <= MAX_PAGES {
-            let mut variables = json!({ "eventId": event_id, "page": page, "perPage": per_page });
+            let mut variables = json!({ id_var: id, "page": page, "perPage": per_page });
             if let (Some(target), Some(extra)) = (variables.as_object_mut(), extra.as_object()) {
                 target.extend(extra.clone());
             }
@@ -108,11 +143,11 @@ impl StartGgConnector {
                 }
                 other => other?,
             };
-            let event = &data["event"];
-            if event.is_null() {
+            let parent = &data[root];
+            if parent.is_null() {
                 return Err(ConnectorError::NotFound);
             }
-            let list = &event[field];
+            let list = &parent[field];
             let batch = list["nodes"].as_array().cloned().unwrap_or_default();
             let total = list["pageInfo"]["totalPages"].as_u64().unwrap_or(0);
             let empty = batch.is_empty();
@@ -161,7 +196,12 @@ impl StartGgConnector {
         Ok(nodes.iter().filter_map(mapping::standing).collect())
     }
 
-    async fn event(&self, reference: ExternalEventRef) -> Result<ExternalEvent, ConnectorError> {
+    /// Structure d'une épreuve : sa référence à jour, ses phases et leurs groupes (tous, page par
+    /// page), et ses inscrits avec leurs seeds.
+    async fn structure(
+        &self,
+        reference: ExternalEventRef,
+    ) -> Result<(ExternalEventRef, EventStructure), ConnectorError> {
         let data = self
             .transport
             .query(queries::PHASES, json!({ "eventId": reference.external_id }))
@@ -170,12 +210,26 @@ impl StartGgConnector {
         if detail.is_null() {
             return Err(ConnectorError::NotFound);
         }
-        let phases = detail["phases"]
+        let mut phases: Vec<ExternalPhase> = detail["phases"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(mapping::phase)
             .collect();
+        for phase in &mut phases {
+            phase.groups = self
+                .paginate_in(
+                    queries::PHASE_GROUPS,
+                    ("phase", "phaseId", &phase.external_id),
+                    "phaseGroups",
+                    self.groups_per_page,
+                    json!({}),
+                )
+                .await?
+                .iter()
+                .filter_map(|node| mapping::group(node, phase.format))
+                .collect();
+        }
         let entrants = self
             .paginate(
                 queries::ENTRANTS,
@@ -188,12 +242,20 @@ impl StartGgConnector {
             .iter()
             .filter_map(mapping::entrant)
             .collect();
+        Ok((
+            mapping::event_ref(detail).unwrap_or(reference),
+            EventStructure { phases, entrants },
+        ))
+    }
+
+    async fn event(&self, reference: ExternalEventRef) -> Result<ExternalEvent, ConnectorError> {
+        let (reference, structure) = self.structure(reference).await?;
         let matches = self.sets(&reference, None).await?;
         let standings = self.standings(&reference.external_id).await?;
         Ok(ExternalEvent {
-            reference: mapping::event_ref(detail).unwrap_or(reference),
-            phases,
-            entrants,
+            reference,
+            phases: structure.phases,
+            entrants: structure.entrants,
             matches,
             standings,
         })
@@ -320,7 +382,12 @@ impl TournamentConnector for StartGgConnector {
         let data = self.tournament(Self::slug(tournament)?).await?;
         let mut matches = Vec::new();
         let mut standings = Vec::new();
+        let mut structures = Vec::new();
         for event in Self::selected(&data, event_ids)? {
+            // Inscriptions, seeds, phases et groupes créés depuis le dernier passage : les
+            // matchs modifiés peuvent y renvoyer.
+            let (event, structure) = self.structure(event).await?;
+            structures.push((event.external_id.clone(), structure));
             for m in self.sets(&event, Some(since - CURSOR_MARGIN_SECS)).await? {
                 matches.push((event.external_id.clone(), m));
             }
@@ -331,6 +398,7 @@ impl TournamentConnector for StartGgConnector {
         }
         Ok(ExternalDelta::Partial {
             state: mapping::tournament_state(&data["state"]),
+            structures,
             matches,
             standings,
         })

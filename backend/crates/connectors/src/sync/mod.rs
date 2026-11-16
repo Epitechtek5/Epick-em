@@ -110,6 +110,8 @@ pub struct ChangeEvent {
 pub enum StoreError {
     /// La source est déjà liée à un autre tournoi local, ou le tournoi local à une autre source.
     Conflict,
+    /// Le bail a expiré et une autre synchronisation l'a repris : rien n'est écrit.
+    LeaseLost,
     Other(String),
 }
 
@@ -117,6 +119,7 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::Conflict => f.write_str("source ou tournoi local déjà lié"),
+            StoreError::LeaseLost => f.write_str("bail de synchronisation perdu"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -169,18 +172,23 @@ pub trait SyncStore: Send + Sync {
     ) -> Result<Option<SourceRecord>, StoreError>;
 
     /// Enregistre une synchronisation réussie et ses événements, en une transaction, et relâche
-    /// le bail.
+    /// le bail. `lease_until` est l'échéance du bail pris par cette synchronisation : si elle a
+    /// changé (bail expiré puis repris par une autre), rien n'est écrit
+    /// ([`StoreError::LeaseLost`]).
     async fn save_success(
         &self,
         id: Uuid,
+        lease_until: i64,
         success: Success,
         changes: &[ChangeEvent],
     ) -> Result<(), StoreError>;
 
-    /// Enregistre un échec (l'instantané est conservé) et relâche le bail.
+    /// Enregistre un échec (l'instantané est conservé) et relâche le bail, s'il est toujours
+    /// celui de `lease_until` (sinon [`StoreError::LeaseLost`]).
     async fn save_failure(
         &self,
         id: Uuid,
+        lease_until: i64,
         error: &str,
         now: i64,
         next_sync_at: i64,
@@ -305,6 +313,7 @@ pub fn apply_delta(
         (
             ExternalDelta::Partial {
                 state,
+                structures,
                 matches,
                 standings,
             },
@@ -312,6 +321,16 @@ pub fn apply_delta(
         ) => {
             let mut next = previous.clone();
             next.state = state;
+            for (event_id, structure) in structures {
+                if let Some(event) = next
+                    .events
+                    .iter_mut()
+                    .find(|e| e.reference.external_id == event_id)
+                {
+                    event.phases = structure.phases;
+                    event.entrants = structure.entrants;
+                }
+            }
             for (event_id, updated) in matches {
                 let Some(event) = next
                     .events
@@ -369,11 +388,12 @@ fn match_change(
         match_id: Some(after.external_id.clone()),
         payload: json!({
             "previous": before.map(|m| json!({
-                "state": m.state, "winner": m.winner_entrant_id, "slots": m.slots, "forfeit": m.forfeit,
+                "state": m.state, "winner": m.winner_entrant_id, "slots": m.slots,
+                "forfeit": m.forfeit, "games": m.games,
             })),
             "current": {
                 "state": after.state, "winner": after.winner_entrant_id,
-                "slots": after.slots, "forfeit": after.forfeit,
+                "slots": after.slots, "forfeit": after.forfeit, "games": after.games,
             },
         }),
     })
@@ -501,11 +521,14 @@ impl SyncService {
     }
 
     async fn run(&self, record: SourceRecord, now: i64) -> SyncReport {
+        // Échéance du bail que `claim` / `claim_due` viennent de poser : elle identifie cette
+        // synchronisation, et ses écritures n'aboutissent que si elle tient toujours le bail.
+        let lease_until = now + self.policy.lease_secs;
         let outcome = self.attempt(&record, now).await;
         let saved = match &outcome {
             Ok((success, changes)) => {
                 self.store
-                    .save_success(record.id, success.clone(), changes)
+                    .save_success(record.id, lease_until, success.clone(), changes)
                     .await
             }
             Err(err) => {
@@ -513,7 +536,7 @@ impl SyncService {
                     .policy
                     .next_after_failure(record.consecutive_failures, now);
                 self.store
-                    .save_failure(record.id, &err.to_string(), now, next)
+                    .save_failure(record.id, lease_until, &err.to_string(), now, next)
                     .await
             }
         };

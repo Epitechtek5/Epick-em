@@ -6,10 +6,11 @@ use connectors::model::{
     BracketFormat, Capabilities, CompetitionState, ExternalDelta, MatchState, SyncCursor,
 };
 use connectors::startgg::queries::operation;
-use connectors::startgg::{GraphqlTransport, StartGgConnector};
+use connectors::startgg::{GraphqlTransport, LimitedTransport, StartGgConnector};
 use connectors::sync::{ChangeKind, apply_delta};
 use connectors::{
-    ConnectorError, ConnectorRegistry, ResiliencePolicy, ResilientConnector, TournamentConnector,
+    ConnectorError, ConnectorRegistry, RateLimiter, ResiliencePolicy, ResilientConnector,
+    TournamentConnector,
 };
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -76,6 +77,10 @@ impl GraphqlTransport for FakeApi {
             "Tournament" if variables["slug"] == "epick-open-2026" => fixture("tournament"),
             "Tournament" => serde_json::json!({ "tournament": null }),
             "EventPhases" => fixture(&format!("phases_{event}")),
+            "PhaseGroups" => fixture(&format!(
+                "phase_groups_{}_p{page}",
+                variables["phaseId"].as_str().unwrap_or_default()
+            )),
             "EventEntrants" => fixture(&format!("entrants_{event}_p{page}")),
             "EventSets" if !variables["updatedAfter"].is_null() => {
                 fixture(&format!("sets_{event}_updated"))
@@ -165,8 +170,16 @@ async fn a_full_snapshot_maps_every_available_field() {
     assert_eq!(snapshot.events.len(), 1, "seule l'épreuve choisie");
     let event = &snapshot.events[0];
 
-    // Phases et groupes, format hérité de la phase si le groupe n'en donne pas.
+    // Phases et groupes (sur deux pages pour la première), format hérité de la phase si le
+    // groupe n'en donne pas.
     assert_eq!(event.phases.len(), 2);
+    assert_eq!(api.calls("PhaseGroups").len(), 3);
+    let labels: Vec<_> = event.phases[0]
+        .groups
+        .iter()
+        .map(|g| g.label.as_deref())
+        .collect();
+    assert_eq!(labels, [Some("A1"), Some("A2")]);
     assert_eq!(event.phases[0].format, Some(BracketFormat::RoundRobin));
     assert_eq!(
         event.phases[1].groups[0].format,
@@ -270,13 +283,20 @@ async fn incremental_updates_only_read_changed_sets() {
     let updated_calls = api.calls("EventSets");
     assert_eq!(updated_calls.last().unwrap()["updatedAfter"], 1_767_228_440);
     let ExternalDelta::Partial {
-        matches, standings, ..
+        matches,
+        standings,
+        structures,
+        ..
     } = &delta
     else {
         panic!("incrémental attendu");
     };
     assert_eq!(matches.len(), 2);
     assert_eq!(standings.len(), 1);
+    // La structure est relue à chaque passage : inscrits et groupes ajoutés depuis l'import.
+    assert_eq!(structures.len(), 1);
+    assert_eq!(structures[0].1.entrants.len(), 4);
+    assert_eq!(structures[0].1.phases[0].groups.len(), 2);
 
     // Fusion : une correction et un match terminé, le reste intact.
     let (merged, changes) = apply_delta(Some(&snapshot), delta).unwrap();
@@ -344,6 +364,28 @@ async fn throttling_and_outages_through_the_resilience_layer() {
     // Reprise automatique après le délai.
     tokio::time::advance(Duration::from_secs(61)).await;
     assert!(resilient.fetch(&reference, &["900".into()]).await.is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_rate_limit_counts_every_graphql_request() {
+    // 2 requêtes d'avance puis une toutes les 5 s ; un instantané en fait une dizaine (une par
+    // page), et non une seule par opération.
+    let api = Arc::new(FakeApi::default());
+    let limiter = Arc::new(RateLimiter::new(2, Duration::from_secs(10)));
+    let startgg = ResilientConnector::limited_inside(
+        Arc::new(StartGgConnector::new(Arc::new(LimitedTransport::new(
+            api.clone(),
+            limiter,
+        )))),
+        ResiliencePolicy::default(),
+        None,
+    );
+    let started = tokio::time::Instant::now();
+    let reference = startgg.resolve_url("epick-open-2026").await.unwrap();
+    startgg.fetch(&reference, &["900".into()]).await.unwrap();
+    let requests = api.total_calls() as u64;
+    assert!(requests >= 10, "{requests}");
+    assert!(started.elapsed() >= Duration::from_secs((requests - 2) * 5));
 }
 
 #[tokio::test]

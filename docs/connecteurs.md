@@ -85,11 +85,19 @@ pub trait TournamentConnector: Send + Sync {
 Si la source sait renvoyer « ce qui a changé depuis T », surchargez `fetch_updates` :
 
 - `cursor.updated_after` vaut le début de la dernière synchronisation réussie (secondes Unix) ;
-- renvoyez `ExternalDelta::Partial { state, events }` avec seulement les matchs, inscrits et
-  classements modifiés ; `apply_delta` les fusionne par `external_id` dans le dernier instantané ;
+- renvoyez `ExternalDelta::Partial { state, structures, matches, standings }` : la structure à
+  jour de chaque épreuve (phases, groupes, inscrits et seeds, qui remplacent ceux de
+  l'instantané), les matchs modifiés et les classements ; `apply_delta` fusionne les matchs par
+  `external_id` dans le dernier instantané ;
 - en cas de doute (curseur trop ancien, changement de structure), renvoyez `ExternalDelta::Full`.
 
-start.gg utilise `updatedAfter` avec une marge de 60 s pour ne rien manquer aux frontières.
+start.gg utilise `updatedAfter` avec une marge de 60 s pour ne rien manquer aux frontières, et
+relit la structure à chaque passage : une inscription ou un tableau créés après l'import y
+figurent avant les matchs qui y renvoient.
+
+Un changement de résultat est détecté sur l'état, le vainqueur, les inscrits et scores de chaque
+place, le forfait et le détail des manches (vainqueur, stage, personnages) : corriger un
+personnage ou le perdant à score égal produit aussi un `result_corrected`.
 
 ## Brancher une source
 
@@ -213,13 +221,17 @@ un événement `result_corrected` est enregistré dans `external_sync_events`.
   Point d'entrée fixe `https://api.start.gg/gql/alpha`, sans redirection.
 - **URL acceptées :** `start.gg`, `www.start.gg`, et les anciens `smash.gg` ; seul le slug du
   tournoi est retenu (`/tournament/<slug>/…`).
-- **Correspondance :** épreuves (`events`), phases et groupes (`phases`, `phaseGroups`, format
+- **Correspondance :** épreuves (`events`), phases et groupes (`phases`, `phaseGroups` paginés
+  par phase, format
   depuis `bracketType`), inscrits et joueurs (`entrants`, `participants`), matchs (`sets`, état,
   scores, vainqueur, forfait), manches (`games`, personnages via `selections`, cartes via
   `stage`), seeds, classements (`standings`). Ce que start.gg ne renvoie pas pour un tournoi
   reste vide et la capacité correspondante est fausse.
 - **Limites :** start.gg documente 80 requêtes par minute ; la politique par défaut en autorise
-  60 et respecte `Retry-After`. Une requête trop complexe est rejouée avec une page plus petite.
+  60. Le seau à jetons est dans le transport : chaque requête GraphQL (une par page) prend un
+  jeton, sur un limiteur partagé par jeton d'API dans le processus (`RateLimiter::shared`). Le
+  délai `Retry-After` du fournisseur est respecté tel quel, même au-delà du plafond du backoff.
+  Une requête trop complexe est rejouée avec une page plus petite.
 - **Tests :** `tests/startgg.rs`, sans réseau, sur des réponses enregistrées
   (`tests/fixtures/startgg/`).
 
@@ -229,7 +241,9 @@ un événement `result_corrected` est enregistré dans `external_sync_events`.
   par défaut).
 - **Cadence :** une source est due toutes les 2 min pendant le tournoi, 30 min avant, 6 h après ;
   après un échec, 1 min doublée à chaque échec jusqu'à 1 h. Un bail de 10 min empêche deux
-  synchronisations simultanées de la même source (plusieurs instances d'api-internal possibles).
+  synchronisations simultanées de la même source (plusieurs instances d'api-internal possibles) ;
+  une synchronisation qui a dépassé son bail, repris depuis par une autre, n'écrit rien
+  (instantané, curseur et événements sont conditionnés à l'échéance du bail qu'elle a posé).
 - **Panne :** les données servies restent celles du dernier instantané réussi (`stale: true`,
   `last_error`, `last_success_at` dans `GET /external-tournaments/{id}`) ; la reprise est
   automatique au retour de la source.
@@ -241,4 +255,5 @@ un événement `result_corrected` est enregistré dans `external_sync_events`.
 - L'instantané est conservé tel quel (JSON) ; sa projection dans les étapes et matchs locaux, et
   la consommation de `external_sync_events` par les recalculs de points, restent à brancher sur
   le modèle d'import des étapes et des matchs.
-- La limite de requêtes est tenue par processus : api-public et api-internal ont chacun leur seau.
+- La limite de requêtes est tenue par processus et par jeton : api-public et api-internal ont
+  chacun leur seau.

@@ -212,6 +212,7 @@ async fn partial_updates_are_merged_and_results_changes_detected() {
     store.mark_processed(&first).await.unwrap();
 
     let partial = ExternalDelta::Partial {
+        structures: Vec::new(),
         state: CompetitionState::Active,
         matches: vec![
             // Correction : le vainqueur change.
@@ -308,6 +309,7 @@ async fn outages_keep_the_last_snapshot_and_back_off_until_recovery() {
 
     // Reprise : le planificateur la retrouve due, et tout redevient frais.
     fake.push(Ok(ExternalDelta::Partial {
+        structures: Vec::new(),
         state: CompetitionState::Completed,
         matches: Vec::new(),
         standings: Vec::new(),
@@ -401,6 +403,50 @@ async fn unknown_providers_and_conflicting_links_are_refused() {
         store.register(third, T0).await,
         Err(StoreError::Conflict)
     ));
+}
+
+#[test]
+fn corrections_of_games_or_of_the_loser_are_detected() {
+    use crate::model::{ExternalGame, ExternalSelection};
+    let mut done = set("m1", MatchState::Completed, Some("a"), [Some(2), Some(0)]);
+    done.games = vec![ExternalGame {
+        external_id: Some("g1".into()),
+        order: 1,
+        winner_entrant_id: Some("a".into()),
+        stage: Some("Battlefield".into()),
+        selections: vec![ExternalSelection {
+            entrant_id: "a".into(),
+            character: Some("Mario".into()),
+        }],
+    }];
+    let before = tournament(CompetitionState::Active, vec![done.clone()]);
+    let corrected = |change: &dyn Fn(&mut ExternalMatch)| {
+        let mut after = done.clone();
+        change(&mut after);
+        let kinds: Vec<ChangeKind> = diff(
+            Some(&before),
+            &tournament(CompetitionState::Active, vec![after]),
+        )
+        .into_iter()
+        .map(|c| c.kind)
+        .collect();
+        kinds == [ChangeKind::ResultCorrected]
+    };
+    assert!(corrected(
+        &|m| m.games[0].stage = Some("Final Destination".into())
+    ));
+    assert!(corrected(
+        &|m| m.games[0].selections[0].character = Some("Link".into())
+    ));
+    assert!(corrected(
+        &|m| m.games[0].winner_entrant_id = Some("b".into())
+    ));
+    // Même score final, autre perdant.
+    assert!(corrected(&|m| m.slots[1].entrant_id = Some("c".into())));
+    assert!(
+        !corrected(&|m| m.updated_at = Some(1)),
+        "rien qui touche au résultat"
+    );
 }
 
 #[test]

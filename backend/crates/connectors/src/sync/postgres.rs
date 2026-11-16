@@ -199,16 +199,18 @@ impl SyncStore for PgSyncStore {
     async fn save_success(
         &self,
         id: Uuid,
+        lease_until: i64,
         success: Success,
         changes: &[ChangeEvent],
     ) -> Result<(), StoreError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        // Seule la synchronisation qui tient encore le bail écrit (et ses événements avec).
+        let owned = sqlx::query(
             "UPDATE external_sources SET snapshot = $2, capabilities = $3, cursor = $4, \
                last_attempt_at = to_timestamp($5), last_success_at = to_timestamp($5), \
                last_error = NULL, consecutive_failures = 0, \
                next_sync_at = to_timestamp($6), lease_until = NULL \
-             WHERE id = $1",
+             WHERE id = $1 AND lease_until = to_timestamp($7)",
         )
         .bind(id)
         .bind(Json(&success.snapshot))
@@ -216,8 +218,14 @@ impl SyncStore for PgSyncStore {
         .bind(success.cursor.updated_after)
         .bind(success.now as f64)
         .bind(success.next_sync_at as f64)
+        .bind(lease_until as f64)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected()
+            == 1;
+        if !owned {
+            return Err(StoreError::LeaseLost);
+        }
         for change in changes {
             sqlx::query(
                 "INSERT INTO external_sync_events (source_id, kind, event_id, match_id, payload) \
@@ -238,23 +246,31 @@ impl SyncStore for PgSyncStore {
     async fn save_failure(
         &self,
         id: Uuid,
+        lease_until: i64,
         error: &str,
         now: i64,
         next_sync_at: i64,
     ) -> Result<(), StoreError> {
-        sqlx::query(
+        let owned = sqlx::query(
             "UPDATE external_sources SET last_attempt_at = to_timestamp($3), last_error = $2, \
                consecutive_failures = consecutive_failures + 1, \
                next_sync_at = to_timestamp($4), lease_until = NULL \
-             WHERE id = $1",
+             WHERE id = $1 AND lease_until = to_timestamp($5)",
         )
         .bind(id)
         .bind(error.chars().take(1000).collect::<String>())
         .bind(now as f64)
         .bind(next_sync_at as f64)
+        .bind(lease_until as f64)
         .execute(&self.pool)
-        .await?;
-        Ok(())
+        .await?
+        .rows_affected()
+            == 1;
+        if owned {
+            Ok(())
+        } else {
+            Err(StoreError::LeaseLost)
+        }
     }
 
     async fn pending_changes(
