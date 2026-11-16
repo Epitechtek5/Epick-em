@@ -232,7 +232,9 @@ function pointsOf(data, base, participant) {
 
 export function handleSummary(summary) {
   const out = { stdout: textSummary(summary) }
-  if (__ENV.SUMMARY) out[__ENV.SUMMARY] = JSON.stringify(summary, null, 2)
+  // setup_data contient les jetons d'accès des comptes de test : jamais écrit dans le résumé.
+  const { setup_data: _tokens, ...kept } = summary
+  if (__ENV.SUMMARY) out[__ENV.SUMMARY] = JSON.stringify(kept, null, 2)
   return out
 }
 

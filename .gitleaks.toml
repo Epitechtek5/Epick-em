@@ -1,0 +1,7 @@
+# Règles par défaut de gitleaks, plus une exception de chemin.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Résumés k6 : jetons d'accès de 15 min émis par l'environnement jetable du test de charge, dans l'historique (setup_data n'est plus écrit)."
+paths = ['''^loadtest/results/[^/]+\.json$''']
