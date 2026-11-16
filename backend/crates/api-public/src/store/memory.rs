@@ -1574,11 +1574,11 @@ impl AuthStore for MemoryStore {
         &self,
         id: Uuid,
         status: ParticipantStatus,
-    ) -> Result<Option<TournamentParticipant>, StoreError> {
+    ) -> Result<Option<(TournamentParticipant, ParticipantStatus)>, StoreError> {
         let mut state = self.state();
         Ok(state.participants.iter_mut().find(|p| p.id == id).map(|p| {
-            p.status = status;
-            p.clone()
+            let previous = std::mem::replace(&mut p.status, status);
+            (p.clone(), previous)
         }))
     }
 

@@ -588,12 +588,14 @@ pub trait AuthStore: Send + Sync {
         participant: ParticipantInput,
     ) -> Result<Option<TournamentParticipant>, StoreError>;
 
-    /// Change le statut d'un inscrit ; `None` s'il n'existe pas.
+    /// Change le statut d'un inscrit et rend aussi son statut précédent, lu sous le même verrou :
+    /// deux changements concurrents voient chacun l'état laissé par l'autre. `None` s'il
+    /// n'existe pas.
     async fn set_participant_status(
         &self,
         id: Uuid,
         status: ParticipantStatus,
-    ) -> Result<Option<TournamentParticipant>, StoreError>;
+    ) -> Result<Option<(TournamentParticipant, ParticipantStatus)>, StoreError>;
 
     /// Supprime l'inscription ; `false` si elle n'existait pas.
     async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError>;

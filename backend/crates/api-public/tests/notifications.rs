@@ -6,7 +6,7 @@ use actix_web::http::StatusCode;
 use actix_web::test::TestRequest;
 use api_public::AppState;
 use api_public::config::AuthConfig;
-use api_public::mail::MemoryMailer;
+use api_public::mail::{MailError, Mailer, MemoryMailer, NotificationMail};
 use api_public::notifications::{
     Audience, Catalog, Event, EventDefinition, Notifier, team_member_added,
 };
@@ -14,6 +14,7 @@ use api_public::push::MemoryPush;
 use api_public::store::{
     AuthStore, Category, Channel, MemoryStore, Platform, Role, SettingsUpdate, UserSettings,
 };
+use async_trait::async_trait;
 use common::{
     PUBLIC_URL, SECRET, access, app_with_services, call, eventually, logged_in_as, login, request,
 };
@@ -902,5 +903,190 @@ async fn future_features_register_their_own_events() {
     assert_eq!(
         UserSettings::defaults().language,
         api_public::store::Language::Fr
+    );
+}
+
+/// Messagerie qui coupe des canaux du destinataire pendant l'envoi d'un e-mail, comme un
+/// utilisateur qui modifie ses préférences au même moment.
+struct SwitchingMailer {
+    inner: Arc<MemoryMailer>,
+    store: Arc<MemoryStore>,
+    user_id: Uuid,
+    switch_off: Vec<Channel>,
+}
+
+#[async_trait]
+impl Mailer for SwitchingMailer {
+    async fn send_verification(&self, to: &str, link: &str) -> Result<(), MailError> {
+        self.inner.send_verification(to, link).await
+    }
+    async fn send_welcome(&self, to: &str, username: &str) -> Result<(), MailError> {
+        self.inner.send_welcome(to, username).await
+    }
+    async fn send_password_reset(&self, to: &str, link: &str) -> Result<(), MailError> {
+        self.inner.send_password_reset(to, link).await
+    }
+    async fn send_notification(&self, to: &str, mail: &NotificationMail) -> Result<(), MailError> {
+        let notifications = self
+            .switch_off
+            .iter()
+            .map(|&channel| (Category::Teams, channel, false))
+            .collect();
+        self.store
+            .update_user_settings(
+                self.user_id,
+                SettingsUpdate {
+                    notifications,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        self.inner.send_notification(to, mail).await
+    }
+}
+
+#[actix_web::test]
+async fn preferences_are_read_again_before_each_delivery_attempt() {
+    let (_app, e) = env().await;
+    e.store
+        .register_push_token(e.alice_id, ALICE_PUSH, Platform::Ios)
+        .await
+        .unwrap();
+    let switching = |switch_off| {
+        Notifier::from_state(&state(&e).with_mailer(
+            Arc::new(SwitchingMailer {
+                inner: e.mailer.clone(),
+                store: e.store.clone(),
+                user_id: e.alice_id,
+                switch_off,
+            }),
+            PUBLIC_URL,
+        ))
+    };
+
+    // Le push est coupé pendant l'envoi de l'e-mail : il ne part pas.
+    switching(vec![Channel::Push])
+        .deliver(member_added(&e, "push-off"))
+        .await;
+    assert_eq!(
+        (e.mailer.notifications().len(), e.push.sent().len()),
+        (1, 0)
+    );
+
+    // L'e-mail est coupé pendant un essai qui échoue : la reprise n'a pas lieu.
+    e.store
+        .update_user_settings(
+            e.alice_id,
+            SettingsUpdate {
+                notifications: vec![(Category::Teams, Channel::Push, true)],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    *e.mailer.notification_failures.lock().unwrap() = 1;
+    switching(vec![Channel::Email])
+        .deliver(member_added(&e, "email-off"))
+        .await;
+    assert_eq!(
+        (e.mailer.notifications().len(), e.push.sent().len()),
+        (1, 1),
+        "aucune reprise de l'e-mail, le push reste actif"
+    );
+}
+
+#[actix_web::test]
+async fn solo_players_of_a_team_are_notified_alone_and_each_disqualification_counts() {
+    let (app, e) = env().await;
+    let (game, _) = game_and_tournament(&app, &e).await;
+    let (status, tournament) = send(
+        &app,
+        TestRequest::post(),
+        "/tournaments",
+        &e.admin,
+        Some(json!({
+            "game_id": game, "name": "Coupe des équipes",
+            "start_date": "2026-11-14T18:00:00Z", "end_date": "2026-11-15T18:00:00Z",
+            "participant_type": "solo", "max_participants": 8,
+            "team_scoring_mode": "top_n", "team_scoring_n": 2,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{tournament}");
+    let tid = tournament["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        set_status(&app, &e, &tid, "registration").await,
+        StatusCode::OK
+    );
+    let (status, team) = send(
+        &app,
+        TestRequest::post(),
+        &format!("/tournaments/{tid}/teams"),
+        &e.alice,
+        Some(json!({"name": "Alpha"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{team}");
+    let team = team["id"].as_str().unwrap().to_string();
+    let (status, _) = send(
+        &app,
+        TestRequest::post(),
+        &format!("/tournament-teams/{team}/members"),
+        &e.alice,
+        Some(json!({"user_id": e.bob_id, "role": "member"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    // Alice joue en solo pour le compte de l'équipe, dont Bob est membre.
+    let (status, participant) = send(
+        &app,
+        TestRequest::post(),
+        &format!("/tournaments/{tid}/participants"),
+        &e.alice,
+        Some(json!({"tournament_team_id": team})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{participant}");
+    let participant = format!(
+        "/tournaments/{tid}/participants/{}",
+        participant["id"].as_str().unwrap()
+    );
+    let set = |status: &'static str| {
+        let (app, admin, path) = (&app, e.admin.clone(), participant.clone());
+        async move {
+            send(
+                app,
+                TestRequest::patch(),
+                &path,
+                &admin,
+                Some(json!({"status": status})),
+            )
+            .await
+            .0
+        }
+    };
+    let disqualified = || {
+        e.mailer
+            .notifications()
+            .into_iter()
+            .filter(|(_, mail)| mail.title.starts_with("Disqualification"))
+            .map(|(to, _)| to)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(set("disqualified").await, StatusCode::OK);
+    eventually(|| disqualified().len() == 1).await;
+    // Le même statut renvoyé n'est pas une nouvelle disqualification.
+    assert_eq!(set("disqualified").await, StatusCode::OK);
+    // Rétablie puis disqualifiée de nouveau : une seconde notification.
+    assert_eq!(set("registered").await, StatusCode::OK);
+    assert_eq!(set("disqualified").await, StatusCode::OK);
+    eventually(|| disqualified().len() == 2).await;
+    actix_web::rt::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        disqualified(),
+        ["alice@example.com", "alice@example.com"],
+        "Bob, coéquipier, n'est pas concerné"
     );
 }

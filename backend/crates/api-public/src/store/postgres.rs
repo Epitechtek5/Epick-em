@@ -2274,16 +2274,41 @@ impl AuthStore for PgStore {
         &self,
         id: Uuid,
         status: ParticipantStatus,
-    ) -> Result<Option<TournamentParticipant>, StoreError> {
-        sqlx::query_as::<_, ParticipantRow>(&format!(
-            "UPDATE tournament_participant SET status = $2 WHERE id = $1 RETURNING {}",
-            participant_columns()
+    ) -> Result<Option<(TournamentParticipant, ParticipantStatus)>, StoreError> {
+        // Le statut précédent est lu sous le verrou de la ligne, avant la mise à jour.
+        let row = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                Uuid,
+                Option<Uuid>,
+                Option<Uuid>,
+                String,
+                String,
+                String,
+            ),
+        >(&format!(
+            "WITH previous AS ( \
+                SELECT id, status FROM tournament_participant WHERE id = $1 FOR UPDATE \
+             ) \
+             UPDATE tournament_participant AS p SET status = $2 FROM previous \
+             WHERE p.id = previous.id \
+             RETURNING p.id, p.tournament_id, p.user_id, p.tournament_team_id, p.status, {}, \
+                previous.status",
+            ts("p.registered_at")
         ))
         .bind(id)
         .bind(status.as_str())
         .fetch_optional(&self.pool)
-        .await?
-        .map(participant)
+        .await?;
+        row.map(
+            |(id, tournament, user, team, status, registered_at, previous)| {
+                Ok((
+                    participant((id, tournament, user, team, status, registered_at))?,
+                    previous.parse()?,
+                ))
+            },
+        )
         .transpose()
     }
 
