@@ -2,15 +2,15 @@
 
 use super::teams::now_rfc3339;
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Generation, Match, MatchFinish, MatchImport,
-    MatchInput, MatchParticipant, MatchResult, MatchScore, MatchStatus, MatchUpdate,
-    ParticipantImport, ParticipantInput, ParticipantStatus, Placement, Role, ScoringRule,
-    ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step, StepClosing,
-    StepDefinition, StepGroup, StepInput, StepParticipant, StepParticipantStatus, StepStart,
-    StepStatus, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate,
-    Tournament, TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus,
-    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
-    UserRecord, UserUpdate,
+    AuthStore, Game, GameFinish, GameInput, GameScores, GameUpdate, Generation, Match, MatchFinish,
+    MatchGame, MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchResult,
+    MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput, ParticipantStatus,
+    Placement, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
+    StatOption, StatType, StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput,
+    StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Team, TeamImport,
+    TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput,
+    TournamentParticipant, TournamentStatus, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -43,6 +43,8 @@ struct State {
     games: Vec<Game>,
     stats: Vec<Stat>,
     stat_games: HashSet<(Uuid, Uuid)>,
+    /// Options des statistiques `select`, par (statistique, jeu).
+    stat_options: HashMap<(Uuid, Uuid), Vec<StatOption>>,
     /// Statistiques que le barème d'un tournoi en cours rend indélébiles.
     locked_stats: HashSet<Uuid>,
     tokens: HashMap<String, RefreshToken>,
@@ -59,6 +61,7 @@ struct State {
     step_participants: Vec<StepParticipant>,
     matches: Vec<Match>,
     match_participants: Vec<MatchParticipant>,
+    match_games: Vec<MatchGame>,
     verification_limits: HashMap<String, (Instant, u32)>,
     verification: HashMap<String, (Uuid, String, Instant, VerificationStatus)>,
     reset_tokens: HashMap<String, ResetToken>,
@@ -609,6 +612,8 @@ impl AuthStore for MemoryStore {
             name: input.name,
             key: input.key,
             kind: input.kind,
+            scope: input.scope,
+            options: Vec::new(),
         };
         state.stats.push(stat.clone());
         Ok(stat)
@@ -633,6 +638,9 @@ impl AuthStore for MemoryStore {
         if let Some(kind) = update.kind {
             stat.kind = kind;
         }
+        if let Some(scope) = update.scope {
+            stat.scope = scope;
+        }
         Ok(Some(stat.clone()))
     }
 
@@ -646,6 +654,7 @@ impl AuthStore for MemoryStore {
         }
         state.stats.retain(|s| s.id != id);
         state.stat_games.retain(|(stat_id, _)| *stat_id != id);
+        state.prune_options();
         Ok(true)
     }
 
@@ -660,6 +669,13 @@ impl AuthStore for MemoryStore {
             .filter(|s| state.stat_games.contains(&(s.id, game_id)))
             .cloned()
             .collect();
+        for stat in &mut stats {
+            stat.options = state
+                .stat_options
+                .get(&(stat.id, game_id))
+                .cloned()
+                .unwrap_or_default();
+        }
         sort_stats(&mut stats);
         Ok(Some(stats))
     }
@@ -677,6 +693,14 @@ impl AuthStore for MemoryStore {
 
     async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError> {
         let mut state = self.state();
+        if let Some(input) = stats.iter().find(|input| {
+            state
+                .stats
+                .iter()
+                .any(|s| s.key == input.key && s.kind.is_numeric() != input.kind.is_numeric())
+        }) {
+            return Err(StoreError::StatKindChanged(input.key.clone()));
+        }
         Ok(stats
             .into_iter()
             .map(|input| state.upsert_stat(input))
@@ -701,6 +725,7 @@ impl AuthStore for MemoryStore {
         state
             .stat_games
             .extend(stat_ids.into_iter().map(|stat_id| (stat_id, game_id)));
+        state.prune_options();
         Ok(true)
     }
 
@@ -722,6 +747,25 @@ impl AuthStore for MemoryStore {
         state
             .stat_games
             .extend(game_ids.into_iter().map(|game_id| (stat_id, game_id)));
+        state.prune_options();
+        Ok(true)
+    }
+
+    async fn set_stat_options(
+        &self,
+        game_id: Uuid,
+        stat_id: Uuid,
+        options: Vec<StatOption>,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        let selectable = state
+            .stats
+            .iter()
+            .any(|s| s.id == stat_id && s.kind == StatType::Select);
+        if !selectable || !state.stat_games.contains(&(stat_id, game_id)) {
+            return Ok(false);
+        }
+        state.stat_options.insert((stat_id, game_id), options);
         Ok(true)
     }
 
@@ -730,7 +774,9 @@ impl AuthStore for MemoryStore {
         if state.stat_locked(stat_id, Some(game_id)) {
             return Err(StoreError::StatInUse);
         }
-        Ok(state.stat_games.remove(&(stat_id, game_id)))
+        let removed = state.stat_games.remove(&(stat_id, game_id));
+        state.prune_options();
+        Ok(removed)
     }
 
     async fn list_teams(
@@ -1727,7 +1773,7 @@ impl AuthStore for MemoryStore {
             next_slot: None,
             loser_next_match_id: None,
             loser_next_slot: None,
-            best_of: 1,
+            best_of: input.best_of,
             scheduled_at: input.scheduled_at,
             started_at: None,
             ended_at: None,
@@ -1763,6 +1809,9 @@ impl AuthStore for MemoryStore {
         }
         if let Some(scheduled_at) = update.scheduled_at {
             m.scheduled_at = scheduled_at;
+        }
+        if let Some(best_of) = update.best_of {
+            m.best_of = best_of;
         }
         m.updated_at = now_rfc3339();
         Ok(Some(m.clone()))
@@ -1825,6 +1874,9 @@ impl AuthStore for MemoryStore {
             return Err(StoreError::MatchState);
         }
         let step_id = m.step_id;
+        if let Some(game) = finish.game {
+            state.finish_game_in(game)?;
+        }
         state.apply_match_scores(finish.match_id, finish.scores);
         for placement in finish.placements {
             state.place(placement);
@@ -1916,6 +1968,24 @@ impl AuthStore for MemoryStore {
                     games_won: score.games_won,
                 });
             }
+            for (number, game) in import.games.into_iter().enumerate() {
+                state.match_games.push(MatchGame {
+                    id: Uuid::new_v4(),
+                    match_id: ids[index],
+                    number: i32::try_from(number + 1).unwrap_or(i32::MAX),
+                    status: game.status,
+                    attributes: game.attributes,
+                    started_at: game.started_at,
+                    ended_at: game.ended_at,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                    participants: game
+                        .participants
+                        .into_iter()
+                        .map(game_participant)
+                        .collect(),
+                });
+            }
         }
         Ok(true)
     }
@@ -2001,6 +2071,124 @@ impl AuthStore for MemoryStore {
             }
         }
         Ok(created)
+    }
+
+    async fn list_match_games(&self, match_id: Uuid) -> Result<Vec<MatchGame>, StoreError> {
+        let mut games: Vec<MatchGame> = self
+            .state()
+            .match_games
+            .iter()
+            .filter(|g| g.match_id == match_id)
+            .cloned()
+            .collect();
+        games.sort_by_key(|g| g.number);
+        Ok(games)
+    }
+
+    async fn list_step_match_games(&self, step_id: Uuid) -> Result<Vec<MatchGame>, StoreError> {
+        let state = self.state();
+        let mut games: Vec<MatchGame> = state
+            .match_games
+            .iter()
+            .filter(|g| {
+                state
+                    .matches
+                    .iter()
+                    .any(|m| m.id == g.match_id && m.step_id == step_id)
+            })
+            .cloned()
+            .collect();
+        games.sort_by_key(|g| (g.match_id, g.number));
+        Ok(games)
+    }
+
+    async fn create_match_game(
+        &self,
+        match_id: Uuid,
+        attributes: serde_json::Value,
+    ) -> Result<Option<MatchGame>, StoreError> {
+        let mut state = self.state();
+        let Some(m) = state.matches.iter().find(|m| m.id == match_id) else {
+            return Ok(None);
+        };
+        if matches!(m.status, MatchStatus::Finished | MatchStatus::Cancelled) {
+            return Err(StoreError::MatchState);
+        }
+        let previous: Vec<&MatchGame> = state
+            .match_games
+            .iter()
+            .filter(|g| g.match_id == match_id)
+            .collect();
+        if previous.iter().any(|g| g.status != MatchStatus::Finished) {
+            return Err(StoreError::MatchState);
+        }
+        let now = now_rfc3339();
+        let number = i32::try_from(previous.len() + 1).unwrap_or(i32::MAX);
+        let mut participants: Vec<MatchGameParticipant> = state
+            .match_participants
+            .iter()
+            .filter(|p| p.match_id == match_id)
+            .map(|p| game_participant(empty_score(p.participant_id)))
+            .collect();
+        participants.sort_by_key(|p| p.participant_id);
+        let game = MatchGame {
+            id: Uuid::new_v4(),
+            match_id,
+            number,
+            status: MatchStatus::Ongoing,
+            attributes,
+            started_at: Some(now.clone()),
+            ended_at: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            participants,
+        };
+        state.match_games.push(game.clone());
+        if let Some(m) = state.matches.iter_mut().find(|m| m.id == match_id) {
+            if m.status == MatchStatus::Scheduled {
+                m.status = MatchStatus::Ongoing;
+                m.started_at.get_or_insert(now.clone());
+            }
+            m.updated_at = now;
+        }
+        Ok(Some(game))
+    }
+
+    async fn save_game_scores(&self, scores: GameScores) -> Result<Option<MatchGame>, StoreError> {
+        let mut state = self.state();
+        if !state.match_games.iter().any(|g| g.id == scores.game_id) {
+            return Ok(None);
+        }
+        state.open_game(scores.game_id)?;
+        let game = state
+            .match_games
+            .iter_mut()
+            .find(|g| g.id == scores.game_id)
+            .ok_or(StoreError::MatchState)?;
+        if let Some(attributes) = scores.attributes {
+            game.attributes = attributes;
+        }
+        apply_game_scores(game, scores.scores);
+        game.updated_at = now_rfc3339();
+        Ok(Some(game.clone()))
+    }
+
+    async fn finish_game(&self, finish: GameFinish) -> Result<Option<MatchGame>, StoreError> {
+        let mut state = self.state();
+        if !state.match_games.iter().any(|g| g.id == finish.game_id) {
+            return Ok(None);
+        }
+        state.finish_game_in(finish).map(Some)
+    }
+
+    async fn delete_match_game(&self, game_id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state();
+        if !state.match_games.iter().any(|g| g.id == game_id) {
+            return Ok(false);
+        }
+        state.open_game(game_id)?;
+        state.match_games.retain(|g| g.id != game_id);
+        Ok(true)
     }
 
     async fn import_tournaments(
@@ -2270,7 +2458,40 @@ impl State {
         }
     }
 
+    /// La partie est en cours et son match accepte encore des résultats.
+    fn open_game(&self, game_id: Uuid) -> Result<(), StoreError> {
+        let game = self.match_games.iter().find(|g| g.id == game_id);
+        let open = game.is_some_and(|g| {
+            g.status == MatchStatus::Ongoing
+                && self.matches.iter().any(|m| {
+                    m.id == g.match_id
+                        && matches!(m.status, MatchStatus::Scheduled | MatchStatus::Ongoing)
+                })
+        });
+        if open {
+            Ok(())
+        } else {
+            Err(StoreError::MatchState)
+        }
+    }
+
+    fn finish_game_in(&mut self, finish: GameFinish) -> Result<MatchGame, StoreError> {
+        self.open_game(finish.game_id)?;
+        let now = now_rfc3339();
+        let game = self
+            .match_games
+            .iter_mut()
+            .find(|g| g.id == finish.game_id)
+            .ok_or(StoreError::MatchState)?;
+        apply_game_scores(game, finish.scores);
+        game.status = MatchStatus::Finished;
+        game.ended_at = Some(now.clone());
+        game.updated_at = now;
+        Ok(game.clone())
+    }
+
     fn remove_match(&mut self, id: Uuid) {
+        self.match_games.retain(|g| g.match_id != id);
         self.matches.retain(|m| m.id != id);
         self.match_participants.retain(|p| p.match_id != id);
         for m in &mut self.matches {
@@ -2383,10 +2604,17 @@ impl State {
         })
     }
 
+    /// Oublie les options des liaisons (statistique, jeu) qui n'existent plus.
+    fn prune_options(&mut self) {
+        let links = &self.stat_games;
+        self.stat_options.retain(|key, _| links.contains(key));
+    }
+
     fn upsert_stat(&mut self, input: StatInput) -> (Stat, bool) {
         if let Some(stat) = self.stats.iter_mut().find(|s| s.key == input.key) {
             stat.name = input.name;
             stat.kind = input.kind;
+            stat.scope = input.scope;
             return (stat.clone(), false);
         }
         let stat = Stat {
@@ -2394,6 +2622,8 @@ impl State {
             name: input.name,
             key: input.key,
             kind: input.kind,
+            scope: input.scope,
+            options: Vec::new(),
         };
         self.stats.push(stat.clone());
         (stat, true)
@@ -2410,6 +2640,40 @@ fn empty_participant(match_id: Uuid, participant_id: Uuid) -> MatchParticipant {
         result: None,
         slot: None,
         games_won: None,
+    }
+}
+
+fn empty_score(participant_id: Uuid) -> MatchScore {
+    MatchScore {
+        participant_id,
+        stats: serde_json::json!({}),
+        points: 0.0,
+        rank: None,
+        result: None,
+        games_won: None,
+        slot: None,
+    }
+}
+
+fn game_participant(score: MatchScore) -> MatchGameParticipant {
+    MatchGameParticipant {
+        participant_id: score.participant_id,
+        stats: score.stats,
+        points: score.points,
+        rank: score.rank,
+        result: score.result,
+    }
+}
+
+fn apply_game_scores(game: &mut MatchGame, scores: Vec<MatchScore>) {
+    for score in scores {
+        if let Some(p) = game
+            .participants
+            .iter_mut()
+            .find(|p| p.participant_id == score.participant_id)
+        {
+            *p = game_participant(score);
+        }
     }
 }
 

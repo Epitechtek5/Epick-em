@@ -1012,3 +1012,65 @@ async fn a_generated_bracket_exports_and_reimports_without_loss() {
     let after: Value = serde_json::from_str(&export_file(&app, &s.admin, "json").await).unwrap();
     assert_eq!(found(&after, "Copie générée")["steps"], steps);
 }
+
+/// Une série générée jouée partie par partie (`.../games`) : la partie qui la décide termine le
+/// match, les manches gagnées en sont comptées et le vainqueur passe au tour suivant, comme pour
+/// une série saisie directement.
+#[actix_web::test]
+async fn a_generated_series_played_game_by_game_advances_its_winner() {
+    let (app, s) = setup(4).await;
+    let mut definition = step("single_elim", "duel", 4, 1);
+    definition["rules"] = json!({ "best_of": 3 });
+    let (status, body, run) = running(&app, &s, definition, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    generate(&app, &s, &run).await;
+    let all = matches(&app, &s, &run).await;
+    let semi = all.iter().find(|m| m["round"] == 1).unwrap().clone();
+    let (winner, loser) = (members(&semi)[0].clone(), members(&semi)[1].clone());
+    let games = format!("{}/matches/{}/games", run.base(), id(&semi));
+
+    // Le vainqueur gagne les parties 1 et 3, le perdant la 2.
+    for (number, first) in [(1, &winner), (2, &loser), (3, &winner)] {
+        let (status, game) = post(&app, &games, &s.admin, json!({})).await;
+        assert_eq!(status, StatusCode::CREATED, "{game}");
+        let results: Vec<Value> = [&winner, &loser]
+            .iter()
+            .map(|p| json!({ "participant_id": p, "stats": {}, "rank": if *p == first { 1 } else { 2 } }))
+            .collect();
+        let (status, saved) = put(
+            &app,
+            &format!("{games}/{number}/results"),
+            &s.admin,
+            json!({ "results": results }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let (status, outcome) = post(
+            &app,
+            &format!("{games}/{number}/finish"),
+            &s.admin,
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{outcome}");
+        assert_eq!(outcome["series_finished"], number == 3, "partie {number}");
+    }
+
+    let done = refreshed(&app, &s, &run, &id(&semi)).await;
+    assert_eq!(done["status"], "finished", "{done}");
+    let won = |who: &str| {
+        done["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["participant_id"] == who)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(won(&winner)["games_won"], 2);
+    assert_eq!(won(&loser)["games_won"], 1);
+    assert_eq!(won(&winner)["result"], "win");
+    let next = refreshed(&app, &s, &run, done["next_match_id"].as_str().unwrap()).await;
+    assert!(members(&next).contains(&winner), "{next}");
+    assert!(!members(&next).contains(&loser), "{next}");
+}

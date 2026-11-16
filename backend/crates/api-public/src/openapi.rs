@@ -31,6 +31,7 @@ use utoipa::{Modify, OpenApi};
         (name = "tournaments", description = "Tournois, barème, inscriptions, statuts et classements"),
         (name = "steps", description = "Étapes d'un tournoi : réglages, lancement, clôture et classements par groupe"),
         (name = "matches", description = "Matchs d'une étape : résultats, points et propagation du vainqueur"),
+        (name = "match-games", description = "Parties d'un match (BO1, BO3, BO5) : résultats par partie et agrégation dans le match"),
         (name = "system", description = "Santé du service"),
     ),
     modifiers(&BearerAuth),

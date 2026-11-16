@@ -15,6 +15,7 @@ pub mod games;
 pub mod generation;
 pub mod guard;
 pub mod mail;
+pub mod match_games;
 pub mod match_io;
 pub mod matches;
 pub mod openapi;
