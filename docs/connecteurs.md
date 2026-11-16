@@ -250,10 +250,37 @@ un événement `result_corrected` est enregistré dans `external_sync_events`.
 - **Tables :** `external_sources` (une ligne par tournoi importé) et `external_sync_events`
   (changements de résultats à consommer, `processed_at` nul tant qu'ils ne l'ont pas été).
 
+## Report dans le tournoi local
+
+Après chaque instantané enregistré (import compris), `SyncService` appelle son `Projector`
+(`api_public::projection::StoreProjector`, branché dans api-public et api-internal), qui reporte
+tout l'instantané dans le tournoi local en une transaction :
+
+- **Inscrits importés :** les inscrits de la source n'ont pas de compte. Ils deviennent des
+  inscrits sans `user_id` ni équipe, avec `external_id` (`<épreuve>:<inscrit>`) et
+  `display_name` (leur nom chez la source), affichés et classés comme les autres.
+- **Étapes et groupes :** chaque phase (non vide) devient une étape, dans l'ordre de la source ;
+  chaque groupe de phase, un groupe. Une phase à plusieurs groupes est une étape `pool` ; sinon
+  le format suit la source (`single_elim`, `double_elim`, `swiss`, `pool` par défaut). Les
+  membres d'un groupe sont les inscrits de ses sets ; leurs points sont leurs victoires ; ils
+  sont `qualified` s'ils jouent une phase suivante, `eliminated` une fois le groupe terminé ou
+  le nombre de défaites de l'élimination atteint, sinon `in`. La dernière phase reprend le
+  classement final de la source.
+- **Matchs :** chaque set devient un match (tour négatif chez start.gg → tableau `losers`,
+  « Grand Final » → `grand_final`), avec score (`stats.score`), résultat, rang et 1 point au
+  vainqueur.
+- **Statut du tournoi :** `draft` avant le début, `ongoing` pendant, `finished` après.
+
+Tout est retrouvé par son identifiant chez la source (`external_id` des inscrits, étapes,
+groupes et matchs) : les identifiants locaux restent stables d'une synchronisation à l'autre, ce
+qui a disparu de la source est supprimé. Le report n'a lieu que si la synchronisation tient
+encore son bail ; un report échoué compte comme un échec de synchronisation et, l'instantané
+complet étant reporté à chaque fois, il est rattrapé au passage suivant. Le tournoi reste en
+lecture seule pour l'API (`409 externally_managed`).
+
 ## Limites connues
 
-- L'instantané est conservé tel quel (JSON) ; sa projection dans les étapes et matchs locaux, et
-  la consommation de `external_sync_events` par les recalculs de points, restent à brancher sur
-  le modèle d'import des étapes et des matchs.
+- `external_sync_events` reste une boîte d'envoi pour les consommateurs en aval (pronostics…) :
+  le modèle local, lui, est recalculé depuis l'instantané à chaque synchronisation.
 - La limite de requêtes est tenue par processus et par jeton : api-public et api-internal ont
   chacun leur seau.

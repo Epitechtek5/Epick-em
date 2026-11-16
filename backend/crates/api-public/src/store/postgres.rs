@@ -4,16 +4,16 @@
 use super::{
     AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
     MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
-    ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
-    StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
-    StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate,
-    Tournament, TournamentImport, TournamentInput, TournamentParticipant, TournamentStatus,
-    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
-    UserRecord, UserUpdate,
+    ParticipantStatus, ProjectedGroup, Projection, Role, ScoringRule, ScoringRuleDefinition,
+    ScoringRuleInput, Stat, StatInput, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
+    StepInput, StepParticipant, StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember,
+    TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentParticipant,
+    TournamentStatus, TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate,
+    UserProfile, UserRecord, UserUpdate,
 };
 use async_trait::async_trait;
 use infra::{CachedDb, Ttl};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
@@ -572,12 +572,22 @@ async fn lock_open_match(
 /// Colonnes de `tournament_participant`, dans l'ordre de [`ParticipantRow`].
 fn participant_columns() -> String {
     format!(
-        "id, tournament_id, user_id, tournament_team_id, status, {} AS registered_at",
+        "id, tournament_id, user_id, tournament_team_id, status, {} AS registered_at, \
+         external_id, display_name",
         ts("registered_at")
     )
 }
 
-type ParticipantRow = (Uuid, Uuid, Option<Uuid>, Option<Uuid>, String, String);
+type ParticipantRow = (
+    Uuid,
+    Uuid,
+    Option<Uuid>,
+    Option<Uuid>,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 fn participant(row: ParticipantRow) -> Result<TournamentParticipant, StoreError> {
     Ok(TournamentParticipant {
@@ -587,6 +597,8 @@ fn participant(row: ParticipantRow) -> Result<TournamentParticipant, StoreError>
         tournament_team_id: row.3,
         status: row.4.parse()?,
         registered_at: row.5,
+        external_id: row.6,
+        display_name: row.7,
     })
 }
 
@@ -2665,6 +2677,127 @@ impl AuthStore for PgStore {
         Ok(())
     }
 
+    async fn project_external(
+        &self,
+        tournament_id: Uuid,
+        projection: Projection,
+    ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let Some((game_id,)) = sqlx::query_as::<_, (Uuid,)>(
+            "SELECT game_id FROM tournaments WHERE id = $1 FOR UPDATE",
+        )
+        .bind(tournament_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(false);
+        };
+        let count = i32::try_from(projection.participants.len()).unwrap_or(i32::MAX);
+        sqlx::query(
+            "UPDATE tournaments SET status = $2, \
+                 max_participants = GREATEST(max_participants, $3), updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(tournament_id)
+        .bind(projection.status.as_str())
+        .bind(count.max(1))
+        .execute(&mut *tx)
+        .await?;
+
+        // Inscrits importés : mis à jour par leur identifiant chez la source.
+        let kept: Vec<String> = projection
+            .participants
+            .iter()
+            .map(|p| p.external_id.clone())
+            .collect();
+        sqlx::query(
+            "DELETE FROM tournament_participant WHERE tournament_id = $1 \
+             AND (external_id IS NULL OR NOT external_id = ANY($2))",
+        )
+        .bind(tournament_id)
+        .bind(&kept)
+        .execute(&mut *tx)
+        .await?;
+        let mut participants: HashMap<String, Uuid> = HashMap::new();
+        for participant in projection.participants {
+            let (id,) = sqlx::query_as::<_, (Uuid,)>(
+                "INSERT INTO tournament_participant \
+                     (tournament_id, external_id, display_name, status) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (tournament_id, external_id) \
+                 DO UPDATE SET display_name = EXCLUDED.display_name, status = EXCLUDED.status \
+                 RETURNING id",
+            )
+            .bind(tournament_id)
+            .bind(&participant.external_id)
+            .bind(&participant.display_name)
+            .bind(participant.status.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            participants.insert(participant.external_id, id);
+        }
+
+        // Étapes : les positions sont décalées le temps de les réattribuer, pour ne pas
+        // heurter l'unicité (tournoi, position) quand la source réordonne ses phases.
+        let kept: Vec<String> = projection
+            .steps
+            .iter()
+            .map(|s| s.external_id.clone())
+            .collect();
+        sqlx::query(
+            "DELETE FROM step WHERE tournament_id = $1 \
+             AND (external_id IS NULL OR NOT external_id = ANY($2))",
+        )
+        .bind(tournament_id)
+        .bind(&kept)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE step SET position = position + 100000 WHERE tournament_id = $1")
+            .bind(tournament_id)
+            .execute(&mut *tx)
+            .await?;
+        for step in projection.steps {
+            let d = &step.definition;
+            let (step_id,) = sqlx::query_as::<_, (Uuid,)>(
+                "INSERT INTO step (tournament_id, external_id, position, format, match_type, \
+                     group_count, group_size, matches_per_group, advance_per_group, tiebreak, status) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11) \
+                 ON CONFLICT (tournament_id, external_id) DO UPDATE SET \
+                     position = EXCLUDED.position, format = EXCLUDED.format, \
+                     match_type = EXCLUDED.match_type, group_count = EXCLUDED.group_count, \
+                     group_size = EXCLUDED.group_size, \
+                     matches_per_group = EXCLUDED.matches_per_group, \
+                     advance_per_group = EXCLUDED.advance_per_group, \
+                     tiebreak = EXCLUDED.tiebreak, status = EXCLUDED.status, updated_at = now() \
+                 RETURNING id",
+            )
+            .bind(tournament_id)
+            .bind(&step.external_id)
+            .bind(d.position)
+            .bind(d.format.as_str())
+            .bind(d.match_type.as_str())
+            .bind(d.group_count)
+            .bind(d.group_size)
+            .bind(d.matches_per_group)
+            .bind(d.advance_per_group)
+            .bind(d.tiebreak.to_string())
+            .bind(step.status.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            project_groups(
+                &mut tx,
+                tournament_id,
+                game_id,
+                step_id,
+                step.groups,
+                &participants,
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
     async fn insert_password_reset_token(
         &self,
         user_id: Uuid,
@@ -2740,4 +2873,124 @@ impl AuthStore for PgStore {
         tx.commit().await?;
         Ok(true)
     }
+}
+
+/// Groupes d'une étape importée, leurs inscrits et leurs matchs ([`AuthStore::project_external`]).
+async fn project_groups(
+    tx: &mut Transaction<'_, Postgres>,
+    tournament_id: Uuid,
+    game_id: Uuid,
+    step_id: Uuid,
+    groups: Vec<ProjectedGroup>,
+    participants: &HashMap<String, Uuid>,
+) -> Result<(), StoreError> {
+    let kept: Vec<String> = groups.iter().map(|g| g.external_id.clone()).collect();
+    sqlx::query(
+        "DELETE FROM step_group WHERE step_id = $1 \
+         AND (external_id IS NULL OR NOT external_id = ANY($2))",
+    )
+    .bind(step_id)
+    .bind(&kept)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("UPDATE step_group SET index = index + 100000 WHERE step_id = $1")
+        .bind(step_id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM step_participant WHERE step_id = $1")
+        .bind(step_id)
+        .execute(&mut **tx)
+        .await?;
+    for (index, group) in groups.into_iter().enumerate() {
+        let (group_id,) = sqlx::query_as::<_, (Uuid,)>(
+            "INSERT INTO step_group (step_id, external_id, index) VALUES ($1, $2, $3) \
+             ON CONFLICT (step_id, external_id) DO UPDATE SET index = EXCLUDED.index \
+             RETURNING id",
+        )
+        .bind(step_id)
+        .bind(&group.external_id)
+        .bind(i32::try_from(index + 1).unwrap_or(i32::MAX))
+        .fetch_one(&mut **tx)
+        .await?;
+        for member in &group.members {
+            let Some(participant_id) = participants.get(&member.participant) else {
+                continue;
+            };
+            sqlx::query(
+                "INSERT INTO step_participant (step_id, tournament_id, participant_id, group_id, \
+                     points, final_rank, status) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+            )
+            .bind(step_id)
+            .bind(tournament_id)
+            .bind(participant_id)
+            .bind(group_id)
+            .bind(member.points)
+            .bind(member.final_rank)
+            .bind(member.status.as_str())
+            .execute(&mut **tx)
+            .await?;
+        }
+        let kept: Vec<String> = group
+            .matches
+            .iter()
+            .map(|m| m.external_id.clone())
+            .collect();
+        sqlx::query(
+            "DELETE FROM match WHERE step_id = $1 AND group_id = $2 \
+             AND (external_id IS NULL OR NOT external_id = ANY($3))",
+        )
+        .bind(step_id)
+        .bind(group_id)
+        .bind(&kept)
+        .execute(&mut **tx)
+        .await?;
+        for projected in group.matches {
+            let (match_id,) = sqlx::query_as::<_, (Uuid,)>(
+                "INSERT INTO match (game_id, step_id, group_id, external_id, round, bracket, \
+                     status, started_at, ended_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::timestamptz) \
+                 ON CONFLICT (step_id, external_id) DO UPDATE SET \
+                     group_id = EXCLUDED.group_id, round = EXCLUDED.round, \
+                     bracket = EXCLUDED.bracket, status = EXCLUDED.status, \
+                     started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at, \
+                     updated_at = now() \
+                 RETURNING id",
+            )
+            .bind(game_id)
+            .bind(step_id)
+            .bind(group_id)
+            .bind(&projected.external_id)
+            .bind(projected.round)
+            .bind(projected.bracket.map(|b| b.as_str()))
+            .bind(projected.status.as_str())
+            .bind(&projected.started_at)
+            .bind(&projected.ended_at)
+            .fetch_one(&mut **tx)
+            .await?;
+            sqlx::query("DELETE FROM match_participant WHERE match_id = $1")
+                .bind(match_id)
+                .execute(&mut **tx)
+                .await?;
+            for entry in projected.entries {
+                let Some(participant_id) = participants.get(&entry.participant) else {
+                    continue;
+                };
+                sqlx::query(
+                    "INSERT INTO match_participant (match_id, participant_id, stats, points, \
+                         rank, result) \
+                     VALUES ($1, $2, $3::jsonb, $4, $5, $6) ON CONFLICT DO NOTHING",
+                )
+                .bind(match_id)
+                .bind(participant_id)
+                .bind(entry.stats.to_string())
+                .bind(entry.points)
+                .bind(entry.rank)
+                .bind(entry.result.map(|r| r.as_str()))
+                .execute(&mut **tx)
+                .await?;
+            }
+        }
+    }
+    Ok(())
 }

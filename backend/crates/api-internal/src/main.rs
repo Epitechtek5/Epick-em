@@ -2,6 +2,8 @@
 //! externes (start.gg…, voir `docs/connecteurs.md`), et répond 200 sur toutes les routes en
 //! attendant le vrai serveur HTTP.
 
+use api_public::projection::StoreProjector;
+use api_public::store::PgStore;
 use connectors::sync::{PgSyncStore, SyncPolicy, SyncService};
 use std::error::Error;
 use std::process::ExitCode;
@@ -30,11 +32,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
     if registry.all().is_empty() {
         eprintln!("api-internal : aucune source externe configurée (STARTGG_TOKEN absente)");
     }
-    let sync = Arc::new(SyncService::new(
-        registry,
-        Arc::new(PgSyncStore::new(db.pool().clone())),
-        SyncPolicy::default(),
-    ));
+    // Les synchronisations planifiées reportent elles aussi chaque instantané dans le tournoi
+    // local (inscrits importés, étapes, matchs et résultats).
+    let projector = StoreProjector::new(Arc::new(PgStore::new(db.clone())));
+    let sync = Arc::new(
+        SyncService::new(
+            registry,
+            Arc::new(PgSyncStore::new(db.pool().clone())),
+            SyncPolicy::default(),
+        )
+        .with_projector(Arc::new(projector)),
+    );
     tokio::spawn(schedule(sync, sync_interval()));
 
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await?;

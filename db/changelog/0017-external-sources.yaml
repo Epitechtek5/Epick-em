@@ -46,3 +46,46 @@ databaseChangeLog:
             sql: |
               DROP TABLE external_sync_events;
               DROP TABLE external_sources;
+  - changeSet:
+      id: 0017-external-sources-projection
+      author: epickem
+      comment: >-
+        Projection d'un tournoi importé dans le modèle local : inscrits « importés » (sans compte,
+        nommés par la source) et identifiants de la source sur les inscrits, étapes, groupes et
+        matchs, pour les mettre à jour à chaque synchronisation sans changer leurs identifiants.
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE tournament_participant
+                ADD COLUMN external_id varchar(128),
+                ADD COLUMN display_name varchar(255),
+                DROP CONSTRAINT tournament_participant_who_check,
+                ADD CONSTRAINT tournament_participant_who_check
+                  CHECK (user_id IS NOT NULL OR tournament_team_id IS NOT NULL OR external_id IS NOT NULL),
+                ADD CONSTRAINT tournament_participant_imported_check
+                  CHECK (external_id IS NULL OR (display_name IS NOT NULL AND user_id IS NULL AND tournament_team_id IS NULL)),
+                ADD CONSTRAINT tournament_participant_external_key UNIQUE (tournament_id, external_id);
+              COMMENT ON COLUMN tournament_participant.external_id IS
+                'Inscrit importé d''une source externe (sans compte local) : identifiant chez la source';
+              COMMENT ON COLUMN tournament_participant.display_name IS
+                'Nom affiché d''un inscrit importé';
+              ALTER TABLE step ADD COLUMN external_id varchar(128),
+                ADD CONSTRAINT step_external_key UNIQUE (tournament_id, external_id);
+              ALTER TABLE step_group ADD COLUMN external_id varchar(128),
+                ADD CONSTRAINT step_group_external_key UNIQUE (step_id, external_id);
+              ALTER TABLE match ADD COLUMN external_id varchar(128),
+                ADD CONSTRAINT match_external_key UNIQUE (step_id, external_id);
+      rollback:
+        - sql:
+            sql: |
+              ALTER TABLE match DROP COLUMN external_id;
+              ALTER TABLE step_group DROP COLUMN external_id;
+              ALTER TABLE step DROP COLUMN external_id;
+              DELETE FROM tournament_participant WHERE external_id IS NOT NULL;
+              ALTER TABLE tournament_participant
+                DROP CONSTRAINT tournament_participant_imported_check,
+                DROP CONSTRAINT tournament_participant_who_check,
+                DROP COLUMN display_name,
+                DROP COLUMN external_id,
+                ADD CONSTRAINT tournament_participant_who_check
+                  CHECK (user_id IS NOT NULL OR tournament_team_id IS NOT NULL);

@@ -7,6 +7,7 @@ mod games;
 mod matches;
 mod memory;
 mod postgres;
+mod projection;
 mod stats;
 mod steps;
 mod teams;
@@ -19,6 +20,10 @@ pub use self::matches::{
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
+pub use self::projection::{
+    ProjectedEntry, ProjectedGroup, ProjectedMatch, ProjectedMember, ProjectedParticipant,
+    ProjectedStep, Projection,
+};
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::steps::{
     MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
@@ -667,6 +672,16 @@ pub trait AuthStore: Send + Sync {
         &self,
         tournaments: Vec<TournamentImport>,
     ) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Reporte un tournoi importé dans le modèle local, en une transaction : statut du tournoi,
+    /// inscrits importés, étapes, groupes, matchs et résultats, mis à jour par leur identifiant
+    /// chez la source (les identifiants locaux restent stables d'une synchronisation à l'autre),
+    /// ce qui a disparu de la source étant supprimé. `false` si le tournoi n'existe pas.
+    async fn project_external(
+        &self,
+        tournament_id: Uuid,
+        projection: Projection,
+    ) -> Result<bool, StoreError>;
 
     /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
     /// et les équipes existent, et les équipes sont celles du tournoi.

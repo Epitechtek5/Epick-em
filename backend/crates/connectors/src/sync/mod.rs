@@ -435,12 +435,26 @@ pub fn diff(previous: Option<&ExternalTournament>, next: &ExternalTournament) ->
     changes
 }
 
+/// Reporte un instantané dans le modèle local (inscrits, étapes, matchs du tournoi lié), de
+/// façon idempotente : appelé après chaque instantané enregistré. Une erreur fait échouer la
+/// synchronisation ; l'instantané complet étant reporté à chaque fois, elle est rattrapée au
+/// passage suivant.
+#[async_trait]
+pub trait Projector: Send + Sync {
+    async fn project(
+        &self,
+        tournament_id: Uuid,
+        snapshot: &ExternalTournament,
+    ) -> Result<(), String>;
+}
+
 /// Import et synchronisation des tournois externes, pour toutes les sources du registre.
 #[derive(Clone)]
 pub struct SyncService {
     registry: ConnectorRegistry,
     store: Arc<dyn SyncStore>,
     policy: SyncPolicy,
+    projector: Option<Arc<dyn Projector>>,
 }
 
 impl SyncService {
@@ -449,7 +463,14 @@ impl SyncService {
             registry,
             store,
             policy,
+            projector: None,
         }
+    }
+
+    /// Reporte chaque instantané réussi dans le modèle local ([`Projector`]).
+    pub fn with_projector(mut self, projector: Arc<dyn Projector>) -> Self {
+        self.projector = Some(projector);
+        self
     }
 
     pub fn registry(&self) -> &ConnectorRegistry {
@@ -527,9 +548,22 @@ impl SyncService {
         let outcome = self.attempt(&record, now).await;
         let saved = match &outcome {
             Ok((success, changes)) => {
-                self.store
+                let saved = self
+                    .store
                     .save_success(record.id, lease_until, success.clone(), changes)
-                    .await
+                    .await;
+                // Le modèle local suit l'instantané enregistré, et seulement si cette
+                // synchronisation tenait encore son bail. Tout l'instantané est reporté à chaque
+                // fois : un report échoué est rattrapé au passage suivant.
+                match (saved, &self.projector, record.tournament_id) {
+                    (Ok(()), Some(projector), Some(tournament_id)) => projector
+                        .project(tournament_id, &success.snapshot)
+                        .await
+                        .map_err(|detail| {
+                            StoreError::Other(format!("report dans le tournoi local : {detail}"))
+                        }),
+                    (saved, _, _) => saved,
+                }
             }
             Err(err) => {
                 let next = self

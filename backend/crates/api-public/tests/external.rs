@@ -6,13 +6,15 @@ mod common;
 use actix_web::http::StatusCode;
 use actix_web::test::{self, TestRequest};
 use api_public::config::AuthConfig;
+use api_public::projection::StoreProjector;
 use api_public::store::{AuthStore, MemoryStore, PgStore, Role};
 use api_public::{AppState, app};
 use async_trait::async_trait;
 use common::{access, call, logged_in_as, login, request};
 use connectors::model::{
-    Capabilities, CompetitionState, ExternalEvent, ExternalEventRef, ExternalTournament,
-    ExternalTournamentRef,
+    BracketFormat, Capabilities, CompetitionState, ExternalEntrant, ExternalEvent,
+    ExternalEventRef, ExternalGroup, ExternalMatch, ExternalPhase, ExternalSlot, ExternalStanding,
+    ExternalTournament, ExternalTournamentRef, MatchState,
 };
 use connectors::sync::{MemorySyncStore, PgSyncStore, SyncPolicy, SyncService, SyncStore};
 use connectors::{ConnectorError, ConnectorRegistry, TournamentConnector};
@@ -34,9 +36,11 @@ macro_rules! app_type {
 const URL: &str = "https://fake.test/t/winter-cup";
 
 /// Source factice : un seul tournoi (`winter-cup`, épreuves `main` et `side`), qui peut tomber
-/// en panne à la demande.
+/// en panne à la demande. L'épreuve `main` a un tableau à élimination simple, Alice contre Bob,
+/// dont le set se termine à la demande (`finished`).
 struct FakeSource {
     down: AtomicBool,
+    finished: AtomicBool,
 }
 
 fn reference() -> ExternalTournamentRef {
@@ -64,6 +68,77 @@ fn event(id: &str) -> ExternalEventRef {
 }
 
 impl FakeSource {
+    fn main_event(&self) -> ExternalEvent {
+        let finished = self.finished.load(Ordering::SeqCst);
+        let state = if finished {
+            CompetitionState::Completed
+        } else {
+            CompetitionState::Active
+        };
+        let entrant = |id: &str, name: &str, seed| ExternalEntrant {
+            external_id: id.into(),
+            name: name.into(),
+            seed: Some(seed),
+            players: Vec::new(),
+        };
+        let slot = |id: &str, score| ExternalSlot {
+            entrant_id: Some(id.into()),
+            score: finished.then_some(score),
+        };
+        ExternalEvent {
+            reference: event("main"),
+            phases: vec![ExternalPhase {
+                external_id: "bracket".into(),
+                name: "Top 2".into(),
+                order: Some(1),
+                format: Some(BracketFormat::SingleElimination),
+                state,
+                groups: vec![ExternalGroup {
+                    external_id: "g1".into(),
+                    label: Some("A".into()),
+                    format: Some(BracketFormat::SingleElimination),
+                    state,
+                    url: None,
+                }],
+            }],
+            entrants: vec![entrant("a", "Alice", 1), entrant("b", "Bob", 2)],
+            matches: vec![ExternalMatch {
+                external_id: "final".into(),
+                phase_id: Some("bracket".into()),
+                group_id: Some("g1".into()),
+                round: Some(1),
+                round_label: Some("Finale".into()),
+                state: if finished {
+                    MatchState::Completed
+                } else {
+                    MatchState::Pending
+                },
+                slots: vec![slot("a", 3), slot("b", 1)],
+                winner_entrant_id: finished.then(|| "a".into()),
+                forfeit: false,
+                games: Vec::new(),
+                started_at: None,
+                completed_at: finished.then_some(1_767_300_000),
+                updated_at: None,
+                url: None,
+            }],
+            standings: if finished {
+                vec![
+                    ExternalStanding {
+                        entrant_id: "a".into(),
+                        placement: 1,
+                    },
+                    ExternalStanding {
+                        entrant_id: "b".into(),
+                        placement: 2,
+                    },
+                ]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
     fn check(&self) -> Result<(), ConnectorError> {
         if self.down.load(Ordering::SeqCst) {
             Err(ConnectorError::Unavailable("HTTP 503".into()))
@@ -128,15 +203,22 @@ impl TournamentConnector for FakeSource {
         self.check()?;
         Ok(ExternalTournament {
             reference: tournament.clone(),
-            state: CompetitionState::Active,
+            state: if self.finished.load(Ordering::SeqCst) {
+                CompetitionState::Completed
+            } else {
+                CompetitionState::Active
+            },
             events: event_ids
                 .iter()
-                .map(|id| ExternalEvent {
-                    reference: event(id),
-                    phases: Vec::new(),
-                    entrants: Vec::new(),
-                    matches: Vec::new(),
-                    standings: Vec::new(),
+                .map(|id| match id.as_str() {
+                    "main" => self.main_event(),
+                    _ => ExternalEvent {
+                        reference: event(id),
+                        phases: Vec::new(),
+                        entrants: Vec::new(),
+                        matches: Vec::new(),
+                        standings: Vec::new(),
+                    },
                 })
                 .collect(),
         })
@@ -186,12 +268,14 @@ async fn build<F: std::future::Future<Output = ()>>(
 ) -> (app_type!(), Setup) {
     let source = Arc::new(FakeSource {
         down: AtomicBool::new(false),
+        finished: AtomicBool::new(false),
     });
     let sync = SyncService::new(
         ConnectorRegistry::new().register(source.clone()),
         sync_store,
         SyncPolicy::default(),
-    );
+    )
+    .with_projector(Arc::new(StoreProjector::new(store.clone())));
     let config = AuthConfig {
         jwt_secret: common::SECRET.into(),
         access_token_ttl: Duration::from_secs(900),
@@ -323,7 +407,8 @@ async fn import_creates_a_read_only_tournament_once() {
     let (status, local) = get(&app, &format!("/tournaments/{tournament}"), &s.player).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(local["name"], "Winter Cup");
-    assert_eq!(local["status"], "draft");
+    // Le statut suit la source (épreuve en cours).
+    assert_eq!(local["status"], "ongoing");
     assert_eq!(local["start_date"], "2026-01-01T00:00:00.000000Z");
     assert_eq!(local["max_participants"], 16);
     assert!(local["description"].as_str().unwrap().contains(URL));
@@ -588,6 +673,9 @@ async fn import_sync_and_delete_on_postgres() {
     let id = source["id"].as_str().unwrap().to_string();
     let tournament = source["tournament_id"].as_str().unwrap().to_string();
     assert_eq!(source["snapshot"]["events"][0]["external_id"], "main");
+    // Inscrits importés, tableau et résultats reportés dans PostgreSQL, mis à jour sur place.
+    check_projection(&app, &s, &source).await;
+    let (_, source) = get(&app, &format!("/external-tournaments/{id}"), &s.admin).await;
 
     let (status, body) = send(
         &app,
@@ -640,4 +728,122 @@ async fn import_sync_and_delete_on_postgres() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = get(&app, &format!("/tournaments/{tournament}"), &s.admin).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Les inscrits de la source n'ont pas de compte : ils sont importés avec leur nom, et le
+/// tableau, ses matchs et leurs résultats suivent la source à chaque synchronisation, sous les
+/// mêmes identifiants locaux.
+async fn check_projection(app: &app_type!(), s: &Setup, source: &Value) {
+    let id = source["id"].as_str().unwrap();
+    let tournament = source["tournament_id"].as_str().unwrap();
+    let (status, participants) = get(
+        app,
+        &format!("/tournaments/{tournament}/participants"),
+        &s.player,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{participants}");
+    let names: Vec<&str> = participants
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["display_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2, "{participants}");
+    assert!(
+        names.contains(&"Alice") && names.contains(&"Bob"),
+        "{names:?}"
+    );
+    for p in participants.as_array().unwrap() {
+        assert!(
+            p["user_id"].is_null() && p["tournament_team_id"].is_null(),
+            "{p}"
+        );
+        assert!(
+            p["external_id"].as_str().unwrap().starts_with("main:"),
+            "{p}"
+        );
+    }
+    let alice = participants
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["display_name"] == "Alice")
+        .unwrap()["id"]
+        .clone();
+
+    let (_, steps) = get(app, &format!("/tournaments/{tournament}/steps"), &s.player).await;
+    let steps = steps.as_array().unwrap().clone();
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0]["format"], "single_elim");
+    assert_eq!(steps[0]["status"], "ongoing");
+    let step = steps[0]["id"].as_str().unwrap().to_string();
+    let matches_path = format!("/tournaments/{tournament}/steps/{step}/matches");
+    let (_, before) = get(app, &matches_path, &s.player).await;
+    let before = before.as_array().unwrap().clone();
+    assert_eq!(before.len(), 1, "{before:?}");
+    assert_eq!(before[0]["status"], "scheduled");
+
+    // Le set se termine chez la source : la resynchronisation le reporte sur place.
+    s.source.finished.store(true, Ordering::SeqCst);
+    let (status, after) = post(
+        app,
+        &format!("/external-tournaments/{id}/sync"),
+        &s.admin,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(after["stale"], false, "{after}");
+    let (_, local) = get(app, &format!("/tournaments/{tournament}"), &s.player).await;
+    assert_eq!(local["status"], "finished");
+    let (_, steps) = get(app, &format!("/tournaments/{tournament}/steps"), &s.player).await;
+    assert_eq!(steps[0]["id"], step.as_str(), "même étape locale");
+    assert_eq!(steps[0]["status"], "finished");
+    let (_, finished) = get(app, &matches_path, &s.player).await;
+    let finished = finished.as_array().unwrap().clone();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0]["id"], before[0]["id"], "même match local");
+    assert_eq!(finished[0]["status"], "finished");
+    let match_id = finished[0]["id"].as_str().unwrap();
+    let (_, detail) = get(app, &format!("{matches_path}/{match_id}"), &s.player).await;
+    let winner = detail["participants"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{detail}"))
+        .iter()
+        .find(|p| p["result"] == "win")
+        .unwrap_or_else(|| panic!("{detail}"))
+        .clone();
+    assert_eq!(winner["participant_id"], alice, "{detail}");
+    assert_eq!(winner["stats"]["score"], 3);
+
+    // Le classement du tournoi range les inscrits importés, sans compte, par leur nom.
+    let (status, ranking) = get(
+        app,
+        &format!("/tournaments/{tournament}/ranking"),
+        &s.player,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ranking}");
+    assert_eq!(ranking[0]["display_name"], "Alice", "{ranking}");
+    assert_eq!(ranking[0]["rank"], 1);
+    assert!(ranking[0]["user_id"].is_null());
+    assert_eq!(ranking[1]["display_name"], "Bob", "{ranking}");
+
+    // Toujours en lecture seule.
+    let (status, _) = post(
+        app,
+        &format!("/tournaments/{tournament}/participants"),
+        &s.player,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[actix_web::test]
+async fn imported_entrants_and_results_are_projected_locally() {
+    let (app, s) = setup().await;
+    let source = import(&app, &s).await;
+    check_projection(&app, &s, &source).await;
 }

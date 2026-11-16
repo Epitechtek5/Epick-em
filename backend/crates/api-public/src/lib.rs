@@ -19,6 +19,7 @@ pub mod match_io;
 pub mod matches;
 pub mod openapi;
 pub mod password_reset;
+pub mod projection;
 pub mod ranking;
 pub mod router;
 pub mod stat_io;

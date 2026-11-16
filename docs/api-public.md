@@ -74,12 +74,12 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /tournaments/{id}/scoring-rules` | JWT valide, **administrateur** | `{ stat_id, mode, coefficient? }` (`linear`) ou `{ stat_id, mode, points_table }` (`table`) | `201` la règle ; `400` si la statistique n'est pas liée au jeu ; `409` si elle a déjà une règle ou si le barème est verrouillé |
 | `PATCH /tournaments/{id}/scoring-rules/{rule_id}` | JWT valide, **administrateur** | `{ mode, coefficient? }` ou `{ mode, points_table }` | `200` la règle ; `409` si le barème est verrouillé |
 | `DELETE /tournaments/{id}/scoring-rules/{rule_id}` | JWT valide, **administrateur** | — | `204` ; `409` si le barème est verrouillé |
-| `GET /tournaments/{id}/participants` | JWT valide | `?limit`, `?offset` | `200` `[{ id, tournament_id, user_id, tournament_team_id, status, registered_at }]` |
+| `GET /tournaments/{id}/participants` | JWT valide | `?limit`, `?offset` | `200` `[{ id, tournament_id, user_id, tournament_team_id, status, registered_at, external_id, display_name }]` (`external_id` et `display_name` : inscrit importé d'une source externe, sans compte) |
 | `POST /tournaments/{id}/participants` | JWT valide | `{ user_id?, tournament_team_id? }` | `201` l'inscription ; `409` si les inscriptions sont fermées, si le participant est déjà inscrit ou si le tournoi est complet |
 | `PATCH /tournaments/{id}/participants/{participant_id}` | JWT valide, **administrateur**, ou l'inscrit pour `withdrawn` | `{ status }` | `200` l'inscription |
 | `DELETE /tournaments/{id}/participants/{participant_id}` | JWT valide, l'inscrit, le propriétaire de son équipe ou un **administrateur** | — | `204` ; `409` une fois le tournoi `ongoing` |
 | `POST /tournaments/{id}/participants/{participant_id}/check-in` | JWT valide, l'inscrit, le propriétaire de son équipe ou un **administrateur** | — | `200` l'inscription au statut `checked_in` |
-| `GET /tournaments/{id}/ranking` | JWT valide | — | `200` `[{ rank, participant_id, user_id, tournament_team_id, points }]` |
+| `GET /tournaments/{id}/ranking` | JWT valide | — | `200` `[{ rank, participant_id, user_id, display_name, tournament_team_id, points }]` (inscrit importé : `user_id` nul, nommé par `display_name`) |
 | `GET /tournaments/{id}/team-ranking` | JWT valide | — | `200` `[{ rank, tournament_team_id, name, points }]` |
 | `GET /tournaments/{id}/steps` | JWT valide | — | `200` `[{ id, tournament_id, position, format, match_type, group_count, group_size, matches_per_group, advance_per_group, tiebreak, status, created_at, updated_at }]` par position |
 | `GET /tournaments/{id}/steps/{step_id}` | JWT valide | — | `200` l'étape |

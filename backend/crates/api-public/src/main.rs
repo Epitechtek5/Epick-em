@@ -3,6 +3,7 @@
 use actix_web::HttpServer;
 use api_public::config::AuthConfig;
 use api_public::mail::{MailConfig, ResendMailer};
+use api_public::projection::StoreProjector;
 use api_public::store::PgStore;
 use api_public::{AppState, app};
 use connectors::sync::{PgSyncStore, SyncPolicy, SyncService};
@@ -29,12 +30,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let cache = db.cache().clone();
     let registry = connectors::registry_from_env(Some(cache.clone()))?;
-    let sync = Arc::new(SyncService::new(
-        registry,
-        Arc::new(PgSyncStore::new(db.pool().clone())),
-        SyncPolicy::default(),
-    ));
-    let store = Arc::new(PgStore::new(db));
+    let store = Arc::new(PgStore::new(db.clone()));
+    // Chaque instantané importé est reporté dans le tournoi local (inscrits, étapes, matchs).
+    let sync = Arc::new(
+        SyncService::new(
+            registry,
+            Arc::new(PgSyncStore::new(db.pool().clone())),
+            SyncPolicy::default(),
+        )
+        .with_projector(Arc::new(StoreProjector::new(store.clone()))),
+    );
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
         .with_cache(cache)
