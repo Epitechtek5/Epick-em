@@ -1416,3 +1416,63 @@ async fn administrative_forfeit_archives_partial_games_before_finalizing() {
     assert_eq!(status, StatusCode::OK, "{report}");
     assert_eq!(report["created"], 1, "{report}");
 }
+
+#[actix_web::test]
+async fn correcting_a_semifinal_reopens_started_and_finished_finals() {
+    for finish_final in [false, true] {
+        let (app, setup) = setup(4).await;
+        let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 4, 1), None).await;
+        generate(&app, &setup, &run).await;
+        let semifinals: Vec<_> = matches(&app, &setup, &run)
+            .await
+            .into_iter()
+            .filter(|m| m["round"] == 1)
+            .collect();
+        for semifinal in &semifinals {
+            let path = format!("{}/matches/{}/workflow", run.base(), id(semifinal));
+            let (status, response) = post(&app,&path,&setup.admin,json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"adjudicate","reason":"Verified semifinal","report":report_for(semifinal,false)}})).await;
+            assert_eq!(status, StatusCode::OK, "{response}");
+        }
+        let final_match = matches(&app, &setup, &run)
+            .await
+            .into_iter()
+            .find(|m| m["round"] == 2)
+            .unwrap();
+        let final_base = format!("{}/matches/{}", run.base(), id(&final_match));
+        let (status, response) = if finish_final {
+            post(&app,&format!("{final_base}/workflow"),&setup.admin,json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"adjudicate","reason":"Verified final","report":report_for(&final_match,false)}})).await
+        } else {
+            post(
+                &app,
+                &format!("{final_base}/status"),
+                &setup.admin,
+                json!({"status":"ongoing"}),
+            )
+            .await
+        };
+        assert_eq!(status, StatusCode::OK, "{response}");
+        let root = &semifinals[0];
+        let base = format!("{}/matches/{}", run.base(), id(root));
+        let input = json!({"report":report_for(root,true),"reason":"Semifinal winner corrected after evidence review"});
+        let (status, preview) = post(
+            &app,
+            &format!("{base}/correction-preview"),
+            &setup.admin,
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(
+            preview["affected"][0]["status"],
+            if finish_final { "finished" } else { "ongoing" }
+        );
+        let (status,result)=post(&app,&format!("{base}/corrections"),&setup.admin,json!({"operation_id":Uuid::new_v4(),"revision":preview["revision"],"reset_downstream":true,"report":input["report"],"reason":input["reason"]})).await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        let (_, replayed) = get(&app, &final_base, &setup.admin).await;
+        assert_eq!(replayed["status"], "scheduled");
+        assert!(members(&replayed).contains(&members(root)[1]));
+        assert!(!members(&replayed).contains(&members(root)[0]));
+        let (_, stage) = get(&app, &run.base(), &setup.admin).await;
+        assert_eq!(stage["status"], "ongoing");
+    }
+}
