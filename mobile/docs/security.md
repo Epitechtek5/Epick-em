@@ -1,10 +1,14 @@
 # Dependency security
 
-## Current blocking advisory: 2026-11-17
+## Temporary picomatch acceptance: 2026-11-17
 
-Both strict audit trees fail on `picomatch` [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), a high-severity regular-expression denial of service affecting versions through 4.0.7. At verification time the registry publishes no patched release. The finding propagates through existing Expo/Metro/Jest/Tailwind dependencies; the number of affected packages is not a count of distinct vulnerabilities.
+At the user's explicit request, the CI policy temporarily accepts only `picomatch` [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), with the exact high severity and affected range `<=4.0.7`. The exception expires at **2026-12-01 00:00 UTC**; the same finding blocks CI again from that instant. Its expiration and the fact that the vulnerability remains unfixed are printed in audit logs and the GitHub job summary.
 
-The new SDK-compatible `expo-crypto` dependency provides native operation UUIDs. Reproducible installation and Expo compatibility checks pass, but **the dependency security gate does not pass**. No audit exception, forced upgrade, SDK downgrade or speculative global override was added. Adopt an upstream compatible fix and rerun full and production audits before considering this gate resolved. Earlier snapshots below are historical.
+The registry still publishes 4.0.7 as the latest version at verification time. This ReDoS advisory propagates through the existing Expo/Metro/Jest/Tailwind dependency tree. Untrusted glob patterns can exhaust Node.js processing time; passing the CI policy does not remediate this vulnerability or establish that the shipped application is unaffected. Review build inputs and do not expose development tooling publicly.
+
+Both full-tree and production audits still execute. Other advisories (including on picomatch), changed ranges or severity, malformed reports, registry failures and timeouts remain blocking. Raw `npm audit` still reports the vulnerability and exits nonzero. No workflow-wide `continue-on-error`, audit removal, dependency downgrade or forced upgrade was introduced.
+
+Remove this exception when a compatible upstream fix becomes available, update the lockfile, and rerun both audit trees and Expo compatibility checks. If no fix exists by the deadline, the risk requires a fresh explicit review rather than automatic renewal. Earlier snapshots below are historical.
 
 ## npm advisory range correction: 2026-11-03
 
