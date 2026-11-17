@@ -315,3 +315,7 @@ chaque fois, il est rattrapé au passage suivant. Le tournoi reste en lecture se
   les efface et elles sont reconstruites depuis start.gg au fil des synchronisations dues.
 - La limite de requêtes est tenue par processus et par jeton : api-public et api-internal ont
   chacun leur seau.
+
+### Atomic projection
+
+The projector prepares serialized cache records without writing. Redis commits these records, the source snapshot, cursor and result events in one Lua operation that verifies the lease before releasing it. A stale execution cannot write either the snapshot or the visible tournament model. The in-memory implementation holds its synchronization mutex through the corresponding cache writes.

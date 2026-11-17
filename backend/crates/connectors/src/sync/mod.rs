@@ -207,9 +207,19 @@ pub trait SyncStore: Send + Sync {
     async fn delete(&self, id: Uuid) -> Result<bool, StoreError>;
 }
 
+/// One serialized projection record. Keys are supplied only by the trusted projector.
+#[derive(Debug, Clone)]
+pub struct ProjectionEntry {
+    pub key: String,
+    pub value: Vec<u8>,
+    pub ttl_secs: u64,
+}
+
 /// Résultat d'une synchronisation réussie.
 #[derive(Debug, Clone)]
 pub struct Success {
+    /// Cache projection committed atomically with the snapshot and lease.
+    pub projection: Vec<ProjectionEntry>,
     pub snapshot: ExternalTournament,
     pub capabilities: Capabilities,
     pub cursor: SyncCursor,
@@ -436,17 +446,15 @@ pub fn diff(previous: Option<&ExternalTournament>, next: &ExternalTournament) ->
     changes
 }
 
-/// Reporte un instantané dans le modèle local (inscrits, étapes, matchs du tournoi lié), de
-/// façon idempotente : appelé après chaque instantané enregistré. Une erreur fait échouer la
-/// synchronisation ; l'instantané complet étant reporté à chaque fois, elle est rattrapée au
-/// passage suivant.
+/// Prepares the local model without writing. The sync store commits the returned records,
+/// snapshot and events together while checking lease ownership.
 #[async_trait]
 pub trait Projector: Send + Sync {
-    async fn project(
+    async fn prepare(
         &self,
         tournament_id: Uuid,
         snapshot: &ExternalTournament,
-    ) -> Result<(), String>;
+    ) -> Result<Vec<ProjectionEntry>, String>;
 }
 
 /// Import et synchronisation des tournois externes, pour toutes les sources du registre.
@@ -549,22 +557,9 @@ impl SyncService {
         let outcome = self.attempt(&record, now).await;
         let saved = match &outcome {
             Ok((success, changes)) => {
-                let saved = self
-                    .store
+                self.store
                     .save_success(record.id, lease_until, success.clone(), changes)
-                    .await;
-                // Le modèle local suit l'instantané enregistré, et seulement si cette
-                // synchronisation tenait encore son bail. Tout l'instantané est reporté à chaque
-                // fois : un report échoué est rattrapé au passage suivant.
-                match (saved, &self.projector, record.tournament_id) {
-                    (Ok(()), Some(projector), Some(tournament_id)) => projector
-                        .project(tournament_id, &success.snapshot)
-                        .await
-                        .map_err(|detail| {
-                            StoreError::Other(format!("report dans le tournoi local : {detail}"))
-                        }),
-                    (saved, _, _) => saved,
-                }
+                    .await
             }
             Err(err) => {
                 let next = self
@@ -614,7 +609,15 @@ impl SyncService {
             .map_err(SyncError::Connector)?;
         let (snapshot, changes) =
             apply_delta(record.snapshot.as_ref(), delta).map_err(SyncError::Connector)?;
+        let projection = match (&self.projector, record.tournament_id) {
+            (Some(projector), Some(id)) => projector
+                .prepare(id, &snapshot)
+                .await
+                .map_err(|e| StoreError::Other(format!("projection preparation: {e}")))?,
+            _ => Vec::new(),
+        };
         let success = Success {
+            projection,
             capabilities: Capabilities::observed(&snapshot, connector.capabilities()),
             cursor: SyncCursor {
                 // Le début de cette synchronisation : rien de plus récent n'a pu être manqué.

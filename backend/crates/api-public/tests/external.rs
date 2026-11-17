@@ -316,9 +316,10 @@ async fn build<F: std::future::Future<Output = ()>>(
 async fn setup() -> (app_type!(), Setup) {
     let store = Arc::new(MemoryStore::new());
     let promoted = store.clone();
+    let cache = store.imports().cache();
     build(
         store,
-        Arc::new(MemorySyncStore::new()),
+        Arc::new(MemorySyncStore::new().with_projection_cache(cache)),
         "root",
         |name| async move { promoted.set_role(&name, Role::Admin) },
     )

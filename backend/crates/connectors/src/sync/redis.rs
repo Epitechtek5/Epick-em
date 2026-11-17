@@ -124,7 +124,12 @@ return 1
 const SAVE: &str = r#"
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 redis.call('SET', KEYS[2], ARGV[2])
-for i = 4, #ARGV do
+local entries = tonumber(ARGV[4])
+for i = 0, entries - 1 do
+  local at = 5 + i * 3
+  redis.call('SET', ARGV[at], ARGV[at + 1], 'EX', ARGV[at + 2])
+end
+for i = 5 + entries * 3, #ARGV do
   local id = redis.call('INCR', KEYS[4])
   redis.call('ZADD', KEYS[3], id,
     '{"id":' .. id .. ',"source":"' .. ARGV[3] .. '","change":' .. ARGV[i] .. '}')
@@ -261,6 +266,7 @@ impl RedisSyncStore {
         lease_until: i64,
         state: &State,
         changes: &[ChangeEvent],
+        projection: &[super::ProjectionEntry],
     ) -> Result<(), StoreError> {
         let save = Script::new(SAVE);
         let mut script = save.prepare_invoke();
@@ -271,7 +277,11 @@ impl RedisSyncStore {
             .key(format!("{}:seq", self.events_key()))
             .arg(lease_until)
             .arg(to_json(state)?)
-            .arg(id.to_string());
+            .arg(id.to_string())
+            .arg(projection.len());
+        for entry in projection {
+            script.arg(&entry.key).arg(&entry.value).arg(entry.ttl_secs);
+        }
         for change in changes {
             script.arg(to_json(change)?);
         }
@@ -486,7 +496,8 @@ impl SyncStore for RedisSyncStore {
             consecutive_failures: 0,
             next_sync_at: success.next_sync_at,
         };
-        self.save(id, lease_until, &state, changes).await
+        self.save(id, lease_until, &state, changes, &success.projection)
+            .await
     }
 
     async fn save_failure(
@@ -503,7 +514,7 @@ impl SyncStore for RedisSyncStore {
         state.last_error = Some(error.chars().take(1000).collect());
         state.consecutive_failures = state.consecutive_failures.saturating_add(1);
         state.next_sync_at = next_sync_at;
-        self.save(id, lease_until, &state, &[]).await
+        self.save(id, lease_until, &state, &[], &[]).await
     }
 
     async fn pending_changes(
