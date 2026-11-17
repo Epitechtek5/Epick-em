@@ -309,12 +309,13 @@ async fn update_workflow(
     {
         return Err(ApiError::InvalidTransition);
     }
-    let before =
+    let mut before =
         json!({ "match": current, "participants": members, "schedule": workflow.schedule });
     let after = serde_json::to_value(&request.action).map_err(ApiError::internal)?;
     let now = now_rfc3339();
     let mut finish = None;
     let mut games = None;
+    let mut archive_games = None;
     let mut reason = None;
     let mut accept = None;
     let event;
@@ -402,6 +403,14 @@ async fn update_workflow(
                 if members.len() != 2 {
                     return Err(ApiError::InvalidTransition);
                 }
+                let previous_games = state
+                    .store
+                    .list_match_games(mid)
+                    .await
+                    .map_err(ApiError::internal)?;
+                before["games"] =
+                    serde_json::to_value(&previous_games).map_err(ApiError::internal)?;
+                archive_games = Some(previous_games);
                 let scores: Vec<MatchScore> = members
                     .iter()
                     .map(|p| MatchScore {
@@ -715,6 +724,7 @@ async fn update_workflow(
             workflow,
             finish,
             games,
+            archive_games,
         })
         .await
         .map_err(match_error)?;

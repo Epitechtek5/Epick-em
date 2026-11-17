@@ -1223,6 +1223,9 @@ async fn correction_previews_downstream_reset_and_rejects_stale_or_unacknowledge
     assert_eq!(status, StatusCode::OK, "{preview}");
     assert_eq!(preview["affected"].as_array().unwrap().len(), 1);
     assert_eq!(preview["requires_resolution"], true);
+    assert_eq!(preview["affected"][0]["step_position"], 1);
+    assert_eq!(preview["affected"][0]["round"], 2);
+    assert_eq!(preview["affected"][0]["number"], 1);
     let mut correction = json!({"operation_id":Uuid::new_v4(),"revision":preview["revision"],"reset_downstream":false,"report":input["report"],"reason":input["reason"]});
     let path = format!("{base}/corrections");
     let (status, _) = post(&app, &path, &setup.admin, correction.clone()).await;
@@ -1334,4 +1337,82 @@ async fn evidence_is_private_until_attached_and_cannot_be_replaced() {
         response.headers().get("cache-control").unwrap(),
         "private, no-store"
     );
+}
+
+#[actix_web::test]
+async fn administrative_forfeit_archives_partial_games_before_finalizing() {
+    let (app, setup) = setup(2).await;
+    let mut definition = step("single_elim", "duel", 2, 1);
+    definition["rules"] = json!({"best_of":3});
+    let (_, _, run) = running(&app, &setup, definition, None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run).await.remove(0);
+    let base = format!("{}/matches/{}", run.base(), id(&found));
+    let (status, game) = post(
+        &app,
+        &format!("{base}/games"),
+        &setup.admin,
+        json!({"attributes":{}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{game}");
+    let action = json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"attendance","participant_id":members(&found)[0],"status":"forfeit","reason":"Participant withdrew during the series"}});
+    let (status, workflow) = post(
+        &app,
+        &format!("{base}/workflow"),
+        &setup.admin,
+        action.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{workflow}");
+    assert_eq!(
+        workflow["workflow"]["history"][0]["before"]["games"][0]["id"],
+        game["id"]
+    );
+    let (status, result) = get(&app, &base, &setup.admin).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["status"], "finished");
+    assert_eq!(result["games"], json!([]));
+    let winner = result["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["rank"] == 1)
+        .unwrap();
+    assert_eq!(winner["participant_id"], members(&found)[1]);
+    assert_eq!(winner["games_won"], 2);
+    let (status, replay) = post(&app, &format!("{base}/workflow"), &setup.admin, action).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replay, workflow);
+    let mut document: Value =
+        serde_json::from_str(&export_file(&app, &setup.admin, "json").await).unwrap();
+    let (status, _) = call(
+        &app,
+        request(
+            TestRequest::post(),
+            "/tournaments/import?format=json",
+            Some(&setup.admin),
+        )
+        .set_payload(document.to_string()),
+    )
+    .await;
+    assert!(!status.is_success(), "Import must not erase an audit trail");
+    let (_, preserved) = get(&app, &format!("{base}/workflow"), &setup.admin).await;
+    assert_eq!(
+        preserved["workflow"]["history"],
+        workflow["workflow"]["history"]
+    );
+    document["tournaments"][0]["name"] = json!("Imported administrative forfeit");
+    let (status, report) = call(
+        &app,
+        request(
+            TestRequest::post(),
+            "/tournaments/import?format=json",
+            Some(&setup.admin),
+        )
+        .set_payload(document.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["created"], 1, "{report}");
 }

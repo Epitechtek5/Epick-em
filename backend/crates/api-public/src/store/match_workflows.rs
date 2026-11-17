@@ -1,6 +1,6 @@
 //! Match operations that must remain separate from authoritative results.
 
-use super::{GameImport, MatchFinish, MatchScore};
+use super::{GameImport, MatchFinish, MatchGame, MatchScore};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use utoipa::ToSchema;
@@ -120,6 +120,8 @@ pub struct WorkflowCommit {
     pub workflow: MatchWorkflow,
     pub finish: Option<MatchFinish>,
     pub games: Option<Vec<GameImport>>,
+    /// Exact previous games retained in the audit before an administrative forfeit.
+    pub archive_games: Option<Vec<MatchGame>>,
 }
 
 #[derive(Debug, Clone)]

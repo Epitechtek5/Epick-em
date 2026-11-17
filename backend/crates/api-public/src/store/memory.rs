@@ -2708,6 +2708,18 @@ impl AuthStore for MemoryStore {
                 return Err(StoreError::MatchState);
             }
         }
+        if let Some(expected) = &update.archive_games {
+            let mut actual: Vec<_> = state
+                .match_games
+                .iter()
+                .filter(|g| g.match_id == update.match_id)
+                .cloned()
+                .collect();
+            actual.sort_by_key(|g| g.number);
+            if update.finish.is_none() || &actual != expected {
+                return Err(StoreError::MatchState);
+            }
+        }
         if update.games.as_ref().is_some_and(|games| games.len() > 5) {
             return Err(StoreError::MatchState);
         }
@@ -2744,6 +2756,9 @@ impl AuthStore for MemoryStore {
                         .unwrap_or(0.0);
                 }
             }
+        }
+        if update.archive_games.is_some() {
+            state.match_games.retain(|g| g.match_id != update.match_id);
         }
         let now = now_rfc3339();
         if let Some(games) = update.games {
@@ -2817,6 +2832,14 @@ impl AuthStore for MemoryStore {
             .filter(|m| m.step_id == step_id)
             .map(|m| m.id)
             .collect();
+        if doomed.iter().any(|id| {
+            state
+                .match_workflows
+                .get(id)
+                .is_some_and(|w| !w.history.is_empty())
+        }) {
+            return Err(StoreError::Other("Matches with an audit history cannot be replaced by an import; use a result correction.".into()));
+        }
         for id in doomed {
             state.remove_match(id);
         }

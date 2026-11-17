@@ -42,6 +42,11 @@ pub struct CorrectionRequest {
 pub struct Impact {
     pub match_id: Uuid,
     pub step_id: Uuid,
+    pub step_position: Option<i32>,
+    pub round: Option<i32>,
+    pub number: Option<i32>,
+    pub bracket: Option<Bracket>,
+    pub group_index: Option<i32>,
     pub status: MatchStatus,
     pub archived: bool,
 }
@@ -94,6 +99,19 @@ fn impact(
         .map(|m| Impact {
             match_id: m.id,
             step_id: m.step_id,
+            step_position: snapshot
+                .steps
+                .iter()
+                .find(|s| s.id == m.step_id)
+                .map(|s| s.position),
+            round: m.round,
+            number: m.number,
+            bracket: m.bracket,
+            group_index: snapshot
+                .groups
+                .iter()
+                .find(|g| Some(g.id) == m.group_id)
+                .map(|g| g.index),
             status: m.status,
             archived: archive.contains(&m.id),
         })
@@ -158,6 +176,7 @@ async fn plan(
     };
     memory
         .commit_match_workflow(WorkflowCommit {
+            archive_games: None,
             match_id: current.id,
             expected_revision: 0,
             expected_updated_at: projected_match.updated_at,

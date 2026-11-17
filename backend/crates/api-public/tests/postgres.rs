@@ -4588,6 +4588,7 @@ async fn workflow_compare_and_swap_preserves_audit_and_rejects_concurrent_update
         after: serde_json::json!({}),
     });
     let update = WorkflowCommit {
+        archive_games: None,
         match_id: found.id,
         expected_revision: 0,
         expected_updated_at: found.updated_at.clone(),
@@ -4601,6 +4602,13 @@ async fn workflow_compare_and_swap_preserves_audit_and_rejects_concurrent_update
     );
     assert_ne!(left.is_ok(), right.is_ok());
     assert_eq!(store.match_workflow(found.id).await.unwrap(), workflow);
+    assert!(
+        store
+            .replace_step_matches(found.step_id, found.game_id, Vec::new())
+            .await
+            .is_err()
+    );
+    assert!(store.find_match(found.id).await.unwrap().is_some());
     let current = store.find_match(found.id).await.unwrap().unwrap();
     let mut invalid = workflow.clone();
     invalid.revision = 2;
@@ -4608,6 +4616,7 @@ async fn workflow_compare_and_swap_preserves_audit_and_rejects_concurrent_update
     assert!(
         store
             .commit_match_workflow(WorkflowCommit {
+                archive_games: None,
                 match_id: found.id,
                 expected_revision: 1,
                 expected_updated_at: current.updated_at,

@@ -127,6 +127,7 @@ async fn schedule_round(
             after: json!({"round":round,"schedule":workflow.schedule}),
         });
         updates.push(WorkflowCommit {
+            archive_games: None,
             match_id: m.id,
             expected_revision: revision,
             expected_updated_at: m.updated_at.clone(),

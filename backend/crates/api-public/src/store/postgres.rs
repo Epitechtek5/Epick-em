@@ -4332,6 +4332,16 @@ impl AuthStore for PgStore {
         if !previous.accepts(&update.workflow, update.expected_revision) {
             return Err(StoreError::MatchState);
         }
+        if let Some(expected) = &update.archive_games {
+            let actual = load_games_in(&mut tx, "g.match_id = $1", update.match_id).await?;
+            if update.finish.is_none() || &actual != expected {
+                return Err(StoreError::MatchState);
+            }
+            sqlx::query("DELETE FROM match_game WHERE match_id = $1")
+                .bind(update.match_id)
+                .execute(&mut *tx)
+                .await?;
+        }
         if update.games.is_some() {
             let exists = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (SELECT 1 FROM match_game WHERE match_id = $1)",
@@ -4534,6 +4544,16 @@ impl AuthStore for PgStore {
                 .await?;
         if !exists {
             return Ok(false);
+        }
+        sqlx::query("SELECT id FROM step WHERE id = $1 FOR UPDATE")
+            .bind(step_id)
+            .execute(&mut *tx)
+            .await?;
+        let has_history = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM match_workflow w JOIN match m ON m.id = w.match_id WHERE m.step_id = $1 AND jsonb_array_length(COALESCE(w.document->'history', '[]'::jsonb)) > 0)",
+        ).bind(step_id).fetch_one(&mut *tx).await?;
+        if has_history {
+            return Err(StoreError::Other("Matches with an audit history cannot be replaced by an import; use a result correction.".into()));
         }
         sqlx::query("DELETE FROM match WHERE step_id = $1")
             .bind(step_id)
