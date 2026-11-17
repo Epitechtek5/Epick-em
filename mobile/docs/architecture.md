@@ -141,3 +141,9 @@ Match creation offers BO1, BO3 and BO5, independently of the tournament round. T
 `games/[number]` uses the authenticated match-game endpoints. Only global administrators may create, save, finish or delete a game, matching the current backend authorization (tournament referees still use the legacy match endpoints). Selection inputs send stable option keys. MVP choices come from actual solo participants and tournament-team rosters; a selected team player is included in detailed statistics as required by the API. Team totals are entered separately from player statistics. Numeric inputs retain finite-number and percentage validation. Winner selection sets coherent ranks and lets the backend derive outcomes.
 
 Saving and finishing are separate actions. Editing disables completion until a successful save. Finishing requires confirmation, makes the game read-only, and reloads match details so that series completion, standings and winner propagation come from the backend. Request locks prevent duplicate submissions. Loading, retry, validation and immutable detail states use existing UI components and FR/EN/ES strings.
+
+### Advanced stage configuration
+
+The stage editor sends seeding, qualification placement, per-round BO formats and optional stage scoring in `rules`. Historical stages without this field use the backend defaults. Manual seed order is confirmed when starting the stage; eligibility comes from registrations or the previous stage's authoritative qualified participants.
+
+`StepGeneration` requests `/generation-preview` and sends its revision to `/generate`. It never computes pairings locally. Swiss retries may explicitly allow rematches after a pairing failure. Bracket layout uses both stored winner and loser links, with dashed loser connectors, and retains zoom/pan controls.

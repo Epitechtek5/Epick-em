@@ -318,3 +318,7 @@ UPDATE users SET role = 'admin' WHERE lower(username) = lower('<nom>');
 ```
 
 Le changement apparaît dans le jeton d'accès au prochain `/refresh` ou `/login`. Les routes réservées aux administrateurs ne se fient pas au claim `role` (qui peut dater de `ACCESS_TOKEN_TTL_SECS`) : elles relisent le rôle courant en base (hors cache), si bien qu'un administrateur rétrogradé ou supprimé perd ses droits immédiatement. Le framework est actix-web ([ADR-010](adr/010-api-publique-actix-web.md)).
+
+### Match generation previews
+
+`GET /tournaments/{id}/steps/{step_id}/generation-preview` is administrator-only and read-only. It returns `matches` (the server's planned matches, including progression slots and byes) and `revision`. The stage must be ongoing without existing matches. Confirm with `POST .../generate` and `{ "revision": "..." }`; a stale revision returns 409 without creating matches. Existing clients may still generate without a revision. Match creation retains its transactional duplicate-generation protection.

@@ -235,7 +235,7 @@ pub struct MatchImport {
 
 /// Match produit par la génération automatique. `next` et `loser_next` désignent (rang dans la
 /// liste générée, emplacement 1 ou 2).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct GeneratedMatch {
     pub group_id: Uuid,
     pub round: i32,

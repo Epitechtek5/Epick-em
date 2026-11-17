@@ -35,6 +35,10 @@ export interface MatchInput extends MatchFields {
 export type MatchChanges = Partial<Omit<MatchInput, 'group_id'>>;
 export interface Match extends MatchFields {
   games?: MatchGame[];
+  number?: number | null;
+  next_slot?: number | null;
+  loser_next_match_id?: string | null;
+  loser_next_slot?: number | null;
   id: string;
   game_id: string;
   step_id: string;
@@ -44,7 +48,12 @@ export interface Match extends MatchFields {
   ended_at: string | null;
   created_at: string;
   updated_at: string;
-  participants: (Score & { points: number; match_id: string })[];
+  participants: (Score & {
+    points: number;
+    match_id: string;
+    slot?: number | null;
+    games_won?: number | null;
+  })[];
 }
 export type MatchOutcome = Match & { step_closed: CloseStepResult | null };
 

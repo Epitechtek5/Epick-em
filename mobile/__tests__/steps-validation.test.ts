@@ -166,3 +166,38 @@ it('preserves tiebreak order and patches only changed fields', () => {
     }),
   ).toEqual({ tiebreak: ['score', 'wins'] });
 });
+
+it('validates advanced series and scoring without changing historical defaults', () => {
+  const base = step(1, 1, 8, 1);
+  const rules = {
+    seeding: 'manual' as const,
+    qualification: 'rank' as const,
+    best_of: 3 as const,
+    best_of_by_round: { '2': 5 as const },
+    scoring: { win: 3, draw: 1, loss: 0, placement: [] },
+  };
+  expect(validateStep({ ...base, match_type: 'duel', rules })).toEqual({});
+  expect(validateStep({ ...base, rules }).rules).toBe(
+    'steps.advanced.unsupported',
+  );
+  expect(
+    validateStep({
+      ...base,
+      match_type: 'duel',
+      rules: { ...rules, best_of_by_round: { '1001': 3 } },
+    }).rules,
+  ).toBeTruthy();
+  expect(
+    validateStep({
+      ...base,
+      match_type: 'duel',
+      rules: { ...rules, scoring: { ...rules.scoring, win: Infinity } },
+    }).rules,
+  ).toBeTruthy();
+  expect(
+    changedStepFields(
+      { ...base, rules },
+      { ...base, rules: structuredClone(rules) },
+    ),
+  ).toEqual({});
+});

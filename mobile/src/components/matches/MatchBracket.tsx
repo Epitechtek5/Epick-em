@@ -354,8 +354,9 @@ export function MatchBracket({
             >
               {graph.edges.map((edge) => (
                 <Path
-                  key={`${edge.from}-${edge.to}`}
+                  key={`${edge.from}-${edge.to}-${edge.kind}`}
                   d={edge.path}
+                  strokeDasharray={edge.kind === 'loser' ? '6 4' : undefined}
                   fill="none"
                   stroke={palette['chart-2']}
                   strokeWidth={2}

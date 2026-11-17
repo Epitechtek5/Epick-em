@@ -793,7 +793,8 @@
     "showPlayers": "Player breakdown ({{count}})",
     "hidePlayers": "Hide player breakdown",
     "noNext": "No next match",
-    "nextHelp": "Choose an existing match to receive the winner. Leave this empty for a final."
+    "nextHelp": "Choose an existing match to receive the winner. Leave this empty for a final.",
+    "loserOf": "Loser of match {{number}}"
   },
   "steps": {
     "title": "Tournament stages",
@@ -903,6 +904,64 @@
       "notFound": "Tournament or stage not found.",
       "conflict": "This action conflicts with the tournament or stage lifecycle.",
       "locked": "Stage configuration is locked once the tournament starts."
+    },
+    "advanced": {
+      "placement": "Participant placement",
+      "seeding": "Initial seeding",
+      "qualification": "Qualification order",
+      "manualHelp": "Confirm the participant order when starting this stage.",
+      "series": "Series by round",
+      "defaultSeries": "Default series",
+      "round": "Round number",
+      "roundSeries": "Round {{round}} series",
+      "addRound": "Configure a round",
+      "scoring": "Stage scoring",
+      "scoringHelp": "Use tournament scoring or define points for this stage.",
+      "useTournamentScoring": "Use tournament scoring",
+      "customScoring": "Set stage scoring",
+      "placementPoints": "Points by placement",
+      "rankPoints": "Points for rank {{rank}}",
+      "addPlacement": "Add a placement",
+      "invalidRules": "Check series formats, round numbers and points.",
+      "unsupported": "This format requires duels. FFA matches use pools and BO1.",
+      "invalidOrder": "Include every eligible participant exactly once.",
+      "pairingError": "No pairing without rematches is possible.",
+      "generation": "Match generation",
+      "preview": "Preview match generation",
+      "previewHelp": "Review the matches. If rules or participants change, refresh the preview before confirming.",
+      "plannedMatch": "Round {{round}} · Match {{number}}",
+      "awaitingWinner": "Participant from a previous match",
+      "bye": "Bye · automatic advancement",
+      "confirmGeneration": "Confirm and generate matches",
+      "nextRound": "Generate the next round",
+      "roundPending": "The current round must be finished and another round must remain.",
+      "allowRematches": "Allow rematches",
+      "rematchHelp": "Some participants may face a previous opponent again. Continue?",
+      "alreadyGenerated": "Matches have already been created.",
+      "manualOrder": "Participant order",
+      "moveUp": "Move up",
+      "seedingOptions": {
+        "random": "Random",
+        "ranking": "Previous ranking",
+        "manual": "Manual order"
+      },
+      "qualificationOptions": {
+        "random": "Random",
+        "rank": "Overall ranking",
+        "group_rank": "Group ranking"
+      },
+      "criteria": {
+        "head_to_head": "Head-to-head",
+        "game_differential": "Game differential",
+        "buchholz": "Buchholz"
+      },
+      "points": {
+        "win": "Win",
+        "draw": "Draw",
+        "loss": "Loss"
+      },
+      "chooseCriterion": "Choose a criterion",
+      "seed": "Seed {{seed}}"
     }
   },
   "verification": {

@@ -793,7 +793,8 @@
     "showPlayers": "Détail par joueur ({{count}})",
     "hidePlayers": "Masquer le détail par joueur",
     "noNext": "Aucun match suivant",
-    "nextHelp": "Choisis le match existant qui accueillera le vainqueur. Pour une finale, laisse ce champ vide."
+    "nextHelp": "Choisis le match existant qui accueillera le vainqueur. Pour une finale, laisse ce champ vide.",
+    "loserOf": "Perdant du match {{number}}"
   },
   "steps": {
     "title": "Étapes du tournoi",
@@ -903,6 +904,64 @@
       "notFound": "Tournoi ou étape introuvable.",
       "conflict": "Cette action est incompatible avec le cycle de vie du tournoi ou de l’étape.",
       "locked": "La configuration des étapes est verrouillée dès le démarrage du tournoi."
+    },
+    "advanced": {
+      "placement": "Placement des participants",
+      "seeding": "Placement initial",
+      "qualification": "Ordre des qualifiés",
+      "manualHelp": "L’ordre des participants sera confirmé au lancement de l’étape.",
+      "series": "Séries par tour",
+      "defaultSeries": "Format par défaut",
+      "round": "Numéro du tour",
+      "roundSeries": "Format du tour {{round}}",
+      "addRound": "Configurer un tour",
+      "scoring": "Points de l’étape",
+      "scoringHelp": "Utilisez le barème du tournoi ou définissez des points propres à cette étape.",
+      "useTournamentScoring": "Utiliser le barème du tournoi",
+      "customScoring": "Définir un barème pour cette étape",
+      "placementPoints": "Points par place",
+      "rankPoints": "Points pour la place {{rank}}",
+      "addPlacement": "Ajouter une place",
+      "invalidRules": "Vérifiez les formats de série, les numéros de tour et les points.",
+      "unsupported": "Ce format nécessite des duels. Les matchs à plusieurs participants se jouent en poules, en BO1.",
+      "invalidOrder": "L’ordre doit contenir tous les participants autorisés, sans doublon.",
+      "pairingError": "Aucun appariement sans revanche n’est possible.",
+      "generation": "Génération des rencontres",
+      "preview": "Voir les rencontres avant génération",
+      "previewHelp": "Vérifiez les rencontres. Si les règles ou participants changent, rechargez l’aperçu avant de confirmer.",
+      "plannedMatch": "Tour {{round}} · Match {{number}}",
+      "awaitingWinner": "Participant issu d’un match précédent",
+      "bye": "Exemption · qualification automatique",
+      "confirmGeneration": "Confirmer et générer les rencontres",
+      "nextRound": "Générer la prochaine ronde",
+      "roundPending": "La ronde en cours doit être terminée et une ronde supplémentaire doit être prévue.",
+      "allowRematches": "Autoriser les revanches",
+      "rematchHelp": "Certains participants pourront rencontrer à nouveau un adversaire déjà joué. Continuer ?",
+      "alreadyGenerated": "Les rencontres sont déjà créées.",
+      "manualOrder": "Ordre des participants",
+      "moveUp": "Monter",
+      "seedingOptions": {
+        "random": "Aléatoire",
+        "ranking": "Classement précédent",
+        "manual": "Ordre manuel"
+      },
+      "qualificationOptions": {
+        "random": "Aléatoire",
+        "rank": "Classement général",
+        "group_rank": "Classement dans chaque groupe"
+      },
+      "criteria": {
+        "head_to_head": "Confrontation directe",
+        "game_differential": "Différence de parties",
+        "buchholz": "Buchholz"
+      },
+      "points": {
+        "win": "Victoire",
+        "draw": "Match nul",
+        "loss": "Défaite"
+      },
+      "chooseCriterion": "Choisir un critère",
+      "seed": "Tête de série {{seed}}"
     }
   },
   "verification": {

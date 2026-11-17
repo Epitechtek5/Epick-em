@@ -1074,3 +1074,33 @@ async fn a_generated_series_played_game_by_game_advances_its_winner() {
     assert!(members(&next).contains(&winner), "{next}");
     assert!(!members(&next).contains(&loser), "{next}");
 }
+
+#[actix_web::test]
+async fn preview_is_read_only_and_confirmation_checks_the_revision() {
+    let (app, setup) = setup(4).await;
+    let (status, _, run) = running(&app, &setup, step("single_elim", "duel", 4, 1), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let preview_path = format!("{}/generation-preview", run.base());
+    let (status, preview) = get(&app, &preview_path, &setup.admin).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["matches"].as_array().unwrap().len(), 3);
+    assert!(matches(&app, &setup, &run).await.is_empty());
+    let (_, repeated) = get(&app, &preview_path, &setup.admin).await;
+    assert_eq!(preview, repeated);
+    let (status, _) = get(&app, &preview_path, &setup.players[0]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let path = format!("{}/generate", run.base());
+    let (status, _) = post(&app, &path, &setup.admin, json!({"revision": "outdated"})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(matches(&app, &setup, &run).await.is_empty());
+    let (status, generated) = post(
+        &app,
+        &path,
+        &setup.admin,
+        json!({"revision": preview["revision"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{generated}");
+    let (status, _) = get(&app, &preview_path, &setup.admin).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}

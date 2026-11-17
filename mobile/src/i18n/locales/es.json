@@ -793,7 +793,8 @@
     "showPlayers": "Desglose de jugadores ({{count}})",
     "hidePlayers": "Ocultar desglose del jugador",
     "noNext": "No hay próximo partido",
-    "nextHelp": "Elija una coincidencia existente para recibir al ganador. Deja esto vacío para una final."
+    "nextHelp": "Elija una coincidencia existente para recibir al ganador. Deja esto vacío para una final.",
+    "loserOf": "Perdedor del partido {{number}}"
   },
   "steps": {
     "title": "Etapas del torneo",
@@ -903,6 +904,64 @@
       "notFound": "Torneo o etapa no encontrada.",
       "conflict": "Esta acción entra en conflicto con el ciclo de vida del torneo o etapa.",
       "locked": "La configuración del escenario se bloquea una vez que comienza el torneo."
+    },
+    "advanced": {
+      "placement": "Distribución de participantes",
+      "seeding": "Distribución inicial",
+      "qualification": "Orden de clasificación",
+      "manualHelp": "Confirma el orden de participantes al iniciar la fase.",
+      "series": "Series por ronda",
+      "defaultSeries": "Formato predeterminado",
+      "round": "Número de ronda",
+      "roundSeries": "Formato de la ronda {{round}}",
+      "addRound": "Configurar una ronda",
+      "scoring": "Puntuación de la fase",
+      "scoringHelp": "Usa la puntuación del torneo o define puntos para esta fase.",
+      "useTournamentScoring": "Usar la puntuación del torneo",
+      "customScoring": "Definir la puntuación de la fase",
+      "placementPoints": "Puntos por posición",
+      "rankPoints": "Puntos para la posición {{rank}}",
+      "addPlacement": "Añadir una posición",
+      "invalidRules": "Revisa los formatos, los números de ronda y los puntos.",
+      "unsupported": "Este formato requiere duelos. Los partidos FFA usan grupos y BO1.",
+      "invalidOrder": "Incluye todos los participantes autorizados sin duplicados.",
+      "pairingError": "No es posible emparejar sin repetir rivales.",
+      "generation": "Generación de partidos",
+      "preview": "Ver los partidos antes de generarlos",
+      "previewHelp": "Revisa los partidos. Si cambian las reglas o los participantes, actualiza la vista previa antes de confirmar.",
+      "plannedMatch": "Ronda {{round}} · Partido {{number}}",
+      "awaitingWinner": "Participante de un partido anterior",
+      "bye": "Exención · avance automático",
+      "confirmGeneration": "Confirmar y generar partidos",
+      "nextRound": "Generar la siguiente ronda",
+      "roundPending": "La ronda actual debe haber terminado y debe quedar otra ronda.",
+      "allowRematches": "Permitir rivales repetidos",
+      "rematchHelp": "Algunos participantes podrán enfrentarse de nuevo a un rival anterior. ¿Continuar?",
+      "alreadyGenerated": "Los partidos ya se han creado.",
+      "manualOrder": "Orden de participantes",
+      "moveUp": "Subir",
+      "seedingOptions": {
+        "random": "Aleatorio",
+        "ranking": "Clasificación anterior",
+        "manual": "Orden manual"
+      },
+      "qualificationOptions": {
+        "random": "Aleatorio",
+        "rank": "Clasificación general",
+        "group_rank": "Clasificación por grupo"
+      },
+      "criteria": {
+        "head_to_head": "Enfrentamiento directo",
+        "game_differential": "Diferencia de partidas",
+        "buchholz": "Buchholz"
+      },
+      "points": {
+        "win": "Victoria",
+        "draw": "Empate",
+        "loss": "Derrota"
+      },
+      "chooseCriterion": "Elegir un criterio",
+      "seed": "Cabeza de serie {{seed}}"
     }
   },
   "verification": {

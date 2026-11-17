@@ -52,7 +52,9 @@ function compareRounds(left: number | null, right: number | null) {
 }
 
 function compareMatches(left: Match, right: Match) {
-  return left.id.localeCompare(right.id);
+  return (
+    (left.number ?? 0) - (right.number ?? 0) || left.id.localeCompare(right.id)
+  );
 }
 
 function regionOrder(matches: Match[]): BracketRegion[] {
@@ -153,6 +155,11 @@ export function layoutBracket(matches: Match[]) {
 
   const byId = new Map(nodes.map((node) => [node.match.id, node]));
   const needsOuterConnectorGutter = nodes.some((node) => {
+    if (
+      node.match.loser_next_match_id &&
+      byId.has(node.match.loser_next_match_id)
+    )
+      return true;
     const successor = node.match.next_match_id
       ? byId.get(node.match.next_match_id)
       : undefined;
@@ -164,30 +171,34 @@ export function layoutBracket(matches: Match[]) {
     1,
     contentWidth + (needsOuterConnectorGutter ? outerConnectorGutter : 0),
   );
-  const edges = nodes.flatMap((node) => {
-    const successor = node.match.next_match_id
-      ? byId.get(node.match.next_match_id)
-      : undefined;
-    if (!successor) return [];
+  const edges = nodes.flatMap((node) =>
+    [
+      { id: node.match.next_match_id, kind: 'winner' as const },
+      { id: node.match.loser_next_match_id, kind: 'loser' as const },
+    ].flatMap(({ id, kind }) => {
+      const successor = id ? byId.get(id) : undefined;
+      if (!successor) return [];
 
-    const startX = node.x + node.width;
-    const startY = node.y + node.height / 2;
-    const endY = successor.y + successor.height / 2;
-    const crossRegion = successor.region !== node.region;
-    const routeOutside = crossRegion || successor.x <= node.x;
-    const endX = routeOutside ? successor.x + successor.width : successor.x;
-    const gutterX = routeOutside
-      ? width - outerConnectorGutter / 2
-      : (startX + endX) / 2;
+      const startX = node.x + node.width;
+      const startY = node.y + node.height / 2;
+      const endY = successor.y + successor.height / 2;
+      const crossRegion = successor.region !== node.region;
+      const routeOutside = crossRegion || successor.x <= node.x;
+      const endX = routeOutside ? successor.x + successor.width : successor.x;
+      const gutterX = routeOutside
+        ? width - outerConnectorGutter / 2
+        : (startX + endX) / 2;
 
-    return [
-      {
-        from: node.match.id,
-        to: successor.match.id,
-        path: `M ${startX} ${startY} H ${gutterX} V ${endY} H ${endX}`,
-      },
-    ];
-  });
+      return [
+        {
+          kind,
+          from: node.match.id,
+          to: successor.match.id,
+          path: `M ${startX} ${startY} H ${gutterX} V ${endY} H ${endX}`,
+        },
+      ];
+    }),
+  );
 
   return {
     rounds: [...new Set(matches.map((match) => match.round))].sort(

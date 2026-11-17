@@ -19,12 +19,13 @@ use crate::store::{
 };
 use crate::tournaments::{active_participants, find_tournament};
 use crate::users::require_admin;
-use actix_web::{HttpResponse, post, web};
+use actix_web::{HttpResponse, get, post, web};
 use domain::bracket::{
     BracketKind, PlannedMatch, double_elimination, round_robin, single_elimination,
 };
 use domain::swiss::{PairingError, SwissPlayer, pair_round};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use utoipa::ToSchema;
 use utoipa_actix_web::service_config::ServiceConfig;
@@ -32,13 +33,82 @@ use uuid::Uuid;
 
 /// Routes de génération, avec leur documentation OpenAPI.
 pub fn routes(cfg: &mut ServiceConfig) {
-    cfg.service(generate_step).service(next_round);
+    cfg.service(preview_step)
+        .service(generate_step)
+        .service(next_round);
 }
 
 /// Matchs créés par une génération.
 #[derive(Serialize, ToSchema)]
 struct GenerationResponse {
     matches: Vec<MatchDetail>,
+}
+
+/// Server-generated initial pairings and their confirmation fingerprint.
+#[derive(Serialize, ToSchema)]
+struct GenerationPreview {
+    matches: Vec<GeneratedMatch>,
+    revision: String,
+}
+
+/// Optional revision preserves compatibility with existing generation clients.
+#[derive(Deserialize, ToSchema)]
+struct GenerationRequest {
+    revision: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/tournaments/{id}/steps/{step_id}/generation-preview",
+    tag = "steps",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path), ("step_id" = Uuid, Path)),
+    responses((status = 200, description = "Planned matches; no state is changed", body = GenerationPreview)),
+)]
+#[get("/tournaments/{id}/steps/{step_id}/generation-preview")]
+async fn preview_step(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, ApiError> {
+    require_admin(&state, &claims).await?;
+    let (tournament_id, step_id) = path.into_inner();
+    let step = find_step(&state, tournament_id, step_id).await?;
+    Ok(HttpResponse::Ok().json(initial_plan(&state, &step).await?))
+}
+
+async fn initial_plan(state: &AppState, step: &Step) -> Result<GenerationPreview, ApiError> {
+    if step.status != StepStatus::Ongoing {
+        return Err(ApiError::InvalidTransition);
+    }
+    let existing = state
+        .store
+        .list_matches(step.id, None, None)
+        .await
+        .map_err(ApiError::internal)?;
+    if !existing.is_empty() {
+        return Err(ApiError::InvalidTransition);
+    }
+    let mut groups = state
+        .store
+        .list_step_groups(step.id)
+        .await
+        .map_err(ApiError::internal)?;
+    groups.sort_by_key(|group| group.index);
+    let members = state
+        .store
+        .list_step_participants(step.id)
+        .await
+        .map_err(ApiError::internal)?;
+    let mut matches = Vec::new();
+    for group in &groups {
+        let ids = seeded(&members, group.id);
+        let offset = matches.len();
+        matches.extend(plan_group(step, group.id, &ids, offset)?);
+    }
+    let encoded = serde_json::to_vec(&(step.id, &matches)).map_err(ApiError::internal)?;
+    let revision = format!("{:x}", Sha256::digest(encoded));
+    Ok(GenerationPreview { matches, revision })
 }
 
 /// Options de la ronde suivante.
@@ -264,6 +334,7 @@ fn seeded(members: &[StepParticipant], group_id: Uuid) -> Vec<Uuid> {
 #[utoipa::path(
     post,
     path = "/tournaments/{id}/steps/{step_id}/generate",
+    request_body(content = Option<GenerationRequest>),
     tag = "steps",
     security(("bearer" = [])),
     params(
@@ -284,38 +355,32 @@ async fn generate_step(
     state: web::Data<AppState>,
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
+    request: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
-    if step.status != StepStatus::Ongoing {
+    let preview = initial_plan(&state, &step).await?;
+    let request = if request.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::from_slice::<GenerationRequest>(&request).map_err(|_| {
+                ApiError::Validation(vec![(
+                    "revision",
+                    "Invalid generation confirmation.".to_string(),
+                )])
+            })?,
+        )
+    };
+    if request
+        .and_then(|request| request.revision)
+        .is_some_and(|revision| revision != preview.revision)
+    {
         return Err(ApiError::InvalidTransition);
     }
-    let existing = state
-        .store
-        .list_matches(step.id, None, None)
-        .await
-        .map_err(ApiError::internal)?;
-    if !existing.is_empty() {
-        return Err(ApiError::InvalidTransition);
-    }
-    let groups = state
-        .store
-        .list_step_groups(step.id)
-        .await
-        .map_err(ApiError::internal)?;
-    let members = state
-        .store
-        .list_step_participants(step.id)
-        .await
-        .map_err(ApiError::internal)?;
-    let mut matches = Vec::new();
-    for group in &groups {
-        let ids = seeded(&members, group.id);
-        let offset = matches.len();
-        matches.extend(plan_group(&step, group.id, &ids, offset)?);
-    }
+    let matches = preview.matches;
     let bye_totals = bye_totals(&matches, &HashMap::new());
     let created = state
         .store

@@ -29,7 +29,11 @@ function bracketParticipants(
   t: ReturnType<typeof useTranslation>['t'],
 ): BracketParticipant[] {
   const participants = [...match.participants]
-    .sort((left, right) => (left.rank ?? Infinity) - (right.rank ?? Infinity))
+    .sort(
+      (left, right) =>
+        (left.slot ?? left.rank ?? Infinity) -
+        (right.slot ?? right.rank ?? Infinity),
+    )
     .slice(0, 2)
     .map((participant) => {
       const winner =
@@ -46,7 +50,9 @@ function bracketParticipants(
         name:
           context.names[participant.participant_id] ??
           t('steps.unknownParticipant'),
-        score: hasScore ? String(participant.points) : '—',
+        score: hasScore
+          ? String(participant.games_won ?? participant.points)
+          : '—',
         winner,
         placeholder: false,
       };
@@ -56,14 +62,22 @@ function bracketParticipants(
     match.participants.map((item) => item.participant_id),
   );
   const predecessors = context.matches
-    .filter((candidate) => candidate.next_match_id === match.id)
+    .filter(
+      (candidate) =>
+        candidate.next_match_id === match.id ||
+        candidate.loser_next_match_id === match.id,
+    )
     .sort(
       (left, right) =>
         (matchNumber(context.matches, left.id) ?? Infinity) -
         (matchNumber(context.matches, right.id) ?? Infinity),
     )
     .filter((candidate) => {
-      const id = winnerId(candidate);
+      const id =
+        candidate.loser_next_match_id === match.id
+          ? candidate.participants.find((p) => p.result === 'loss')
+              ?.participant_id
+          : winnerId(candidate);
       return !id || !resolvedIds.has(id);
     });
 
@@ -76,8 +90,15 @@ function bracketParticipants(
       key: `placeholder-${participants.length}`,
       name:
         number !== null
-          ? t('matches.winnerOf', { number })
-          : t('matches.toBeDetermined'),
+          ? t(
+              predecessor?.loser_next_match_id === match.id
+                ? 'matches.loserOf'
+                : 'matches.winnerOf',
+              { number },
+            )
+          : match.status === 'finished' && match.participants.length === 1
+            ? t('steps.advanced.bye')
+            : t('matches.toBeDetermined'),
       score: '—',
       winner: false,
       placeholder: true,
