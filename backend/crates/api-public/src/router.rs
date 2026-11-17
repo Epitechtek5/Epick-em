@@ -3,6 +3,7 @@
 use crate::auth::AppState;
 use crate::error::ApiError;
 use crate::export_cache::evict_on_write;
+use crate::external::protect_external;
 use crate::guard::require_auth;
 use crate::openapi::ApiDoc;
 use actix_web::body::MessageBody;
@@ -44,7 +45,10 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::match_corrections::routes)
         .configure(crate::match_scheduling::routes)
         .configure(crate::match_evidence::routes)
-        .configure(crate::invitations::routes);
+        .configure(crate::invitations::routes)
+        .configure(crate::external::routes)
+        .configure(crate::predictions::routes)
+        .configure(crate::pickem::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).
@@ -83,7 +87,9 @@ pub fn app(
         .openapi(ApiDoc::openapi())
         .configure(api_routes)
         .split_for_parts();
-    app.wrap(from_fn(evict_on_write))
+    // Exécutés dans l'ordre inverse : authentification, invalidation du cache, lecture seule.
+    app.wrap(from_fn(protect_external))
+        .wrap(from_fn(evict_on_write))
         .wrap(from_fn(require_auth))
         .service(
             // URL relative à la page : fonctionne aussi sous `/api/docs/` derrière nginx ou Vite.

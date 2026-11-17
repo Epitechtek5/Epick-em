@@ -1,0 +1,23 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0017-external-sources
+      author: epickem
+      changes:
+        - sql:
+            sql: |
+              CREATE TABLE external_sources (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                provider varchar(32) NOT NULL,
+                external_id varchar(128) NOT NULL,
+                reference jsonb NOT NULL,
+                event_ids text[] NOT NULL DEFAULT '{}',
+                tournament_id uuid UNIQUE REFERENCES tournaments(id) ON DELETE SET NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT external_sources_provider_external_id_key UNIQUE (provider, external_id)
+              );
+              COMMENT ON TABLE external_sources IS
+                'Tournois importés d''une source externe (start.gg…) : lien entre la source et le tournoi local. Instantanés, état de synchronisation et tournoi importé vivent dans Redis';
+      rollback:
+        - sql:
+            sql: |
+              DROP TABLE external_sources;

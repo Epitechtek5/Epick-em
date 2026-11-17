@@ -44,3 +44,11 @@ databaseChangeLog:
       file: changelog/0019-match-workflows.yaml
   - include:
       file: changelog/0020-archive-corrected-matches.yaml
+  - include:
+      file: changelog/0017-external-sources.yaml
+  - include:
+      file: changelog/0019-predictions-pickem.yaml
+  - include:
+      file: changelog/0020-pickem-write-guards.yaml
+  - include:
+      file: changelog/0021-preserve-spectator-locks.yaml

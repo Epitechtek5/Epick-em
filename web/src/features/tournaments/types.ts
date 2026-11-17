@@ -88,6 +88,9 @@ export interface TournamentParticipant {
   tournament_team_id: string | null
   status: ParticipantStatus
   registered_at: string
+  // Inscrit importé d'une source externe (start.gg…) : pas de compte, seulement son nom.
+  external_id?: string | null
+  display_name?: string | null
 }
 
 export interface RegisterInput {
@@ -112,7 +115,9 @@ export type ScoringRuleDefinition =
 export interface PlayerRank {
   rank: number
   participant_id: string
-  user_id: string
+  // Absent pour un inscrit importé d'une source externe, nommé par `display_name`.
+  user_id: string | null
+  display_name?: string | null
   tournament_team_id: string | null
   points: number
 }

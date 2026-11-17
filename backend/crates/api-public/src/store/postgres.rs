@@ -8,7 +8,7 @@ use super::{
 mod competition;
 use super::{
     AuthStore, CheckInSettlement, Game, GameFinish, GameInput, GameScores, GameUpdate, Generation,
-    Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
+    Imports, Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
     InvitationInput, InvitationStatus, InvitationType, Match, MatchFinish, MatchGame,
     MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchScore, MatchStatus,
     MatchUpdate, NamedParticipant, ParticipantChange, ParticipantImport, ParticipantInput,
@@ -44,15 +44,29 @@ const PROFILE_TTL: Ttl = Ttl::from_mins(5);
 
 /// Seuls les profils (sans empreinte de mot de passe) passent par le cache ; la connexion et le
 /// rafraîchissement lisent toujours la base.
+///
+/// Un tournoi importé (start.gg…) n'a en base que sa ligne : ses inscrits, étapes et matchs
+/// sont lus dans le cache ([`Imports`]).
 pub struct PgStore {
     db: CachedDb,
-    pool: PgPool,
+    pub(super) pool: PgPool,
+    imports: Imports,
 }
 
 impl PgStore {
     pub fn new(db: CachedDb) -> Self {
         let pool = db.pool().clone();
-        PgStore { db, pool }
+        let imports = Imports::new(db.cache().clone());
+        PgStore { db, pool, imports }
+    }
+
+    /// Applique le statut et la taille des tournois importés, lus dans le cache.
+    async fn with_imports(&self, tournaments: &mut [Tournament]) {
+        for tournament in tournaments {
+            if let Some(summary) = self.imports.summary(tournament.id).await {
+                summary.apply(tournament);
+            }
+        }
     }
 }
 
@@ -136,7 +150,7 @@ fn stat_key_taken(err: sqlx::Error) -> StoreError {
 }
 
 /// Horodatage RFC 3339 en UTC, avec les microsecondes de PostgreSQL : sans perte à l'aller-retour.
-fn ts(column: &str) -> String {
+pub(super) fn ts(column: &str) -> String {
     format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
 }
 
@@ -1222,6 +1236,8 @@ fn participant(row: ParticipantRow) -> Result<TournamentParticipant, StoreError>
         registered_at: row.5,
         responses: serde_json::from_str(&row.6)
             .map_err(|err| StoreError::Other(err.to_string()))?,
+        external_id: None,
+        display_name: None,
     })
 }
 
@@ -1521,6 +1537,14 @@ fn push_token(row: (Uuid, Uuid, String, String)) -> Result<PushToken, StoreError
 
 #[async_trait]
 impl AuthStore for PgStore {
+    fn imports(&self) -> &Imports {
+        &self.imports
+    }
+
+    fn pickem(&self) -> &dyn super::PickemStore {
+        self
+    }
+
     async fn create_user_with_token(
         &self,
         username: &str,
@@ -2924,10 +2948,12 @@ impl AuthStore for PgStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Tournament>, StoreError> {
-        sqlx::query_as::<_, TournamentRow>(&format!(
+        // Le statut d'un tournoi importé n'est pas en base : ses lignes passent le filtre, puis
+        // sont filtrées sur le statut lu dans le cache (une page peut alors être plus courte).
+        let mut tournaments = sqlx::query_as::<_, TournamentRow>(&format!(
             "SELECT {} FROM tournaments \
-             WHERE is_template = $5 \
-               AND ($1::uuid IS NULL OR game_id = $1) AND ($2::text IS NULL OR status = $2) \
+             WHERE is_template = $5 AND ($1::uuid IS NULL OR game_id = $1) AND ($2::text IS NULL OR status = $2 \
+               OR id IN (SELECT tournament_id FROM external_sources WHERE tournament_id IS NOT NULL)) \
              ORDER BY start_date, id LIMIT $3 OFFSET $4",
             tournament_columns()
         ))
@@ -2940,11 +2966,14 @@ impl AuthStore for PgStore {
         .await?
         .into_iter()
         .map(tournament)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+        self.with_imports(&mut tournaments).await;
+        tournaments.retain(|t| status.is_none_or(|status| t.status == status));
+        Ok(tournaments)
     }
 
     async fn find_tournament(&self, id: Uuid) -> Result<Option<Tournament>, StoreError> {
-        sqlx::query_as::<_, TournamentRow>(&format!(
+        let found = sqlx::query_as::<_, TournamentRow>(&format!(
             "SELECT {} FROM tournaments WHERE id = $1",
             tournament_columns()
         ))
@@ -2952,7 +2981,10 @@ impl AuthStore for PgStore {
         .fetch_optional(&self.pool)
         .await?
         .map(tournament)
-        .transpose()
+        .transpose()?;
+        let mut found: Vec<Tournament> = found.into_iter().collect();
+        self.with_imports(&mut found).await;
+        Ok(found.pop())
     }
 
     async fn create_tournament(&self, input: TournamentInput) -> Result<Tournament, StoreError> {
@@ -3091,6 +3123,7 @@ impl AuthStore for PgStore {
     }
 
     async fn delete_tournament(&self, id: Uuid) -> Result<bool, StoreError> {
+        self.imports.forget(id).await;
         let result = sqlx::query("DELETE FROM tournaments WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
@@ -3186,6 +3219,9 @@ impl AuthStore for PgStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TournamentParticipant>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.participants(limit, offset));
+        }
         sqlx::query_as::<_, ParticipantRow>(&format!(
             "SELECT {} FROM tournament_participant WHERE tournament_id = $1 \
              ORDER BY registered_at, id LIMIT $2 OFFSET $3",
@@ -3205,6 +3241,9 @@ impl AuthStore for PgStore {
         &self,
         id: Uuid,
     ) -> Result<Option<TournamentParticipant>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.participant(id)) {
+            return Ok(Some(found));
+        }
         sqlx::query_as::<_, ParticipantRow>(&format!(
             "SELECT {} FROM tournament_participant WHERE id = $1",
             participant_columns()
@@ -3763,6 +3802,9 @@ impl AuthStore for PgStore {
         &self,
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.points());
+        }
         let rows = sqlx::query_as::<_, (Uuid, f64)>(
             "SELECT participant_id, sum(points)::float8 FROM step_participant \
              WHERE tournament_id = $1 GROUP BY participant_id",
@@ -3774,6 +3816,9 @@ impl AuthStore for PgStore {
     }
 
     async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.steps);
+        }
         sqlx::query_as::<_, StepRow>(&format!(
             "SELECT {} FROM step WHERE tournament_id = $1 ORDER BY position",
             step_columns()
@@ -3787,6 +3832,9 @@ impl AuthStore for PgStore {
     }
 
     async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.step(id)) {
+            return Ok(Some(found));
+        }
         sqlx::query_as::<_, StepRow>(&format!(
             "SELECT {} FROM step WHERE id = $1",
             step_columns()
@@ -3863,6 +3911,9 @@ impl AuthStore for PgStore {
     }
 
     async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.groups(step_id));
+        }
         Ok(sqlx::query_as::<_, (Uuid, Uuid, i32)>(
             "SELECT id, step_id, index FROM step_group WHERE step_id = $1 ORDER BY index",
         )
@@ -3882,6 +3933,9 @@ impl AuthStore for PgStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<StepParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.step_participants(step_id));
+        }
         sqlx::query_as::<_, StepParticipantRow>(
             "SELECT p.step_id, p.participant_id, p.group_id, p.points::float8, p.final_rank, \
                  p.status, p.seed \
@@ -3991,6 +4045,9 @@ impl AuthStore for PgStore {
         group_id: Option<Uuid>,
         status: Option<MatchStatus>,
     ) -> Result<Vec<Match>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.matches(step_id, group_id, status));
+        }
         sqlx::query_as::<_, MatchRow>(&format!(
             "SELECT {} FROM match \
              WHERE step_id = $1 AND NOT archived AND ($2::uuid IS NULL OR group_id = $2) \
@@ -4011,6 +4068,9 @@ impl AuthStore for PgStore {
     }
 
     async fn find_match(&self, id: Uuid) -> Result<Option<Match>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.find_match(id)) {
+            return Ok(Some(found));
+        }
         sqlx::query_as::<_, MatchRow>(&format!(
             "SELECT {} FROM match WHERE id = $1",
             match_columns()
@@ -4026,6 +4086,9 @@ impl AuthStore for PgStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<MatchParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.match_participants(step_id));
+        }
         sqlx::query_as::<_, MatchParticipantRow>(&format!(
             "SELECT {MATCH_PARTICIPANT_COLUMNS} FROM match_participant \
              WHERE match_id IN (SELECT id FROM match WHERE step_id = $1 AND NOT archived) \
@@ -4175,6 +4238,25 @@ impl AuthStore for PgStore {
         Ok(result)
     }
 
+    async fn match_prediction_locked(&self, match_id: Uuid) -> Result<bool, StoreError> {
+        Ok(
+            sqlx::query_scalar::<_, bool>("SELECT predictions_locked FROM match WHERE id = $1")
+                .bind(match_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .unwrap_or(false),
+        )
+    }
+    async fn tournament_pickem_locked(&self, tournament_id: Uuid) -> Result<bool, StoreError> {
+        Ok(
+            sqlx::query_scalar::<_, bool>("SELECT pickem_locked FROM tournaments WHERE id = $1")
+                .bind(tournament_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .unwrap_or(false),
+        )
+    }
+
     async fn competition_snapshot(
         &self,
         tournament_id: Uuid,
@@ -4186,6 +4268,46 @@ impl AuthStore for PgStore {
         let snapshot = competition::snapshot(&mut tx, tournament_id).await?;
         tx.commit().await?;
         Ok(snapshot)
+    }
+
+    async fn commit_competition_resolution(
+        &self,
+        tournament_id: Uuid,
+        expected_revision: String,
+        predictions: Vec<super::Resolved>,
+        answers: Vec<super::Resolved>,
+        settled: bool,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        // Use the correction lock order. A resolver based on older results cannot
+        // overwrite a resolution computed after a correction.
+        sqlx::query("SELECT id FROM tournaments WHERE id = $1 FOR UPDATE")
+            .bind(tournament_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT id FROM step WHERE tournament_id = $1 ORDER BY position FOR UPDATE")
+            .bind(tournament_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT id FROM match WHERE step_id IN (SELECT id FROM step WHERE tournament_id = $1) ORDER BY id FOR UPDATE")
+            .bind(tournament_id).execute(&mut *tx).await?;
+        if competition::snapshot(&mut tx, tournament_id)
+            .await?
+            .revision()?
+            != expected_revision
+        {
+            return Err(StoreError::MatchState);
+        }
+        super::pickem_postgres::save_resolution_in(
+            &mut tx,
+            tournament_id,
+            predictions,
+            answers,
+            settled,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn commit_competition_correction(
@@ -4237,6 +4359,26 @@ impl AuthStore for PgStore {
                 let updated = correction.invalidate_workflow(previous);
                 sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2) ON CONFLICT (match_id) DO UPDATE SET document = EXCLUDED.document").bind(m.id).bind(serde_json::to_value(updated).map_err(|e| StoreError::Other(e.to_string()))?).execute(&mut *tx).await?;
             }
+        }
+        let now = super::now_rfc3339();
+        let locked: Vec<Uuid> = before
+            .matches
+            .iter()
+            .filter(|m| crate::predictions::is_locked(m, &before.tournament, &now))
+            .map(|m| m.id)
+            .collect();
+        sqlx::query("UPDATE match SET predictions_locked = true WHERE id = ANY($1)")
+            .bind(locked)
+            .execute(&mut *tx)
+            .await?;
+        if matches!(
+            before.tournament.status,
+            TournamentStatus::Finished | TournamentStatus::Cancelled
+        ) {
+            sqlx::query("UPDATE tournaments SET pickem_locked = true WHERE id = $1")
+                .bind(tid)
+                .execute(&mut *tx)
+                .await?;
         }
         competition::apply(&mut tx, &before, &correction.next).await?;
         sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2) ON CONFLICT (match_id) DO UPDATE SET document = EXCLUDED.document")

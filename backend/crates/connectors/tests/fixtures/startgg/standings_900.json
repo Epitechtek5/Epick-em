@@ -1,0 +1,35 @@
+{
+  "event": {
+    "standings": {
+      "pageInfo": {
+        "totalPages": 1
+      },
+      "nodes": [
+        {
+          "placement": 1,
+          "entrant": {
+            "id": 7001
+          }
+        },
+        {
+          "placement": 2,
+          "entrant": {
+            "id": 7003
+          }
+        },
+        {
+          "placement": 3,
+          "entrant": {
+            "id": 7002
+          }
+        },
+        {
+          "placement": null,
+          "entrant": {
+            "id": 7004
+          }
+        }
+      ]
+    }
+  }
+}

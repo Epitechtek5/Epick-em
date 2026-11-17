@@ -1,9 +1,11 @@
-//! Logique métier pure : moteur de tournoi, barème, résolution Pick'em.
+//! Logique métier pure : moteur de tournoi, barème, résolution Pick'em, schéma des événements.
 //!
 //! Cette crate ne fait aucune I/O (pas de réseau, pas de base de données)
 //! afin d'être entièrement testable et partagée par tous les binaires.
 
 pub mod bracket;
+pub mod events;
+pub mod pickem;
 pub mod seeding;
 pub mod standings;
 pub mod swiss;
