@@ -6,22 +6,25 @@
 //! administrateurs. Les réglages des étapes sont verrouillés dès que le tournoi est `ongoing`.
 //!
 //! Les points d'un participant dans l'étape viennent de la fin de ses matchs (module `matches`),
-//! qui clôture aussi l'étape quand le dernier match se termine. Le lancement ne génère pas
-//! encore les matchs et les critères de départage (`tiebreak`) ne sont pas encore évalués : à
-//! égalité de points, la clôture départage par ordre d'inscription.
+//! qui clôture aussi l'étape quand le dernier match se termine. Le lancement fixe les têtes de
+//! série (`rules.seeding`) et répartit les groupes en serpentin ; les matchs se génèrent ensuite
+//! (module `generation`). Le classement applique les critères de départage de l'étape
+//! (`head_to_head`, `game_differential`, `buchholz`), puis l'ordre d'inscription.
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::generation::{group_by_match, support_problem};
+use crate::standing::rank_group;
 use crate::store::{
-    MatchType, Step, StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome,
-    StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Tournament,
+    Match, MatchParticipant, MatchStatus, MatchType, QualificationPlacement, SeedingStrategy, Step,
+    StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome, StepParticipant,
+    StepParticipantStatus, StepRules, StepStart, StepStatus, StoreError, Tournament,
     TournamentParticipant, TournamentStatus,
 };
 use crate::tournaments::{active_participants, find_tournament, require_scoring_editable};
 use crate::users::require_admin;
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use utoipa::ToSchema;
 use utoipa_actix_web::service_config::ServiceConfig;
@@ -66,8 +69,10 @@ struct CreateStepRequest {
     advance_per_group: i32,
     /// Critères de départage par priorité, en minuscules et underscores (ex. `wins`) ; huit au
     /// plus, sans doublon. Ils seront évalués avec les résultats des matchs.
-    #[schema(example = json!(["wins", "best_placement"]))]
+    #[schema(example = json!(["head_to_head", "game_differential", "buchholz"]))]
     tiebreak: Option<Vec<String>>,
+    /// Têtes de série, qualification, séries (BO1/3/5) et barème de l'étape.
+    rules: Option<StepRules>,
 }
 
 /// Champs modifiables, tous facultatifs. Le résultat complet doit rester valide.
@@ -81,6 +86,14 @@ struct UpdateStepRequest {
     matches_per_group: Option<i32>,
     advance_per_group: Option<i32>,
     tiebreak: Option<Vec<String>>,
+    rules: Option<StepRules>,
+}
+
+/// Lancement : ordre des têtes de série quand `rules.seeding` vaut `manual`.
+#[derive(Deserialize, ToSchema, Default)]
+struct StartStepRequest {
+    /// Tous les participants de l'étape, la tête de série 1 en premier.
+    seed_order: Option<Vec<Uuid>>,
 }
 
 /// Participant d'un groupe, avec son rang.
@@ -93,6 +106,8 @@ struct RankedParticipant {
     /// à la clôture, le rang est définitif et sans égalité.
     rank: i32,
     status: StepParticipantStatus,
+    /// Tête de série dans l'étape (1 = meilleure), fixée au lancement.
+    seed: Option<i32>,
 }
 
 /// Classement d'un groupe.
@@ -198,6 +213,7 @@ async fn create_step(
         matches_per_group: request.matches_per_group.unwrap_or(1),
         advance_per_group: request.advance_per_group,
         tiebreak: tiebreak_value(request.tiebreak.unwrap_or_default()),
+        rules: request.rules.unwrap_or_default(),
     };
     let errors = check(&definition);
     if !errors.is_empty() {
@@ -261,6 +277,7 @@ async fn update_step(
             .advance_per_group
             .unwrap_or(current.advance_per_group),
         tiebreak: request.tiebreak.map_or(current.tiebreak, tiebreak_value),
+        rules: request.rules.unwrap_or(current.rules),
     };
     let errors = check(&definition);
     if !errors.is_empty() {
@@ -341,39 +358,31 @@ async fn step_ranking(
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id) = path.into_inner();
     let step = find_step(&state, tournament_id, step_id).await?;
-    let groups = state
-        .store
-        .list_step_groups(step.id)
-        .await
-        .map_err(ApiError::internal)?;
-    let members = state
-        .store
-        .list_step_participants(step.id)
-        .await
-        .map_err(ApiError::internal)?;
-    let ranking: Vec<GroupRanking> = groups
-        .into_iter()
-        .map(|group| {
-            let in_group: Vec<&StepParticipant> =
-                members.iter().filter(|m| m.group_id == group.id).collect();
-            GroupRanking {
-                group_id: group.id,
-                index: group.index,
-                participants: live_ranking(&in_group, step.status == StepStatus::Finished),
-            }
+    let data = ranking_data(&state, tournament_id, &step).await?;
+    let ranking: Vec<GroupRanking> = data
+        .groups
+        .iter()
+        .map(|group| GroupRanking {
+            group_id: group.id,
+            index: group.index,
+            participants: live_ranking(&step, group, &data),
         })
         .collect();
     Ok(HttpResponse::Ok().json(ranking))
 }
 
-/// Lance l'étape (administrateur) : tire au sort les groupes parmi les participants `in` puis
-/// ouvre l'étape (`ongoing`).
+/// Lance l'étape (administrateur) : fixe les têtes de série, répartit les participants dans les
+/// groupes en serpentin puis ouvre l'étape (`ongoing`).
 ///
 /// L'étape 1 réunit les inscrits actifs du tournoi (ni `withdrawn` ni `disqualified`), les
 /// suivantes les qualifiés de l'étape précédente. Le tournoi doit être `ongoing`, les étapes
 /// précédentes `finished`, et leur chaînage valide. Il faut au moins deux participants par
-/// groupe et au plus `group_count × group_size`. Le tirage répartit les participants au hasard,
-/// sans règle sur les équipes. Les matchs se créent ensuite à la main (`POST .../matches`).
+/// groupe et au plus `group_count × group_size`. Les têtes de série suivent `rules.seeding` :
+/// `manual` (corps `seed_order`, tous les participants), `random`, ou `ranking` (ordre de
+/// qualification de l'étape précédente, ou points du tournoi s'ils départagent les inscrits ;
+/// refusé sans classement fiable). Une étape précédente configurée en `rank` ou `group_rank`
+/// impose cet ordre aux qualifiés (sauf seeding `manual`). Les matchs se génèrent ensuite
+/// (`POST .../generate`) ou se créent à la main (`POST .../matches`).
 #[utoipa::path(
     post,
     path = "/tournaments/{id}/steps/{step_id}/start",
@@ -383,6 +392,7 @@ async fn step_ranking(
         ("id" = Uuid, Path, description = "Identifiant du tournoi"),
         ("step_id" = Uuid, Path, description = "Identifiant de l'étape"),
     ),
+    request_body(content = StartStepRequest, description = "Facultatif"),
     responses(
         (status = 200, description = "Étape en cours", body = Step),
         (status = 400, description = "Chaînage invalide ou nombre de participants incompatible", body = ErrorResponse),
@@ -397,6 +407,7 @@ async fn start_step(
     state: web::Data<AppState>,
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
+    body: Option<web::Json<StartStepRequest>>,
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
@@ -416,16 +427,14 @@ async fn start_step(
     if !problems.is_empty() {
         return Err(ApiError::Validation(vec![("steps", problems.join(" "))]));
     }
-    let entrants = entrants_of(&state, &tournament, &steps, &step).await?;
+    let seed_order = body.and_then(|b| b.into_inner().seed_order);
+    let entrants = ordered_entrants(&state, &tournament, &steps, &step, seed_order).await?;
     if let Some(problem) = entrants_problem(&step, entrants.len()) {
         return Err(ApiError::Validation(vec![("participants", problem)]));
     }
     let started = state
         .store
-        .start_step(StepStart {
-            step_id: step.id,
-            groups: draw_groups(entrants, step.group_count),
-        })
+        .start_step(start_of(&step, entrants))
         .await
         .map_err(step_error)?
         .ok_or(ApiError::NotFound)?;
@@ -435,9 +444,10 @@ async fn start_step(
 /// Clôture l'étape (administrateur) : classe chaque groupe selon les points, qualifie les
 /// `advance_per_group` premiers (`qualified`) et élimine les autres (`eliminated`), puis ouvre
 /// l'étape suivante avec les qualifiés, tirés au sort dans ses groupes, si elle existe et si
-/// leur nombre convient. À égalité de points, l'ordre d'inscription départage ; les critères
-/// `tiebreak` ne sont pas encore évalués. Le statut du tournoi ne
-/// change pas : il se termine par `POST /tournaments/{id}/status`.
+/// leur nombre convient. À égalité de points, les critères `tiebreak` de l'étape départagent
+/// (confrontation directe, différentiel de manches, Buchholz), puis l'ordre d'inscription ; les
+/// qualifiés sont placés dans l'étape suivante selon `rules.qualification`. Le statut du tournoi
+/// ne change pas : il se termine par `POST /tournaments/{id}/status`.
 #[utoipa::path(
     post,
     path = "/tournaments/{id}/steps/{step_id}/close",
@@ -479,46 +489,49 @@ pub(crate) async fn close_step_of(
     if step.status != StepStatus::Ongoing {
         return Err(ApiError::InvalidTransition);
     }
-    let groups = state
-        .store
-        .list_step_groups(step.id)
-        .await
-        .map_err(ApiError::internal)?;
-    let members = state
-        .store
-        .list_step_participants(step.id)
-        .await
-        .map_err(ApiError::internal)?;
-    let registered: HashMap<Uuid, String> = active_participants(state, tournament.id)
-        .await?
-        .into_iter()
-        .map(|p: TournamentParticipant| (p.id, p.registered_at))
-        .collect();
-
-    let mut outcomes = Vec::with_capacity(members.len());
-    for group in &groups {
-        let in_group: Vec<&StepParticipant> =
-            members.iter().filter(|m| m.group_id == group.id).collect();
-        outcomes.extend(close_group(&in_group, &registered, step.advance_per_group));
+    let data = ranking_data(state, tournament.id, step).await?;
+    let mut outcomes = Vec::with_capacity(data.members.len());
+    for group in &data.groups {
+        outcomes.extend(close_group(step, group, &data));
     }
-    let qualified: Vec<Uuid> = outcomes
+    let qualified: Vec<Entrant> = outcomes
         .iter()
         .filter(|o| o.status == StepParticipantStatus::Qualified)
-        .map(|o| o.participant_id)
+        .filter_map(|o| {
+            let member = data
+                .members
+                .iter()
+                .find(|m| m.participant_id == o.participant_id)?;
+            let group = data.groups.iter().find(|g| g.id == member.group_id)?;
+            Some(Entrant {
+                id: o.participant_id,
+                group_index: group.index,
+                rank: o.final_rank,
+                points: member.points,
+            })
+        })
         .collect();
 
     // L'étape suivante s'ouvre seule quand elle est prête ; sinon elle reste `pending` et se
-    // lance à la main (`start`), qui explique ce qui manque.
+    // lance à la main (`start`), qui explique ce qui manque. Une tête de série manuelle exige
+    // un ordre fourni par l'administrateur : l'étape reste alors à lancer à la main.
     let steps = steps_of(state, tournament.id).await?;
     let following = steps
         .iter()
         .filter(|s| s.position > step.position)
         .min_by_key(|s| s.position)
         .filter(|s| s.status == StepStatus::Pending)
+        .filter(|s| s.rules.seeding != SeedingStrategy::Manual)
         .filter(|s| entrants_problem(s, qualified.len()).is_none());
-    let next = following.map(|next| StepStart {
-        step_id: next.id,
-        groups: draw_groups(qualified.clone(), next.group_count),
+    let next = following.map(|next| {
+        start_of(
+            next,
+            qualifier_order(
+                qualified.clone(),
+                step.rules.qualification,
+                next.rules.seeding,
+            ),
+        )
     });
     let opens = following.map(|s| s.id);
 
@@ -568,33 +581,167 @@ pub(crate) async fn steps_of(state: &AppState, tournament_id: Uuid) -> Result<Ve
         .map_err(ApiError::internal)
 }
 
-/// Participants à répartir dans l'étape : les inscrits actifs pour la première, les qualifiés de
-/// l'étape précédente pour les suivantes.
-async fn entrants_of(
+/// Qualifié d'une étape terminée, avec de quoi l'ordonner dans l'étape suivante.
+#[derive(Debug, Clone)]
+pub(crate) struct Entrant {
+    pub(crate) id: Uuid,
+    pub(crate) group_index: i32,
+    pub(crate) rank: i32,
+    pub(crate) points: f64,
+}
+
+/// Ordonne les qualifiés (la tête de série 1 en premier) selon le placement de leur étape :
+/// `random` mélange (sauf si l'étape suivante veut un seeding `ranking`, qui suit le rang),
+/// `rank` classe par rang puis points, `group_rank` par rang puis groupe (A1, B1, C1, A2, ...).
+pub(crate) fn qualifier_order(
+    mut entrants: Vec<Entrant>,
+    placement: QualificationPlacement,
+    seeding: SeedingStrategy,
+) -> Vec<Uuid> {
+    let placement = match (placement, seeding) {
+        (QualificationPlacement::Random, SeedingStrategy::Ranking) => QualificationPlacement::Rank,
+        (placement, _) => placement,
+    };
+    match placement {
+        QualificationPlacement::Random => {
+            return shuffled(entrants.into_iter().map(|e| e.id).collect());
+        }
+        QualificationPlacement::Rank => entrants.sort_by(|a, b| {
+            a.rank
+                .cmp(&b.rank)
+                .then_with(|| b.points.total_cmp(&a.points))
+                .then_with(|| a.group_index.cmp(&b.group_index))
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+        QualificationPlacement::GroupRank => entrants.sort_by(|a, b| {
+            a.rank
+                .cmp(&b.rank)
+                .then_with(|| a.group_index.cmp(&b.group_index))
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+    }
+    entrants.into_iter().map(|e| e.id).collect()
+}
+
+/// Participants à répartir dans l'étape, par tête de série : les inscrits actifs pour la
+/// première, les qualifiés de l'étape précédente pour les suivantes.
+async fn ordered_entrants(
     state: &AppState,
     tournament: &Tournament,
     steps: &[Step],
     step: &Step,
+    seed_order: Option<Vec<Uuid>>,
 ) -> Result<Vec<Uuid>, ApiError> {
     let previous = steps
         .iter()
         .filter(|s| s.position < step.position)
         .max_by_key(|s| s.position);
+    let (ids, qualified) = match previous {
+        None => {
+            let ids: Vec<Uuid> = active_participants(state, tournament.id)
+                .await?
+                .into_iter()
+                .map(|p| p.id)
+                .collect();
+            (ids, Vec::new())
+        }
+        Some(previous) => {
+            let groups = state
+                .store
+                .list_step_groups(previous.id)
+                .await
+                .map_err(ApiError::internal)?;
+            let qualified: Vec<Entrant> = state
+                .store
+                .list_step_participants(previous.id)
+                .await
+                .map_err(ApiError::internal)?
+                .into_iter()
+                .filter(|m| m.status == StepParticipantStatus::Qualified)
+                .map(|m| Entrant {
+                    id: m.participant_id,
+                    group_index: groups
+                        .iter()
+                        .find(|g| g.id == m.group_id)
+                        .map_or(0, |g| g.index),
+                    rank: m.final_rank.unwrap_or(i32::MAX),
+                    points: m.points,
+                })
+                .collect();
+            (qualified.iter().map(|e| e.id).collect(), qualified)
+        }
+    };
+    if step.rules.seeding == SeedingStrategy::Manual {
+        return manual_order(&ids, seed_order);
+    }
     match previous {
-        None => Ok(active_participants(state, tournament.id)
-            .await?
-            .into_iter()
-            .map(|p| p.id)
-            .collect()),
-        Some(previous) => Ok(state
-            .store
-            .list_step_participants(previous.id)
-            .await
-            .map_err(ApiError::internal)?
-            .into_iter()
-            .filter(|m| m.status == StepParticipantStatus::Qualified)
-            .map(|m| m.participant_id)
-            .collect()),
+        Some(previous) => Ok(qualifier_order(
+            qualified,
+            previous.rules.qualification,
+            step.rules.seeding,
+        )),
+        None if step.rules.seeding == SeedingStrategy::Ranking => {
+            let points = state
+                .store
+                .participant_points(tournament.id)
+                .await
+                .map_err(ApiError::internal)?;
+            ranking_order(ids, &points)
+        }
+        None => Ok(shuffled(ids)),
+    }
+}
+
+/// L'ordre manuel donne chaque participant une seule fois.
+fn manual_order(ids: &[Uuid], seed_order: Option<Vec<Uuid>>) -> Result<Vec<Uuid>, ApiError> {
+    let Some(order) = seed_order else {
+        return Err(ApiError::Validation(vec![(
+            "seed_order",
+            "Un seeding manuel exige `seed_order`, la liste des participants par tête de série."
+                .to_string(),
+        )]));
+    };
+    let mut given = order.clone();
+    given.sort_unstable();
+    let mut expected = ids.to_vec();
+    expected.sort_unstable();
+    if given != expected {
+        return Err(ApiError::Validation(vec![(
+            "seed_order",
+            format!(
+                "`seed_order` doit lister une fois chacun des {} participants de l'étape.",
+                ids.len()
+            ),
+        )]));
+    }
+    Ok(order)
+}
+
+/// Classe par points du tournoi, du meilleur au moins bon ; sans écart entre les inscrits, il n'y
+/// a pas de classement fiable.
+fn ranking_order(ids: Vec<Uuid>, points: &HashMap<Uuid, f64>) -> Result<Vec<Uuid>, ApiError> {
+    let value = |id: &Uuid| points.get(id).copied().unwrap_or(0.0);
+    let distinct = ids.iter().any(|id| value(id) != value(&ids[0]));
+    if !distinct {
+        return Err(ApiError::Validation(vec![(
+            "seeding",
+            "Aucun classement fiable : les points des inscrits ne les départagent pas. \
+             Utilisez un seeding `manual` ou `random`."
+                .to_string(),
+        )]));
+    }
+    let mut ids = ids;
+    ids.sort_by(|a, b| value(b).total_cmp(&value(a)).then_with(|| a.cmp(b)));
+    Ok(ids)
+}
+
+/// Lancement d'une étape : groupes en serpentin d'après l'ordre des têtes de série.
+fn start_of(step: &Step, ordered: Vec<Uuid>) -> StepStart {
+    let count = usize::try_from(step.group_count).unwrap_or(1);
+    StepStart {
+        step_id: step.id,
+        groups: domain::seeding::snake_groups(&ordered, count),
+        seeds: ordered,
     }
 }
 
@@ -694,6 +841,55 @@ pub(crate) fn check(definition: &StepDefinition) -> Vec<(&'static str, String)> 
             ));
         }
     }
+    if let Some(problem) = support_problem(definition.format, definition.match_type) {
+        errors.push(("match_type", problem));
+    }
+    errors.extend(check_rules(definition));
+    errors
+}
+
+/// Valide les séries et le barème d'une étape.
+fn check_rules(definition: &StepDefinition) -> Vec<(&'static str, String)> {
+    let rules = &definition.rules;
+    let mut errors = Vec::new();
+    let valid_best_of = |n: i32| matches!(n, 1 | 3 | 5);
+    if !valid_best_of(rules.best_of) {
+        errors.push((
+            "rules",
+            "best_of : 1, 3 ou 5 manches est attendu.".to_string(),
+        ));
+    }
+    for (round, best_of) in &rules.best_of_by_round {
+        let round_ok = round
+            .parse::<i32>()
+            .is_ok_and(|r| (1..=crate::matches::ROUND_MAX).contains(&r));
+        if !round_ok || !valid_best_of(*best_of) {
+            errors.push((
+                "rules",
+                format!("best_of_by_round : « {round} » doit associer une ronde à 1, 3 ou 5."),
+            ));
+        }
+    }
+    if definition.match_type == MatchType::Ffa
+        && (rules.best_of != 1 || !rules.best_of_by_round.is_empty())
+    {
+        errors.push((
+            "rules",
+            "Les séries (BO3, BO5) ne concernent que les duels.".to_string(),
+        ));
+    }
+    if let Some(scoring) = &rules.scoring {
+        let finite = [scoring.win, scoring.draw, scoring.loss]
+            .iter()
+            .chain(scoring.placement.iter())
+            .all(|v| v.is_finite() && v.abs() <= 1_000_000_000.0);
+        if !finite || scoring.placement.len() > usize::try_from(SIZE_MAX).unwrap_or(0) {
+            errors.push((
+                "rules",
+                "scoring : des nombres finis sont attendus.".to_string(),
+            ));
+        }
+    }
     errors
 }
 
@@ -755,44 +951,81 @@ pub(crate) fn chain_problems(tournament: &Tournament, steps: &[Step]) -> Vec<Str
     problems
 }
 
-/// Répartit les participants au hasard dans `group_count` groupes, à tour de rôle : les tailles
-/// diffèrent d'un participant au plus.
-pub(crate) fn draw_groups(mut ids: Vec<Uuid>, group_count: i32) -> Vec<Vec<Uuid>> {
-    let count = usize::try_from(group_count).unwrap_or(1).max(1);
-    // Une clé aléatoire par participant : mélange uniforme sans dépendance supplémentaire.
+/// Mélange uniforme sans dépendance supplémentaire (une clé aléatoire par participant).
+pub(crate) fn shuffled(mut ids: Vec<Uuid>) -> Vec<Uuid> {
     ids.sort_by_cached_key(|_| Uuid::new_v4());
-    let mut groups = vec![Vec::new(); count];
-    for (index, id) in ids.into_iter().enumerate() {
-        groups[index % count].push(id);
-    }
-    groups
+    ids
 }
 
-/// Rang définitif d'un groupe à la clôture : points décroissants puis ordre d'inscription.
-/// Les `advance_per_group` premiers sont qualifiés.
-fn close_group(
-    members: &[&StepParticipant],
-    registered: &HashMap<Uuid, String>,
-    advance_per_group: i32,
-) -> Vec<StepOutcome> {
-    let mut ordered: Vec<&StepParticipant> = members.to_vec();
-    ordered.sort_by(|a, b| {
-        b.points
-            .total_cmp(&a.points)
-            .then_with(|| {
-                registered
-                    .get(&a.participant_id)
-                    .cmp(&registered.get(&b.participant_id))
-            })
-            .then_with(|| a.participant_id.cmp(&b.participant_id))
-    });
-    ordered
+/// Données nécessaires au classement des groupes d'une étape.
+pub(crate) struct RankingData {
+    groups: Vec<StepGroup>,
+    members: Vec<StepParticipant>,
+    matches: Vec<Match>,
+    match_members: Vec<MatchParticipant>,
+    registered: HashMap<Uuid, String>,
+}
+
+pub(crate) async fn ranking_data(
+    state: &AppState,
+    tournament_id: Uuid,
+    step: &Step,
+) -> Result<RankingData, ApiError> {
+    Ok(RankingData {
+        groups: state
+            .store
+            .list_step_groups(step.id)
+            .await
+            .map_err(ApiError::internal)?,
+        members: state
+            .store
+            .list_step_participants(step.id)
+            .await
+            .map_err(ApiError::internal)?,
+        matches: state
+            .store
+            .list_matches(step.id, None, Some(MatchStatus::Finished))
+            .await
+            .map_err(ApiError::internal)?,
+        match_members: state
+            .store
+            .list_step_match_participants(step.id)
+            .await
+            .map_err(ApiError::internal)?,
+        registered: active_participants(state, tournament_id)
+            .await?
+            .into_iter()
+            .map(|p: TournamentParticipant| (p.id, p.registered_at))
+            .collect(),
+    })
+}
+
+/// Participants du groupe dans l'ordre du classement, avec `true` pour une égalité de rang.
+fn ordered_group(step: &Step, group: &StepGroup, data: &RankingData) -> Vec<(Uuid, bool)> {
+    let members: Vec<&StepParticipant> = data
+        .members
+        .iter()
+        .filter(|m| m.group_id == group.id)
+        .collect();
+    let matches: Vec<&Match> = data
+        .matches
+        .iter()
+        .filter(|m| m.group_id == Some(group.id))
+        .collect();
+    let by_match = group_by_match(&data.match_members);
+    rank_group(step, &members, &matches, &by_match, &data.registered)
+}
+
+/// Rang définitif d'un groupe à la clôture : points, critères de départage puis ordre
+/// d'inscription, sans égalité. Les `advance_per_group` premiers sont qualifiés.
+fn close_group(step: &Step, group: &StepGroup, data: &RankingData) -> Vec<StepOutcome> {
+    ordered_group(step, group, data)
         .into_iter()
         .zip(1i32..)
-        .map(|(member, rank)| StepOutcome {
-            participant_id: member.participant_id,
+        .map(|((participant_id, _), rank)| StepOutcome {
+            participant_id,
             final_rank: rank,
-            status: if rank <= advance_per_group {
+            status: if rank <= step.advance_per_group {
                 StepParticipantStatus::Qualified
             } else {
                 StepParticipantStatus::Eliminated
@@ -801,37 +1034,48 @@ fn close_group(
         .collect()
 }
 
-/// Classement d'un groupe : celui enregistré une fois l'étape clôturée, sinon les points
-/// décroissants avec des égalités qui partagent le même rang.
-fn live_ranking(members: &[&StepParticipant], finished: bool) -> Vec<RankedParticipant> {
-    let mut ordered: Vec<&StepParticipant> = members.to_vec();
-    ordered.sort_by(|a, b| {
-        if finished {
+/// Classement d'un groupe : celui enregistré une fois l'étape clôturée, sinon points et départages
+/// avec des égalités qui partagent le même rang.
+fn live_ranking(step: &Step, group: &StepGroup, data: &RankingData) -> Vec<RankedParticipant> {
+    let finished = step.status == StepStatus::Finished;
+    let member_of = |id: Uuid| data.members.iter().find(|m| m.participant_id == id);
+    let mut ranked: Vec<RankedParticipant> = Vec::new();
+    if finished {
+        let mut members: Vec<&StepParticipant> = data
+            .members
+            .iter()
+            .filter(|m| m.group_id == group.id)
+            .collect();
+        members.sort_by(|a, b| {
             a.final_rank
                 .cmp(&b.final_rank)
                 .then_with(|| a.participant_id.cmp(&b.participant_id))
-        } else {
-            b.points
-                .total_cmp(&a.points)
-                .then_with(|| a.participant_id.cmp(&b.participant_id))
+        });
+        for member in members {
+            ranked.push(RankedParticipant {
+                participant_id: member.participant_id,
+                points: member.points,
+                rank: member.final_rank.unwrap_or(0),
+                status: member.status,
+                seed: member.seed,
+            });
         }
-    });
-    let mut ranked: Vec<RankedParticipant> = Vec::with_capacity(ordered.len());
-    for (index, member) in ordered.iter().enumerate() {
-        let rank = match (finished, member.final_rank) {
-            (true, Some(rank)) => rank,
-            _ => match index.checked_sub(1).map(|previous| ordered[previous]) {
-                Some(previous) if previous.points.total_cmp(&member.points) == Ordering::Equal => {
-                    ranked[index - 1].rank
-                }
-                _ => i32::try_from(index + 1).unwrap_or(i32::MAX),
-            },
+        return ranked;
+    }
+    for (index, (id, tied)) in ordered_group(step, group, data).into_iter().enumerate() {
+        let Some(member) = member_of(id) else {
+            continue;
+        };
+        let rank = match ranked.last() {
+            Some(previous) if tied => previous.rank,
+            _ => i32::try_from(index + 1).unwrap_or(i32::MAX),
         };
         ranked.push(RankedParticipant {
-            participant_id: member.participant_id,
+            participant_id: id,
             points: member.points,
             rank,
             status: member.status,
+            seed: member.seed,
         });
     }
     ranked
@@ -853,6 +1097,7 @@ mod tests {
             matches_per_group: 1,
             advance_per_group: advance,
             tiebreak: serde_json::json!([]),
+            rules: StepRules::default(),
             status: StepStatus::Pending,
             created_at: String::new(),
             updated_at: String::new(),
@@ -889,6 +1134,7 @@ mod tests {
             points,
             final_rank: None,
             status: StepParticipantStatus::In,
+            seed: None,
         }
     }
 
@@ -913,38 +1159,64 @@ mod tests {
     }
 
     #[test]
-    fn the_draw_deals_every_participant_once_in_balanced_groups() {
+    fn the_start_deals_every_participant_once_in_balanced_groups() {
         let ids: Vec<Uuid> = (0..10).map(|_| Uuid::new_v4()).collect();
-        let groups = draw_groups(ids.clone(), 3);
-        let sizes: Vec<usize> = groups.iter().map(Vec::len).collect();
-        assert_eq!(sizes, [4, 3, 3]);
-        let mut dealt: Vec<Uuid> = groups.into_iter().flatten().collect();
+        let start = start_of(&step(1, 3, 4, 2), shuffled(ids.clone()));
+        let mut sizes: Vec<usize> = start.groups.iter().map(Vec::len).collect();
+        sizes.sort_unstable();
+        assert_eq!(sizes, [3, 3, 4]);
+        let mut dealt: Vec<Uuid> = start.groups.into_iter().flatten().collect();
         dealt.sort();
         let mut expected = ids;
         expected.sort();
         assert_eq!(dealt, expected);
+        assert_eq!(start.seeds.len(), 10);
+    }
+
+    fn data(
+        group: &StepGroup,
+        members: Vec<StepParticipant>,
+        registered: &[(Uuid, &str)],
+    ) -> RankingData {
+        RankingData {
+            groups: vec![group.clone()],
+            members,
+            matches: Vec::new(),
+            match_members: Vec::new(),
+            registered: registered
+                .iter()
+                .map(|(id, at)| (*id, (*at).to_string()))
+                .collect(),
+        }
+    }
+
+    fn group() -> StepGroup {
+        StepGroup {
+            id: Uuid::nil(),
+            step_id: Uuid::nil(),
+            index: 1,
+        }
     }
 
     #[test]
     fn closing_a_group_ranks_by_points_then_registration_order() {
         let (a, b, c, d) = (member(5.0), member(9.0), member(5.0), member(1.0));
-        let registered = HashMap::from([
-            (a.participant_id, "2026-01-02".to_string()),
-            (b.participant_id, "2026-01-03".to_string()),
-            (c.participant_id, "2026-01-01".to_string()),
-            (d.participant_id, "2026-01-04".to_string()),
-        ]);
-        let outcomes = close_group(&[&a, &b, &c, &d], &registered, 2);
+        let registered = [
+            (a.participant_id, "2026-01-02"),
+            (b.participant_id, "2026-01-03"),
+            (c.participant_id, "2026-01-01"),
+            (d.participant_id, "2026-01-04"),
+        ];
+        let ids = [
+            a.participant_id,
+            b.participant_id,
+            c.participant_id,
+            d.participant_id,
+        ];
+        let data = data(&group(), vec![a, b, c, d], &registered);
+        let outcomes = close_group(&step(1, 1, 4, 2), &group(), &data);
         let order: Vec<Uuid> = outcomes.iter().map(|o| o.participant_id).collect();
-        assert_eq!(
-            order,
-            [
-                b.participant_id,
-                c.participant_id,
-                a.participant_id,
-                d.participant_id
-            ]
-        );
+        assert_eq!(order, [ids[1], ids[2], ids[0], ids[3]]);
         let statuses: Vec<StepParticipantStatus> = outcomes.iter().map(|o| o.status).collect();
         assert_eq!(
             statuses,
@@ -960,11 +1232,97 @@ mod tests {
     #[test]
     fn a_live_ranking_shares_the_rank_between_ties() {
         let (a, b, c) = (member(9.0), member(5.0), member(5.0));
-        let ranks: Vec<i32> = live_ranking(&[&a, &b, &c], false)
+        let data = data(&group(), vec![a, b, c], &[]);
+        let ranks: Vec<i32> = live_ranking(&step(1, 1, 4, 2), &group(), &data)
             .iter()
             .map(|r| r.rank)
             .collect();
         assert_eq!(ranks, [1, 2, 2]);
+    }
+
+    fn entrant(group_index: i32, rank: i32, points: f64) -> Entrant {
+        Entrant {
+            id: Uuid::new_v4(),
+            group_index,
+            rank,
+            points,
+        }
+    }
+
+    #[test]
+    fn qualifiers_follow_the_configured_placement() {
+        let entrants = vec![
+            entrant(1, 1, 10.0),
+            entrant(2, 1, 12.0),
+            entrant(1, 2, 8.0),
+            entrant(2, 2, 9.0),
+        ];
+        let ids: Vec<Uuid> = entrants.iter().map(|e| e.id).collect();
+        // Rang puis points : le meilleur de chaque groupe, du plus fort au plus faible.
+        assert_eq!(
+            qualifier_order(
+                entrants.clone(),
+                QualificationPlacement::Rank,
+                SeedingStrategy::Random
+            ),
+            [ids[1], ids[0], ids[3], ids[2]]
+        );
+        // Rang puis groupe : A1, B1, A2, B2.
+        assert_eq!(
+            qualifier_order(
+                entrants.clone(),
+                QualificationPlacement::GroupRank,
+                SeedingStrategy::Random
+            ),
+            [ids[0], ids[1], ids[2], ids[3]]
+        );
+        // Un seeding par classement suit le rang même sans placement configuré.
+        assert_eq!(
+            qualifier_order(
+                entrants.clone(),
+                QualificationPlacement::Random,
+                SeedingStrategy::Ranking
+            ),
+            [ids[1], ids[0], ids[3], ids[2]]
+        );
+        let mut shuffled_ids = qualifier_order(
+            entrants,
+            QualificationPlacement::Random,
+            SeedingStrategy::Random,
+        );
+        shuffled_ids.sort();
+        let mut expected = ids;
+        expected.sort();
+        assert_eq!(shuffled_ids, expected);
+    }
+
+    #[test]
+    fn a_manual_seed_order_must_list_everyone_once() {
+        let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+        let reversed: Vec<Uuid> = ids.iter().rev().copied().collect();
+        assert_eq!(
+            manual_order(&ids, Some(reversed.clone())).unwrap(),
+            reversed
+        );
+        assert!(manual_order(&ids, None).is_err());
+        assert!(manual_order(&ids, Some(ids[..2].to_vec())).is_err());
+        assert!(manual_order(&ids, Some(vec![ids[0], ids[0], ids[1]])).is_err());
+    }
+
+    #[test]
+    fn a_ranking_seed_needs_reliable_points() {
+        let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+        let flat: HashMap<Uuid, f64> = ids.iter().map(|id| (*id, 0.0)).collect();
+        assert!(ranking_order(ids.clone(), &flat).is_err());
+        let spread: HashMap<Uuid, f64> = ids
+            .iter()
+            .zip([1.0, 3.0, 2.0])
+            .map(|(i, p)| (*i, p))
+            .collect();
+        assert_eq!(
+            ranking_order(ids.clone(), &spread).unwrap(),
+            [ids[1], ids[2], ids[0]]
+        );
     }
 
     #[test]
@@ -978,6 +1336,7 @@ mod tests {
             matches_per_group: 3,
             advance_per_group: 4,
             tiebreak: serde_json::json!(["wins", "best_placement"]),
+            rules: StepRules::default(),
         };
         assert!(check(&valid).is_empty());
         let fields = |definition: StepDefinition| -> Vec<&'static str> {

@@ -1136,3 +1136,107 @@ async fn matches_follow_their_tournament_at_every_level() {
             .all(|t| t["name"] == "Copie")
     );
 }
+
+/// Un résultat importé suit les mêmes règles qu'un résultat saisi : un match terminé importé
+/// avec ses seules statistiques reçoit les points (barème), rangs et issues que la saisie
+/// manuelle avait produits, et la suite du tournoi donne ensuite les mêmes totaux des deux côtés.
+#[actix_web::test]
+async fn imported_results_follow_the_same_rules_as_manual_ones() {
+    let (app, s) = setup().await;
+    let (tid, _) = halfway(&app, &s).await;
+    let (_, tournament) = get(&app, &format!("/tournaments/{tid}"), &s.admin).await;
+    let name = tournament["name"].as_str().unwrap().to_string();
+    let original =
+        serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    let manual = tournament_named(&original, &name).clone();
+
+    // Copie dont les matchs terminés ne portent que les statistiques brutes.
+    let mut stripped = manual.clone();
+    stripped["name"] = json!("Copie brute");
+    for m in stripped["steps"][0]["matches"].as_array_mut().unwrap() {
+        if m["status"] == "finished" {
+            for p in m["participants"].as_array_mut().unwrap() {
+                let p = p.as_object_mut().unwrap();
+                p.remove("points");
+                p.remove("rank");
+                p.remove("result");
+            }
+        }
+    }
+    let mut document = original.clone();
+    document["tournaments"] = json!([stripped]);
+    let (status, report) = import_file(&app, &s.admin, "json", document.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    let after = serde_json::from_str::<Value>(&export_file(&app, &s.admin, "json").await).unwrap();
+    let imported = tournament_named(&after, "Copie brute");
+    assert_eq!(
+        imported["steps"][0]["matches"], manual["steps"][0]["matches"],
+        "points, rangs et issues recalculés comme à la saisie"
+    );
+
+    // Même seconde demi-finale saisie à la main des deux côtés : mêmes totaux d'étape.
+    let (_, list) = get(&app, "/tournaments", &s.admin).await;
+    let copy = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Copie brute")
+        .map(id)
+        .unwrap();
+    let mut totals = Vec::new();
+    for tournament in [tid.as_str(), copy.as_str()] {
+        let (_, steps) = get(&app, &format!("/tournaments/{tournament}/steps"), &s.admin).await;
+        let step = id(&steps[0]);
+        let base = format!("/tournaments/{tournament}/steps/{step}/matches");
+        let (_, matches) = get(&app, &base, &s.admin).await;
+        let semi = matches
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["status"] == "ongoing")
+            .map(id)
+            .unwrap();
+        let (_, detail) = get(&app, &format!("{base}/{semi}"), &s.admin).await;
+        let pair: Vec<String> = detail["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["participant_id"].as_str().unwrap().to_string())
+            .collect();
+        let (status, saved) = put(
+            &app,
+            &format!("{base}/{semi}/results"),
+            &s.admin,
+            json!({ "results": [
+                { "participant_id": pair[0], "stats": { "kills": 5 } },
+                { "participant_id": pair[1], "stats": { "kills": 2 } },
+            ] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let (status, done) = post(
+            &app,
+            &format!("{base}/{semi}/status"),
+            &s.admin,
+            json!({ "status": "finished" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        let (_, ranking) = get(
+            &app,
+            &format!("/tournaments/{tournament}/steps/{step}/ranking"),
+            &s.admin,
+        )
+        .await;
+        let mut points: Vec<f64> = ranking[0]["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["points"].as_f64().unwrap())
+            .collect();
+        points.sort_by(f64::total_cmp);
+        totals.push(points);
+    }
+    assert_eq!(totals[0], totals[1]);
+    assert_eq!(totals[0].iter().sum::<f64>(), 4.5 + 1.5 + 7.5 + 3.0);
+}
