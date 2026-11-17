@@ -70,6 +70,10 @@ pub enum ApiError {
     VerificationLimited,
     /// Le tournoi est géré par une source externe : il ne se modifie pas par l'API.
     ExternallyManaged,
+    /// Le match a commencé (ou est terminé, annulé) : son pronostic ne change plus.
+    PredictionLocked,
+    /// Les réponses à cette question de Pick'em sont fermées.
+    PickemLocked,
     /// Ce tournoi externe est déjà importé.
     AlreadyImported,
     /// Une synchronisation de ce tournoi externe est déjà en cours.
@@ -108,6 +112,16 @@ impl ApiError {
                 "Identifiants ou jeton invalides",
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Action non autorisée"),
+            ApiError::PredictionLocked => (
+                StatusCode::CONFLICT,
+                "prediction_locked",
+                "Le match a commencé : le pronostic est verrouillé",
+            ),
+            ApiError::PickemLocked => (
+                StatusCode::CONFLICT,
+                "pickem_locked",
+                "Les réponses à cette question sont fermées",
+            ),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Ressource introuvable"),
             ApiError::Conflict => (
                 StatusCode::CONFLICT,

@@ -32,6 +32,8 @@ use utoipa::{Modify, OpenApi};
         (name = "steps", description = "Étapes d'un tournoi : réglages, lancement, clôture et classements par groupe"),
         (name = "matches", description = "Matchs d'une étape : résultats, points et propagation du vainqueur"),
         (name = "external-tournaments", description = "Sources externes (start.gg…) : recherche, import en lecture seule et synchronisation"),
+        (name = "predictions", description = "Pronostics des matchs et classements des spectateurs"),
+        (name = "pickem", description = "Pick'em d'un tournoi : questions tirées de modèles et réponses des spectateurs"),
         (name = "system", description = "Santé du service"),
     ),
     modifiers(&BearerAuth),

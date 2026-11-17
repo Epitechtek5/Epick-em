@@ -105,6 +105,19 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /external-tournaments/{id}/sync` | JWT valide, **administrateur** | — | `200` l'état après synchronisation (`stale: true` et `last_error` si la source a échoué : l'instantané précédent reste servi) ; `409` `sync_in_progress` |
 | `DELETE /external-tournaments/{id}` | JWT valide, **administrateur** | — | `204` : la source, ses événements et le tournoi local |
 | `GET /tournaments/{id}/source` | JWT valide | — | `200` `{ provider, provider_name, url, last_success_at, stale }` : attribution à afficher avec les données ; `404` si le tournoi est local |
+| `GET /tournaments/{id}/matches/{match_id}/prediction` | JWT valide | — | `200` mon pronostic et `locked` ; `404` si je n'en ai pas ou si le match n'est pas de ce tournoi |
+| `PUT /tournaments/{id}/matches/{match_id}/prediction` | JWT valide | `{ winner_id }` (duel) ou `{ ranking }` (FFA, inscrits du match dans l'ordre pronostiqué) | `200` le pronostic (issue `pending`) ; `400` si le choix ne convient pas au match ; `409` `prediction_locked` |
+| `DELETE /tournaments/{id}/matches/{match_id}/prediction` | JWT valide | — | `204` ; `404` sans pronostic ; `409` `prediction_locked` |
+| `GET /tournaments/{id}/matches/{match_id}/predictions` | JWT valide | — | `200` `{ locked, count, distribution, predictions }` : avant le verrouillage, le nombre seulement |
+| `GET /predictions` | JWT valide | `?tournament_id` | `200` mes pronostics, du plus récent au plus ancien |
+| `GET /tournaments/{id}/leaderboard` | JWT valide | `?limit` (1 à 100, 50), `?offset` | `200` `[{ rank, user_id, username, points, correct, resolved }]` : spectateurs du tournoi par points |
+| `GET /leaderboard` | JWT valide | `?limit`, `?offset` | `200` classement général, tous tournois confondus |
+| `GET /tournaments/{id}/pickem` | JWT valide | — | `200` `[{ …question, locked, expected, my_answer }]` |
+| `GET /tournaments/{id}/pickem/templates` | JWT valide, **administrateur** | — | `200` `[{ kind, default_points, available, reason, steps }]` : modèles résolubles avec les données du tournoi |
+| `POST /tournaments/{id}/pickem/questions` | JWT valide, **administrateur** | `{ kind, params?, points?, opens_at?, locks_at? }` | `201` la question ; `400` modèle indisponible, `params` ou `locks_at` invalides |
+| `PATCH /tournaments/{id}/pickem/questions/{question_id}` | JWT valide, **administrateur** | `{ points?, locks_at? }` | `200` ; `409` `pickem_locked` |
+| `DELETE /tournaments/{id}/pickem/questions/{question_id}` | JWT valide, **administrateur** | — | `204` la question et ses réponses ; `409` `pickem_locked` |
+| `PUT /tournaments/{id}/pickem/questions/{question_id}/answer` | JWT valide | `{ participant_id }` ou `{ participant_ids }` (`step_qualifiers`) | `200` ma réponse (issue `pending`) ; `400` si les inscrits ne conviennent pas ; `409` `pickem_locked` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -222,6 +235,16 @@ Un administrateur importe un tournoi d'une source externe (start.gg, voir ADR-00
 - **Changements de résultats :** chaque match terminé, corrigé ou rouvert chez la source est enregistré dans la boîte d'envoi (Redis), en même temps que l'instantané, pour les recalculs en aval.
 - **Stockage :** les données de la source n'atteignent jamais la base. PostgreSQL garde la ligne du tournoi et son lien vers la source (`external_sources`) ; l'instantané, l'état de synchronisation et le tournoi importé (inscrits, étapes, matchs, résultats) vivent dans Redis, et les routes du tournoi les y lisent (détails dans `docs/connecteurs.md`).
 
+### Pronostics et Pick'em
+
+Données des spectateurs, en base, y compris pour un tournoi importé : `protect_external` les laisse passer et elles ne vident pas le cache des exports. Guide des modèles de question : `docs/pickem.md`.
+
+- **Pronostic :** un par compte et par match. Un duel se pronostique avec `winner_id`, un FFA avec `ranking` (au moins un inscrit, sans doublon, tous du match), une fois les participants du match connus.
+- **Verrouillage :** par l'horloge du serveur seule (ADR-002) : le match n'est plus `scheduled`, a commencé (`started_at`), son heure prévue (`scheduled_at`) est passée, ou le tournoi est terminé ou annulé. Les pronostics des autres ne sont visibles qu'après.
+- **Pick'em :** un administrateur ajoute des questions tirées d'un modèle (`tournament_winner`, `top_scorer`, `step_qualifiers`) ; seuls les modèles résolubles avec les données du tournoi sont acceptés (`top_scorer` exige un barème, donc un tournoi local). Chaque question ferme à `locks_at` (par défaut le début du tournoi, qui doit être dans le futur) ; `opens_at` defaults to server time. Editing or deleting is permitted only before `opens_at`; answers are accepted during `[opens_at, locks_at)`.
+- **Résolution :** api-internal recalcule toutes les `RESOLVE_INTERVAL_SECS` (30 s) l'issue (`pending`, `correct`, `partial`, `incorrect`, `void`) et les points de chaque pronostic et de chaque réponse **à partir de l'état** des matchs, des étapes et du classement, et n'écrit que ce qui change : rejouer ne compte rien deux fois, et une correction de résultat, locale ou venue de start.gg, est reprise au passage suivant. Un match annulé ou disparu rend son pronostic `void`. Un tournoi local terminé et entièrement résolu est réglé et n'est plus relu ; un tournoi importé ne l'est jamais.
+- **Barème :** duel juste 10 ; FFA 5 par inscrit au rang exact et 2 à un rang près ; une question rapporte ses `points` (30 par défaut pour `tournament_winner`, 20 sinon), partagés entre les qualifiés attendus pour `step_qualifiers`. En cas d'égalité, toutes les réponses ex æquo sont justes.
+
 ### Erreurs
 
 Format `{ "error", "message", "errors"? }` :
@@ -250,6 +273,8 @@ Format `{ "error", "message", "errors"? }` :
 | `409` | `step_position_taken` | une étape occupe déjà cette position dans le tournoi |
 | `409` | `registration_closed` | tournoi hors `registration` ou hors de la fenêtre d'inscription |
 | `409` | `invalid_status_transition` | changement de statut impossible depuis le statut actuel |
+| `409` | `prediction_locked` | le match a commencé, est terminé ou annulé : son pronostic ne change plus |
+| `409` | `pickem_locked` | la question de Pick'em est fermée (`locks_at` passé ou tournoi terminé) |
 | `409` | `externally_managed` | tournoi importé d'une source externe : il se modifie chez la source |
 | `409` | `already_imported` | ce tournoi externe est déjà importé |
 | `409` | `sync_in_progress` | une synchronisation de ce tournoi externe est déjà en cours |
