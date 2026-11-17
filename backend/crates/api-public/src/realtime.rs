@@ -232,7 +232,11 @@ pub async fn handle_event(
             Ok(report)
         }
         // Pronostics et réponses partent avec le tournoi (clés étrangères).
-        EventKind::TournamentDeleted { .. } => Ok(None),
+        EventKind::TournamentDeleted { tournament_id } => {
+            broadcast(live, LiveMessage::new(topics::LEADERBOARD, live::LEADERBOARD_UPDATED,
+                json!({"tournament_id": tournament_id}))).await;
+            Ok(None)
+        },
     }
 }
 
@@ -247,7 +251,7 @@ pub async fn consume_once(
     let deliveries = stream.read(READ_BATCH, block).await?;
     let mut done = Vec::with_capacity(deliveries.len());
     // Un tournoi modifié plusieurs fois dans le lot n'est résolu qu'une fois.
-    let mut resolved: Vec<Uuid> = Vec::new();
+    let mut resolved: Vec<(Uuid, bool)> = Vec::new();
     for delivery in deliveries {
         let Some(event) = delivery.event else {
             eprintln!("bus : événement {} illisible, ignoré", delivery.id);
@@ -255,13 +259,14 @@ pub async fn consume_once(
             continue;
         };
         let tournament_id = event.tournament_id();
-        if resolved.contains(&tournament_id) {
+        let key = (tournament_id, matches!(event.kind, EventKind::TournamentDeleted { .. }));
+        if resolved.contains(&key) {
             done.push(delivery.id);
             continue;
         }
         match handle_event(store, live, &event).await {
             Ok(_) => {
-                resolved.push(tournament_id);
+                resolved.push(key);
                 done.push(delivery.id);
             }
             Err(err) => eprintln!(
