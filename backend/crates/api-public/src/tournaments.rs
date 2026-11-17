@@ -384,7 +384,7 @@ async fn update_tournament(
     }
     let team_size_given = request.settings.team_size;
     let settings_given = !request.settings.is_empty();
-    let merged_settings = request.settings.merge(current.settings.clone());
+    let merged_settings = request.settings.clone().merge(current.settings.clone());
     let mut merged = TournamentInput {
         game_id: current.game_id,
         name: request.name.clone().unwrap_or(current.name),
@@ -440,7 +440,7 @@ async fn update_tournament(
         max_participants: request.max_participants.map(|_| merged.max_participants),
         team_scoring_mode: request.team_scoring_mode.map(|_| merged.team_scoring_mode),
         team_scoring_n: request.team_scoring_n.map(|_| merged.team_scoring_n),
-        settings: settings_given.then(|| merged.settings.clone()),
+        settings: request.settings.to_update(&merged.settings),
     };
     let tournament = state
         .store
@@ -910,6 +910,7 @@ async fn register(
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé à l'administrateur, ou à l'inscrit pour se retirer", body = ErrorResponse),
         (status = 404, description = "Tournoi ou inscription introuvable", body = ErrorResponse),
+        (status = 409, description = "Le statut demandé occupe une place et le tournoi est complet", body = ErrorResponse),
     ),
 )]
 #[patch("/tournaments/{id}/participants/{participant_id}")]
@@ -929,20 +930,21 @@ async fn update_participant(
         }
         require_actor(&state, &claims, &participant).await?;
     }
-    let participant = state
+    // Capacité et promotion de la liste d'attente sont traitées sous le verrou du tournoi.
+    let change = state
         .store
         .set_participant_status(participant.id, status)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(tournament_error)?
         .ok_or(ApiError::NotFound)?;
+    emit_promoted(&state, &change.promoted);
     if status == ParticipantStatus::Disqualified {
         crate::notifications::emit(
             &state,
             crate::notifications::participant_disqualified(&tournament, participant.id),
         );
     }
-    release_seat(&state, &tournament, &participant).await?;
-    Ok(HttpResponse::Ok().json(participant))
+    Ok(HttpResponse::Ok().json(change.participant))
 }
 
 /// Retire une inscription (l'inscrit, le propriétaire de son équipe ou un administrateur).
@@ -983,17 +985,14 @@ async fn remove_participant(
     ) {
         return Err(ApiError::TournamentLocked);
     }
-    if state
+    let promoted = state
         .store
         .delete_participant(participant.id)
         .await
         .map_err(ApiError::internal)?
-    {
-        release_seat(&state, &tournament, &participant).await?;
-        Ok(HttpResponse::NoContent().finish())
-    } else {
-        Err(ApiError::NotFound)
-    }
+        .ok_or(ApiError::NotFound)?;
+    emit_promoted(&state, &promoted);
+    Ok(HttpResponse::NoContent().finish())
 }
 
 /// Pointe un inscrit (l'inscrit, le propriétaire de son équipe, un arbitre ou un administrateur),
@@ -1044,8 +1043,9 @@ async fn check_in(
         .store
         .set_participant_status(participant.id, ParticipantStatus::CheckedIn)
         .await
-        .map_err(ApiError::internal)?
-        .ok_or(ApiError::NotFound)?;
+        .map_err(tournament_error)?
+        .ok_or(ApiError::NotFound)?
+        .participant;
     emit(&state, EventKind::CheckedIn, &participant);
     Ok(HttpResponse::Ok().json(participant))
 }
@@ -1688,20 +1688,10 @@ pub(crate) async fn settle_if_due(
 
 /// Une place libérée (retrait, suppression, disqualification) profite à la liste d'attente ;
 /// la promotion est bornée par la capacité, elle ne fait rien s'il n'y a pas de place.
-async fn release_seat(
-    state: &AppState,
-    tournament: &Tournament,
-    _participant: &TournamentParticipant,
-) -> Result<(), ApiError> {
-    if tournament.settings.waiting_list_enabled
-        && matches!(
-            tournament.status,
-            TournamentStatus::Registration | TournamentStatus::Draft
-        )
-    {
-        promote_and_emit(state, tournament.id).await?;
+fn emit_promoted(state: &AppState, promoted: &[TournamentParticipant]) {
+    for participant in promoted {
+        emit(state, EventKind::Promoted, participant);
     }
-    Ok(())
 }
 
 pub(crate) async fn promote_and_emit(
@@ -1713,9 +1703,7 @@ pub(crate) async fn promote_and_emit(
         .promote_waitlist(tournament_id)
         .await
         .map_err(ApiError::internal)?;
-    for participant in &promoted {
-        emit(state, EventKind::Promoted, participant);
-    }
+    emit_promoted(state, &promoted);
     Ok(promoted)
 }
 

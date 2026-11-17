@@ -93,6 +93,7 @@ describe('RegisterPage', () => {
       username: 'alice',
       email: 'Alice@Example.com',
       password: 'secret123',
+      language: 'fr',
     })
   })
 

@@ -36,6 +36,14 @@ export default function AuthenticatedLayout() {
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
+        name="invitations/index"
+        options={{ title: t('invitations.title') }}
+      />
+      <Stack.Screen
+        name="invitations/create"
+        options={{ title: t('invitations.create') }}
+      />
+      <Stack.Screen
         name="tournaments/create"
         options={{ title: t('tournaments.create') }}
       />
@@ -62,6 +70,10 @@ export default function AuthenticatedLayout() {
       <Stack.Screen
         name="tournaments/[tournamentId]/ranking"
         options={{ title: t('tournaments.ranking') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/management"
+        options={{ title: t('tournaments.management.title') }}
       />
       <Stack.Screen
         name="tournaments/[tournamentId]/steps/index"

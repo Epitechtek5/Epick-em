@@ -7,7 +7,9 @@ use actix_web::http::StatusCode;
 use actix_web::test::{self, TestRequest};
 use api_public::config::AuthConfig;
 use api_public::invitations::MemoryInvitationNotifier;
-use api_public::store::{InvitationEventKind, MemoryStore, Role};
+use api_public::store::{
+    AuthStore, InvitationEventKind, MemoryStore, Role, TournamentSettingsUpdate, TournamentUpdate,
+};
 use api_public::{AppState, app};
 use common::{SECRET, access, call, logged_in_as, login, request};
 use serde_json::{Value, json};
@@ -191,6 +193,7 @@ async fn every_route_requires_a_token() {
         (TestRequest::post(), format!("/invitations/{a}/accept")),
         (TestRequest::post(), format!("/invitations/{a}/decline")),
         (TestRequest::post(), format!("/invitations/{a}/revoke")),
+        (TestRequest::post(), format!("/invitations/{a}/resend")),
         (TestRequest::get(), format!("/invitation-links/{token}")),
         (
             TestRequest::post(),
@@ -865,6 +868,69 @@ async fn tournament_team_invitations_add_members_with_the_chosen_role() {
 }
 
 #[actix_web::test]
+async fn invitation_acceptance_respects_updated_roster_capacity() {
+    let (app, s) = setup().await;
+    let tournament = open_tournament(&app, &s, 8, "registration").await;
+    let (_, team) = post(
+        &app,
+        &format!("/tournaments/{tournament}/teams"),
+        &s.alice.token,
+        json!({ "name": "Limited roster" }),
+    )
+    .await;
+    let (_, invitation) = invite(
+        &app,
+        &s.alice.token,
+        json!({
+            "type": "tournament_team", "resource_id": id(&team),
+            "recipient_id": s.bob.id, "role": "substitute"
+        }),
+    )
+    .await;
+    s.store
+        .update_tournament(
+            Uuid::parse_str(&tournament).unwrap(),
+            TournamentUpdate {
+                settings: TournamentSettingsUpdate {
+                    team_max_substitutes: Some(Some(0)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let (status, _) = post(
+        &app,
+        &format!("/invitations/{}/accept", id(&invitation)),
+        &s.bob.token,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, pending) = get(
+        &app,
+        &format!("/invitations/{}", id(&invitation)),
+        &s.bob.token,
+    )
+    .await;
+    assert_eq!(pending["status"], "pending");
+    let (_, members) = get(
+        &app,
+        &format!("/tournament-teams/{}/members", id(&team)),
+        &s.alice.token,
+    )
+    .await;
+    assert!(
+        !members
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|member| member["user_id"] == s.bob.id)
+    );
+}
+
+#[actix_web::test]
 async fn acceptance_revalidates_the_resource() {
     let (app, s) = setup().await;
     let team = create_team(&app, &s, &s.alice.token).await;
@@ -889,5 +955,70 @@ async fn acceptance_revalidates_the_resource() {
     assert_eq!(
         (status, error_code(&error)),
         (StatusCode::CONFLICT, "invitation_unavailable")
+    );
+}
+
+#[actix_web::test]
+async fn resend_requires_sender_and_pending_direct_invitation() {
+    let (app, s) = setup().await;
+    let team = create_team(&app, &s, &s.alice.token).await;
+    let invitation = invite_to_team(&app, &s.alice.token, &team, &s.bob.id).await;
+    let path = format!("/invitations/{}/resend", id(&invitation));
+    assert_eq!(
+        post(&app, &path, &s.bob.token, json!({})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(&app, &path, &s.admin, json!({})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(&app, &path, &s.carol.token, json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, resent) = post(&app, &path, &s.alice.token, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{resent}");
+    assert_eq!(resent["expires_at"], invitation["expires_at"]);
+    assert_eq!(resent["status"], "pending");
+    actix_web::rt::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        s.notifier
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.delivery_id.is_some())
+    );
+    assert_eq!(
+        post(&app, &path, &s.alice.token, json!({})).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    post(
+        &app,
+        &format!("/invitations/{}/decline", id(&invitation)),
+        &s.bob.token,
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        post(&app, &path, &s.alice.token, json!({})).await.0,
+        StatusCode::CONFLICT
+    );
+    let (_, link) = invite(
+        &app,
+        &s.alice.token,
+        json!({"type":"team", "resource_id":team}),
+    )
+    .await;
+    assert_eq!(
+        post(
+            &app,
+            &format!("/invitations/{}/resend", id(&link)),
+            &s.alice.token,
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
     );
 }

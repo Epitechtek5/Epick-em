@@ -1,23 +1,23 @@
 {
   "api": "http://127.0.0.1:8080",
   "users": {
-    "seed_admin": "df38e27a-29ab-461a-9731-d7affc921f10",
-    "alice_test": "d28ddb4f-9631-44c4-8c61-9a8189bf697c",
-    "bob_test": "70fdae4a-b9fa-4d1e-b297-55acf545e094",
-    "charlie_test": "1fbe54d2-641d-4da4-a46e-75e6a37e15d4",
-    "david_test": "9b6be460-c633-4462-ad4e-f63743617190",
-    "emma_test": "8ebf75b1-25aa-4fb8-9573-d389fbeb42c1",
-    "felix_test": "6d2d58b1-d466-48f0-9fb8-60d68bcd82e9",
-    "grace_test": "99835d15-dec4-4865-95a3-ae7f3da012e3",
-    "henry_test": "d34e266d-4a1a-4f09-bfb6-ca4b1fb02e72",
-    "ivan_test": "4691bfeb-7fa2-4069-ab78-96aeed49fb9f",
-    "jane_test": "ac1d4412-4212-49f7-ad5b-53c986000c63",
-    "karl_test": "7775585e-13ed-4d01-82c0-07a9fcfbbe4e",
-    "luna_test": "2a281850-2e74-48f1-81de-3aa0bf135d46",
-    "mike_test": "785345c4-e082-4406-8290-04a8fe208e4d",
-    "nina_test": "b23094d0-fa60-4b0e-a029-fa3db55752b5",
-    "oliver_test": "197c26e8-fcb1-4681-8413-5d8d2eb2ee8d",
-    "paul_test": "1a216a17-c124-44c3-b867-9f54562daa33"
+    "seed_admin": "aab6238e-90b4-40f6-a14a-0fbc8ea8e77c",
+    "alice_test": "96af41c1-e3e5-47c3-b174-100973df5586",
+    "bob_test": "6fa79afd-d88c-439d-b0cf-92ebad59fb57",
+    "charlie_test": "d8cfd1d1-3bf3-46b5-8ec4-bd15097936b3",
+    "david_test": "f8884afc-568f-4ef9-9c6d-44086829b5d0",
+    "emma_test": "6f3f487a-a5c5-40eb-a70f-ddd5bb52b914",
+    "felix_test": "c1993f99-9b59-4627-8fa9-00e2ebf8266f",
+    "grace_test": "f143e4b3-a102-4013-b3c4-021cb4efb751",
+    "henry_test": "34b51894-94f1-4090-bee7-628c1ea0bb9e",
+    "ivan_test": "70cb6aa9-4519-487c-8f3b-30f419213539",
+    "jane_test": "f685d7ed-abe1-46b4-8bc4-97d83460ed81",
+    "karl_test": "f2dce9d3-6add-4c6d-bfdc-bce3b411641c",
+    "luna_test": "c70efdff-1c94-4a9b-9c02-45c74c101b2f",
+    "mike_test": "c370b265-a3b9-4271-bb01-92514c886947",
+    "nina_test": "a1408949-8397-407f-9667-2fe223e558ce",
+    "oliver_test": "930248f5-3649-44af-a6e6-70c65773d5e0",
+    "paul_test": "50bfcf11-ee94-4803-a8d2-f93df16c8eaa"
   },
   "login_emails": {
     "seed_admin": "seed_admin@example.test",
@@ -38,117 +38,780 @@
     "oliver_test": "oliver_test@example.test",
     "paul_test": "paul_test@example.test"
   },
+  "profiles": {
+    "seed_admin": {
+      "settings": {
+        "language": "fr",
+        "theme": "system",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": true
+          },
+          "teams": {
+            "email": true,
+            "push": true
+          },
+          "matches": {
+            "email": true,
+            "push": true
+          },
+          "predictions": {
+            "email": true,
+            "push": true
+          },
+          "pickem": {
+            "email": true,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": true
+          }
+        }
+      },
+      "picture_url": null,
+      "notification_mode": "all"
+    },
+    "alice_test": {
+      "settings": {
+        "language": "en",
+        "theme": "system",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": false
+          },
+          "teams": {
+            "email": true,
+            "push": false
+          },
+          "matches": {
+            "email": true,
+            "push": false
+          },
+          "predictions": {
+            "email": true,
+            "push": false
+          },
+          "pickem": {
+            "email": true,
+            "push": false
+          },
+          "rankings": {
+            "email": true,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": false
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=alice_test",
+      "notification_mode": "email_only"
+    },
+    "bob_test": {
+      "settings": {
+        "language": "es",
+        "theme": "system",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": true
+          },
+          "teams": {
+            "email": false,
+            "push": true
+          },
+          "matches": {
+            "email": false,
+            "push": true
+          },
+          "predictions": {
+            "email": false,
+            "push": true
+          },
+          "pickem": {
+            "email": false,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": true
+          },
+          "account": {
+            "email": false,
+            "push": true
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=bob_test",
+      "notification_mode": "push_only"
+    },
+    "charlie_test": {
+      "settings": {
+        "language": "fr",
+        "theme": "light",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": false
+          },
+          "teams": {
+            "email": false,
+            "push": false
+          },
+          "matches": {
+            "email": false,
+            "push": false
+          },
+          "predictions": {
+            "email": false,
+            "push": false
+          },
+          "pickem": {
+            "email": false,
+            "push": false
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": false,
+            "push": false
+          }
+        }
+      },
+      "picture_url": null,
+      "notification_mode": "muted"
+    },
+    "david_test": {
+      "settings": {
+        "language": "en",
+        "theme": "light",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": true
+          },
+          "teams": {
+            "email": true,
+            "push": true
+          },
+          "matches": {
+            "email": true,
+            "push": true
+          },
+          "predictions": {
+            "email": true,
+            "push": true
+          },
+          "pickem": {
+            "email": true,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": true
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=david_test",
+      "notification_mode": "all"
+    },
+    "emma_test": {
+      "settings": {
+        "language": "es",
+        "theme": "light",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": false
+          },
+          "teams": {
+            "email": true,
+            "push": false
+          },
+          "matches": {
+            "email": true,
+            "push": false
+          },
+          "predictions": {
+            "email": true,
+            "push": false
+          },
+          "pickem": {
+            "email": true,
+            "push": false
+          },
+          "rankings": {
+            "email": true,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": false
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=emma_test",
+      "notification_mode": "email_only"
+    },
+    "felix_test": {
+      "settings": {
+        "language": "fr",
+        "theme": "dark",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": true
+          },
+          "teams": {
+            "email": false,
+            "push": true
+          },
+          "matches": {
+            "email": false,
+            "push": true
+          },
+          "predictions": {
+            "email": false,
+            "push": true
+          },
+          "pickem": {
+            "email": false,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": true
+          },
+          "account": {
+            "email": false,
+            "push": true
+          }
+        }
+      },
+      "picture_url": null,
+      "notification_mode": "push_only"
+    },
+    "grace_test": {
+      "settings": {
+        "language": "en",
+        "theme": "dark",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": false
+          },
+          "teams": {
+            "email": false,
+            "push": false
+          },
+          "matches": {
+            "email": false,
+            "push": false
+          },
+          "predictions": {
+            "email": false,
+            "push": false
+          },
+          "pickem": {
+            "email": false,
+            "push": false
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": false,
+            "push": false
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=grace_test",
+      "notification_mode": "muted"
+    },
+    "henry_test": {
+      "settings": {
+        "language": "es",
+        "theme": "dark",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": true
+          },
+          "teams": {
+            "email": true,
+            "push": true
+          },
+          "matches": {
+            "email": true,
+            "push": true
+          },
+          "predictions": {
+            "email": true,
+            "push": true
+          },
+          "pickem": {
+            "email": true,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": true
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=henry_test",
+      "notification_mode": "all"
+    },
+    "ivan_test": {
+      "settings": {
+        "language": "fr",
+        "theme": "system",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": false
+          },
+          "teams": {
+            "email": true,
+            "push": false
+          },
+          "matches": {
+            "email": true,
+            "push": false
+          },
+          "predictions": {
+            "email": true,
+            "push": false
+          },
+          "pickem": {
+            "email": true,
+            "push": false
+          },
+          "rankings": {
+            "email": true,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": false
+          }
+        }
+      },
+      "picture_url": null,
+      "notification_mode": "email_only"
+    },
+    "jane_test": {
+      "settings": {
+        "language": "en",
+        "theme": "system",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": true
+          },
+          "teams": {
+            "email": false,
+            "push": true
+          },
+          "matches": {
+            "email": false,
+            "push": true
+          },
+          "predictions": {
+            "email": false,
+            "push": true
+          },
+          "pickem": {
+            "email": false,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": true
+          },
+          "account": {
+            "email": false,
+            "push": true
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=jane_test",
+      "notification_mode": "push_only"
+    },
+    "karl_test": {
+      "settings": {
+        "language": "es",
+        "theme": "system",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": false
+          },
+          "teams": {
+            "email": false,
+            "push": false
+          },
+          "matches": {
+            "email": false,
+            "push": false
+          },
+          "predictions": {
+            "email": false,
+            "push": false
+          },
+          "pickem": {
+            "email": false,
+            "push": false
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": false,
+            "push": false
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=karl_test",
+      "notification_mode": "muted"
+    },
+    "luna_test": {
+      "settings": {
+        "language": "fr",
+        "theme": "light",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": true
+          },
+          "teams": {
+            "email": true,
+            "push": true
+          },
+          "matches": {
+            "email": true,
+            "push": true
+          },
+          "predictions": {
+            "email": true,
+            "push": true
+          },
+          "pickem": {
+            "email": true,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": true
+          }
+        }
+      },
+      "picture_url": null,
+      "notification_mode": "all"
+    },
+    "mike_test": {
+      "settings": {
+        "language": "en",
+        "theme": "light",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": false
+          },
+          "teams": {
+            "email": true,
+            "push": false
+          },
+          "matches": {
+            "email": true,
+            "push": false
+          },
+          "predictions": {
+            "email": true,
+            "push": false
+          },
+          "pickem": {
+            "email": true,
+            "push": false
+          },
+          "rankings": {
+            "email": true,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": false
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=mike_test",
+      "notification_mode": "email_only"
+    },
+    "nina_test": {
+      "settings": {
+        "language": "es",
+        "theme": "light",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": true
+          },
+          "teams": {
+            "email": false,
+            "push": true
+          },
+          "matches": {
+            "email": false,
+            "push": true
+          },
+          "predictions": {
+            "email": false,
+            "push": true
+          },
+          "pickem": {
+            "email": false,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": true
+          },
+          "account": {
+            "email": false,
+            "push": true
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=nina_test",
+      "notification_mode": "push_only"
+    },
+    "oliver_test": {
+      "settings": {
+        "language": "fr",
+        "theme": "dark",
+        "notifications": {
+          "tournaments": {
+            "email": false,
+            "push": false
+          },
+          "teams": {
+            "email": false,
+            "push": false
+          },
+          "matches": {
+            "email": false,
+            "push": false
+          },
+          "predictions": {
+            "email": false,
+            "push": false
+          },
+          "pickem": {
+            "email": false,
+            "push": false
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": false,
+            "push": false
+          }
+        }
+      },
+      "picture_url": null,
+      "notification_mode": "muted"
+    },
+    "paul_test": {
+      "settings": {
+        "language": "en",
+        "theme": "dark",
+        "notifications": {
+          "tournaments": {
+            "email": true,
+            "push": true
+          },
+          "teams": {
+            "email": true,
+            "push": true
+          },
+          "matches": {
+            "email": true,
+            "push": true
+          },
+          "predictions": {
+            "email": true,
+            "push": true
+          },
+          "pickem": {
+            "email": true,
+            "push": true
+          },
+          "rankings": {
+            "email": false,
+            "push": false
+          },
+          "account": {
+            "email": true,
+            "push": true
+          }
+        }
+      },
+      "picture_url": "https://api.dicebear.com/9.x/shapes/png?seed=paul_test",
+      "notification_mode": "all"
+    }
+  },
   "global_teams": {
-    "Alpha": "6aecba0a-e52a-469b-9c7d-9f53d19b8fbb",
-    "Bravo": "d2b6d26e-f0f2-4e36-af13-5080fcb0ef02",
-    "Charlie": "b1758743-a89e-4979-8bac-546240105d6a",
-    "Delta": "6025968b-3278-4016-b905-3f400de528e7"
+    "Alpha": "752e2170-08cb-41eb-9864-ac861564b4f5",
+    "Bravo": "ce6615b0-e9d1-4add-a541-6ead0edbf6c5",
+    "Charlie": "9972ef52-5df1-4cce-b853-08d5a431234d",
+    "Delta": "2b732c7f-5540-4cfa-b157-9fde9e5e200f"
   },
   "tournaments": {
     "cs2": {
-      "id": "af88b585-868b-43c4-8a73-4fa3d0e215c5",
+      "id": "3037ff99-8aff-4c3e-ba8a-24247a364b28",
       "steps": [
-        "fdbe189d-b8a6-4b25-aee3-626e620330b0",
-        "f7f8bdac-856e-4e8d-8275-f0e7a406923f"
+        "5fe490e0-fe63-452a-9b8b-36c1c8a625d5",
+        "7e2343dc-9c48-4a8b-89d4-8e3d8486c109"
       ],
       "registrations": [
-        "d6a9475d-88b3-497c-8027-030d9a16aae3",
-        "80b74e01-d42f-481f-8ca9-58693213b2e8",
-        "e13acd86-d6f7-4b63-a45b-105b3a4602c2",
-        "e97bd4e6-1f0d-4d28-a338-74517cab58dd"
+        "9f8abe4a-de39-4433-a754-3671eddbe9a5",
+        "6739b631-e157-4a09-81c3-9954ab140c92",
+        "a7934f9b-8628-4022-846e-362cf6f17073",
+        "50946bf5-507e-4bf5-8195-1d49747a38ce"
       ]
     },
     "tft_live": {
-      "id": "8be21abd-c82b-40bf-a4c1-d562d96b2e03",
+      "id": "9def6def-6e4c-404d-a0fa-5b81f7d19659",
       "steps": [
-        "95d00627-f642-4bdc-8334-7419e32ed98a",
-        "ca5e3e11-8448-4903-9eb1-d75d40ce6d95"
+        "1f7ab90b-d933-4642-8147-b2154c8117b7",
+        "2b4ef24d-196b-4c03-a42e-491cfd88a6e3"
       ],
       "registrations": [
-        "03cdf399-3494-4d46-beeb-5e2895fcf34e",
-        "1d5f6fd1-a3d0-4b09-954f-82051459dcde",
-        "4af54c92-5ffa-4e92-a3c0-b6bbf3c5c565",
-        "925aae18-1eee-4789-8908-5a53d803f3ee",
-        "4ae1f03d-3b53-4d9c-9120-b22031e1a53a",
-        "a25519fe-b587-4e04-b988-7a791af05cb9",
-        "f94d6a95-500f-47f7-89c4-14bdb9ec633a",
-        "9a414bcc-763a-4493-9bea-7c612a7bd52d"
+        "35fba66b-087e-4929-a0ee-d32331763d9a",
+        "ff2d092e-8072-489d-9123-f643048e8758",
+        "676b70d1-8292-4eda-a561-f40da95f34db",
+        "65a18612-e01b-469c-9baa-1823750646a3",
+        "bc4d1149-f471-4841-a19c-2fd87ccb2dd4",
+        "d6159ed5-092e-48e2-b530-706ed29dd00a",
+        "9bb2e9f6-7965-4367-9550-68cbe25fa9da",
+        "4daebb64-6404-42c7-9d9b-4598b2fa5bc0"
       ]
     },
     "tft_registration": {
-      "id": "ad9272c5-da89-40a2-a1c5-c977f2a19cd7",
+      "id": "43ef9e57-830d-4776-8b28-94406b449406",
       "steps": [
-        "c338d40c-6cfe-494d-a714-08790e905249",
-        "5755e38f-3269-4181-a08f-cc1e43c7cbea"
+        "92d936da-b529-41d1-ac8c-dfb983df7d19",
+        "12f108ff-bc91-412c-ac3e-8ed1fc248530"
       ],
       "registrations": [
-        "674163d3-3b5d-4c2d-b542-2b30f41fad01",
-        "cf060f6d-d9d1-40a8-846f-112a2bb4b74b",
-        "99ce872b-7ae6-4530-8971-6bde038d9c6d",
-        "2ad37112-b4a2-4149-9514-cf6dac1b019f",
-        "7a3cc15a-1e77-45d4-ac96-78c5d39d2eac",
-        "f1c0a510-3e0c-4c2d-9d0e-df6d9d73a417",
-        "92ec5675-9246-4f7f-bd80-1f3d82ccd669",
-        "a5d4768a-9278-49b7-891a-ea894703df86"
+        "d3fefb96-eead-4c32-ae35-5756300f0a59",
+        "6a27504c-9ca3-458e-80a3-c85926a700df",
+        "e14f213f-8aba-41e8-9488-ef3e01aa13ef",
+        "fbb8625f-f6a1-4d3c-88dc-df3af609e90b",
+        "4a99466e-965c-4d02-b8c3-c5672ec136e9",
+        "5ebdae02-119f-477e-9a67-ffec7d32ff78",
+        "0559699f-c868-4ebc-b64d-33b490088368",
+        "25573e44-668c-4372-968e-36da91901ff6"
       ]
     },
     "single_elimination": {
-      "id": "4f67ca63-ac79-4dd8-99a1-7d4d87e4a20a",
+      "id": "8aa20c8a-4cc8-4bda-af36-15b70f01394d",
       "steps": [
-        "4f2da3e5-5b00-40f1-bc92-c06be5b118ff"
+        "8752ba33-5899-4e6f-a97c-193190de770c"
       ],
       "registrations": [
-        "57f2fb23-d1b8-4b8b-a58e-5d06c160ddb8",
-        "a5a52f67-6280-40e7-8db8-53a8b2fff65f",
-        "e28c17ac-7a13-4741-a7b4-5c24aa17a313",
-        "f62057d6-212d-48e2-8cd7-e65204174419"
+        "b71096ba-0aa1-4177-b3fb-d3e4c4e4edbe",
+        "72f59de1-c55e-40d6-9c4e-61254efb69f9",
+        "2590245d-f015-4c77-9d54-c1a78bb4ddf0",
+        "e8ed6b13-7060-4309-8912-93002411b198"
       ]
     },
     "double_elimination": {
-      "id": "f50d0410-ae3f-49ca-ad3e-f404d98ac7df",
+      "id": "7d98c7d2-bb44-4600-913c-3295d36b5c28",
       "steps": [
-        "f53c5833-f2c2-4167-a2e7-2b98084cdb60"
+        "05127d2d-1f12-4aa9-a445-a6041f81d58b"
       ],
       "registrations": [
-        "d1352f7f-97fe-4c36-a78e-15accf524157",
-        "516a2809-6ebb-402a-8fa8-dbd52b11c41d",
-        "602809f1-e96b-42df-894d-0b548fd4cf44",
-        "44d7d10b-7b29-45c5-be93-c64072449e0f"
+        "7d9d4e8f-f16b-4dd2-9469-a9cb37bf45d0",
+        "030351f8-8de0-4aaf-a1e7-c8e5e46dfb62",
+        "fd056ca6-e429-454c-b496-eb3a788dd103",
+        "23d7e28f-6c5c-4a8f-8087-1efaa01288be"
       ]
     },
     "swiss": {
-      "id": "d6df8ce0-0e2c-4905-a863-3313ccb6613f",
+      "id": "0d371c97-786e-4693-bfe7-3a5410ee9fab",
       "steps": [
-        "2ed9383a-f823-44a0-9318-c21e738d90ed"
+        "33a6d8c7-b7be-408e-9d68-d1f54e0e0b22"
       ],
       "registrations": [
-        "ab935ccf-a345-40d1-8229-0f07dc171177",
-        "7178c7ea-1f8e-4a9c-a1ab-be60cec9e518",
-        "8c1b65c5-62e3-4607-b361-6858cbc7e853",
-        "7d39e242-b0e7-476c-b227-b9858ab6d111",
-        "0c2b712b-7f1b-4030-8bae-ab75638d5440",
-        "c3b61177-4a20-4ad9-8c8c-9899e7d92999",
-        "8c9aa993-c7a3-4088-8c49-5df7db548523",
-        "97c2f2c2-f6e0-4d93-bb85-d112bce5a8f9"
+        "59dc62bb-021b-4468-aad8-a8d634f3916f",
+        "d8c8076a-0876-48a4-bed1-44bf7aed1e42",
+        "896c83c2-9b54-43d4-8b9c-b31c929abab7",
+        "87ea1e41-6b3c-4944-91af-643f917e1679",
+        "4dcb9f46-108e-4a7e-98dc-a6521e270fca",
+        "862f9eb6-7a39-4321-b7df-138ce2a6d4fc",
+        "642daf3c-7609-4afd-a1b5-1c35989ca636",
+        "8bcacc7d-9a2a-4874-98df-48717a1a543c"
       ]
     },
     "completed": {
-      "id": "a0b592c6-eabc-469a-9aaf-f95fe3f63269",
+      "id": "eef69133-558a-4dd2-9f2f-79a25bdf628b",
       "steps": [
-        "adbdf772-9ae4-42c0-8b9e-e77b8a45df47"
+        "9a98c4e6-1b7a-411f-8bd6-3ace940a14e9"
       ],
       "registrations": [
-        "4eecd253-5cc6-49b1-8771-aff022c6a041",
-        "13781092-96c2-4153-8adb-3115b11c3910"
+        "24af9914-6241-4481-8958-1a7f125c8dbc",
+        "ff4d046f-838b-4a09-87ae-f040e74cfb0d"
       ]
     },
+    "registration_management": {
+      "id": "2ffe13d9-b4ca-47af-97fa-21e5d1b5a933",
+      "steps": [],
+      "registrations": [
+        "5de9e381-c808-4472-ad1b-88745b5a01d7",
+        "32b79f83-75f2-496d-a834-19bc7e56acdc",
+        "86972396-2e68-4e5e-b7d4-da4736fd4894",
+        "b9f74241-451a-4ffa-b06a-550c96e8115e"
+      ]
+    },
+    "invitation_only": {
+      "id": "dde181e3-9283-4646-8b1a-cabc99cdc9a3",
+      "steps": [],
+      "registrations": []
+    },
     "cancelled": {
-      "id": "a34cb96a-4b8a-48df-94b1-506336432291",
+      "id": "af7ce9eb-a840-4310-a835-79425cb8c5c7",
       "steps": [],
       "registrations": []
     },
     "draft": {
-      "id": "93053451-2d01-46e5-9281-9991d399049a",
+      "id": "ccdcb565-babf-4094-8b9d-06c316886940",
       "steps": [],
       "registrations": []
     }
