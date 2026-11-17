@@ -161,7 +161,7 @@ export default function StepDetailsPage() {
                   {t('steps.summary', { groups: step.group_count, size: step.group_size, advance: step.advance_per_group })}
                 </span>
                 <span className="block font-normal text-muted-foreground">
-                  {t('steps.matchesPerGroup')} : {step.matches_per_group}
+                  {t('steps.matchesPerGroup')}{t('common.colon')} {step.matches_per_group}
                 </span>
               </FactTile>
               <FactTile icon={RankingIcon} label={t('steps.chain.title')}>
@@ -181,7 +181,7 @@ export default function StepDetailsPage() {
                         <span className="font-mono font-bold" aria-hidden="true">
                           {index + 1}.
                         </span>
-                        <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })} : </span>
+                        <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })}{t('common.colon')} </span>
                         <code className="font-mono">{key}</code>
                       </Chip>
                     </li>

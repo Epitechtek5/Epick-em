@@ -1,24 +1,33 @@
-import { useI18n, type Lang } from './context'
+import { LanguageCircleIcon } from '@hugeicons/core-free-icons'
 
-const OPTIONS: Lang[] = ['fr', 'en']
+import { Icon } from '@/components/ui/icon'
+import { useSettings } from '@/features/settings/context'
+import { LANGS, useI18n, type Lang } from './context'
+import { languageName } from './language-names'
 
-// Sélecteur natif : accessible au clavier et aux lecteurs d'écran sans surcouche.
+// Sélecteur natif compact (icône + code de langue) : accessible au clavier et aux lecteurs
+// d'écran sans surcouche. Connecté, le choix est aussi enregistré dans les réglages du compte.
 export function LanguageSwitcher() {
-  const { lang, setLang, t } = useI18n()
+  const { lang, t } = useI18n()
+  const { setLanguage } = useSettings()
   return (
-    <div className="flex items-center gap-2">
+    <div
+      className="relative flex h-9 items-center rounded-lg text-sm hover:bg-accent has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50"
+      title={t('common.language')}
+    >
+      <Icon icon={LanguageCircleIcon} size={18} className="pointer-events-none absolute left-2" />
       <label htmlFor="language-select" className="sr-only">
         {t('common.language')}
       </label>
       <select
         id="language-select"
         value={lang}
-        onChange={(event) => setLang(event.target.value as Lang)}
-        className="h-8 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+        onChange={(event) => setLanguage(event.target.value as Lang)}
+        className="h-9 cursor-pointer appearance-none rounded-lg bg-transparent pr-2 pl-8 text-sm font-medium outline-none"
       >
-        {OPTIONS.map((option) => (
+        {LANGS.map((option) => (
           <option key={option} value={option} lang={option}>
-            {option === 'fr' ? t('common.french') : t('common.english')}
+            {languageName(option)}
           </option>
         ))}
       </select>
