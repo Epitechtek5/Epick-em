@@ -4,7 +4,10 @@
 Uses real API authorization, Argon2 password hashing, registration, scoring and
 match lifecycle logic. Requires a backend containing Tournament, Step and Match.
 
-Run against a fresh local database with migration 0015 and RESEND_API_KEY unset.
+Run against a fresh local database with migration 0016 applied, RESEND_API_KEY
+unset and PUSH_ENABLED=false. Fixture addresses use example.test and cannot
+receive real email. Register real push tokens by signing in on a physical device.
+The manifest records settings and profile pictures for manual verification.
 Example: python3 seed_demo.py --bootstrap-admin
 """
 from __future__ import annotations
@@ -25,6 +28,9 @@ from typing import Any
 from uuid import UUID
 
 PASSWORD = "Password1234!"
+NOTIFICATION_CATEGORIES = (
+    "tournaments", "teams", "matches", "predictions", "pickem", "rankings", "account",
+)
 USERS = [
     "alice_test", "bob_test", "charlie_test", "david_test",
     "emma_test", "felix_test", "grace_test", "henry_test",
@@ -130,7 +136,7 @@ def bootstrap_account(api: Api, container: str, user_id: str, email: str, admin:
             input=statement, text=True, capture_output=True, check=False,
         )
         if result.returncode or result.stdout.strip() != user_id:
-            raise RuntimeError(f"Local seed bootstrap failed for {email}. Check the database mapping and migration 0015.")
+            raise RuntimeError(f"Local seed bootstrap failed for {email}. Check the database mapping and migrations through 0016.")
 
     run_sql(sql)
     api.request("POST", "/verify-email", {"token": token}, expected=(204,))
@@ -154,6 +160,50 @@ def create_users(api: Api, admin_name: str, container: str) -> dict[str, dict[st
         created[username] = {"id": data["id"], "email": email, "token": api.login(email)}
         print(f"  user: {username} ({email})")
     return created
+
+
+def configure_accounts(api: Api, users: dict[str, dict[str, str]]) -> dict[str, Any]:
+    """Persist varied settings through the same endpoints as the mobile app."""
+    profiles: dict[str, Any] = {}
+    for index, (username, user) in enumerate(users.items()):
+        # Vary languages, themes and channels across accounts for session-switch tests.
+        mode = ("all", "email_only", "push_only", "muted")[index % 4]
+        settings = {
+            "language": ("fr", "en", "es")[index % 3],
+            "theme": ("system", "light", "dark")[(index // 3) % 3],
+            "notifications": {
+                category: {
+                    "email": mode in ("all", "email_only"),
+                    "push": mode in ("all", "push_only"),
+                }
+                for category in NOTIFICATION_CATEGORIES
+            },
+        }
+        # Include category-specific opt-outs as well as whole-channel preferences.
+        if index % 4 == 0:
+            settings["notifications"]["rankings"] = {"email": False, "push": False}
+        api.request("PATCH", "/me/settings", settings, user["token"], expected=(200,))
+        stored = api.get("/me/settings", user["token"])
+        if stored != settings:
+            raise RuntimeError(f"Settings did not persist for {username}")
+
+        # Keep some accounts without a picture to exercise the avatar fallback.
+        picture_url = (
+            "https://api.dicebear.com/9.x/shapes/png?"
+            + urllib.parse.urlencode({"seed": username})
+            if index % 3 else ""
+        )
+        api.request("PATCH", "/me/update", {"picture_url": picture_url}, user["token"], expected=(200,))
+        profile = api.get("/me", user["token"])
+        if profile.get("picture_url") != (picture_url or None):
+            raise RuntimeError(f"Profile picture did not persist for {username}")
+        profiles[username] = {
+            "settings": stored,
+            "picture_url": profile.get("picture_url"),
+            "notification_mode": mode,
+        }
+        print(f"  preferences: {username}: {stored['language']}, {stored['theme']}, {mode}")
+    return profiles
 
 
 def create_game(api: Api, admin: str, name: str, description: str) -> dict[str, Any]:
@@ -191,6 +241,7 @@ def create_tournament(
     api: Api, admin: str, name: str, game_id: str,
     count: int, kind: str = "solo", size: int | None = None,
     scoring: str = "none", top_n: int | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> str:
     payload = {
         "game_id": game_id,
@@ -201,11 +252,23 @@ def create_tournament(
         "registration_open_at": iso(-24),
         "registration_close_at": iso(24),
         "participant_type": kind,
-        "team_size": size,
         "max_participants": count,
         "team_scoring_mode": scoring,
         "team_scoring_n": top_n,
+        "mode": "online",
+        "visibility": "public",
+        "rules": "Respectez les adversaires, les décisions des organisateurs et les horaires annoncés.",
+        "registration_policy": "open",
+        "waiting_list_enabled": False,
     }
+    if kind == "team":
+        payload.update({
+            "team_min_starters": size,
+            "team_max_starters": size,
+            "team_max_substitutes": None,
+        })
+    if settings:
+        payload.update(settings)
     tournament = api.post("/tournaments", payload, admin)
     print(f"  tournament: {name}")
     return tournament["id"]
@@ -461,6 +524,115 @@ def seed_completed_duel(api: Api, admin: str, users: dict[str, dict[str, str]],
     return TournamentData(tid, [step], registrations, game_id)
 
 
+def seed_registration_management(
+    api: Api,
+    admin: str,
+    users: dict[str, dict[str, str]],
+    game_id: str,
+) -> TournamentData:
+    """Create every registration state for one-account mobile testing."""
+    tid = create_tournament(
+        api,
+        admin,
+        "DEMO - Registration management",
+        game_id,
+        2,
+        settings={
+            "description": "Public advanced tournament ready for mobile registration management tests.",
+            "mode": "hybrid",
+            "location": "Epick'em Arena · Paris",
+            "registration_policy": "approval_required",
+            "waiting_list_enabled": True,
+            "registration_fields": [
+                {
+                    "key": "ingame_name",
+                    "label": "Pseudo en jeu",
+                    "field_type": "text",
+                    "required": True,
+                    "options": [],
+                },
+                {
+                    "key": "platform",
+                    "label": "Plateforme",
+                    "field_type": "select",
+                    "required": True,
+                    "options": ["PC", "PlayStation", "Xbox"],
+                },
+            ],
+            "check_in_open_at": iso(-1),
+            "check_in_close_at": iso(20),
+        },
+    )
+    set_tournament_status(api, admin, tid, "registration")
+
+    registrations: list[str] = []
+    candidates = USERS[:4]
+    for index, username in enumerate(candidates):
+        participant = api.post(
+            f"/tournaments/{tid}/participants",
+            {
+                "responses": {
+                    "ingame_name": f"{username}_ign",
+                    "platform": "PC" if index < 3 else "PlayStation",
+                },
+            },
+            users[username]["token"],
+        )
+        registrations.append(participant["id"])
+
+    for participant_id in registrations[:3]:
+        api.post(
+            f"/tournaments/{tid}/participants/{participant_id}/approve",
+            {},
+            admin,
+        )
+    api.post(
+        f"/tournaments/{tid}/participants/{registrations[3]}/reject",
+        {},
+        admin,
+    )
+
+    # Populate the management screen without requiring another interactive login.
+    api.request(
+        "PUT",
+        f"/tournaments/{tid}/roles/{users['alice_test']['id']}",
+        {"role": "referee"},
+        admin,
+    )
+    api.post(
+        f"/tournaments/{tid}/templates",
+        {"name": "DEMO TEMPLATE - Advanced registration"},
+        admin,
+    )
+    return TournamentData(tid, [], registrations, game_id)
+
+
+def seed_private_access(
+    api: Api,
+    admin: str,
+    users: dict[str, dict[str, str]],
+    game_id: str,
+) -> TournamentData:
+    tid = create_tournament(
+        api,
+        admin,
+        "DEMO - Invitation only",
+        game_id,
+        8,
+        settings={
+            "visibility": "invitation_only",
+            "description": "Visible to the owner when signed in, never in the public catalog.",
+        },
+    )
+    api.request(
+        "PUT",
+        f"/tournaments/{tid}/invitations/{users['bob_test']['id']}",
+        token=admin,
+        expected=(200, 201),
+    )
+    return TournamentData(tid, [], [], game_id)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=os.environ.get("API_URL", "http://127.0.0.1:8080"))
@@ -469,16 +641,50 @@ def main() -> int:
                         help="Allow local fixture email verification and admin promotion via docker exec")
     parser.add_argument("--postgres-container", default="epickem-postgres-1")
     parser.add_argument("--output", default="epickem-seed-manifest.json")
+    parser.add_argument("--refresh-demo-labels", action="store_true",
+                        help="Translate existing demo rules and field labels without resetting registrations")
     args = parser.parse_args()
 
+    if args.admin in USERS:
+        parser.error("--admin must differ from the fixture usernames")
     if urllib.parse.urlsplit(args.url).hostname not in ("localhost", "127.0.0.1", "::1"):
         parser.error("This seed script is restricted to localhost development APIs")
     api = Api(args.url)
     api.request("GET", "/health")
+    if args.refresh_demo_labels:
+        admin_token = api.login(f"{args.admin}@example.test")
+        tournaments = api.get("/tournaments?limit=100", admin_token)
+        for tournament in tournaments:
+            if not tournament["name"].startswith("DEMO - "):
+                continue
+            changes: dict[str, Any] = {}
+            if tournament.get("rules") == "Respect opponents, staff decisions and the published schedule.":
+                changes["rules"] = "Respectez les adversaires, les décisions des organisateurs et les horaires annoncés."
+            fields = tournament.get("registration_fields", [])
+            labels = {"In-game name": "Pseudo en jeu", "Platform": "Plateforme"}
+            translated = [
+                {**field, "label": labels.get(field["label"], field["label"])}
+                for field in fields
+            ]
+            if translated != fields:
+                changes["registration_fields"] = translated
+            if changes:
+                api.request("PATCH", f"/tournaments/{tournament['id']}", changes, admin_token)
+                print(f"  updated demo labels: {tournament['name']}")
+        return 0
     spec = api.request("GET", "/openapi.json")
-    for path in ("/tournaments/{id}/steps/{step_id}/matches", "/tournaments/{id}/steps", "/verify-email"):
-        if path not in spec.get("paths", {}):
-            raise RuntimeError(f"Running backend is missing required route {path}")
+    required_routes = {
+        "/tournaments/{id}/steps/{step_id}/matches": ("post",),
+        "/tournaments/{id}/steps": ("post",),
+        "/verify-email": ("post",),
+        "/me/settings": ("get", "patch"),
+        "/me/push-tokens": ("post", "delete"),
+        "/me/update": ("patch",),
+    }
+    for path, methods in required_routes.items():
+        for method in methods:
+            if method not in spec.get("paths", {}).get(path, {}):
+                raise RuntimeError(f"Running backend is missing required route {method.upper()} {path}")
 
     # Refuse partial/duplicate runs. The script is intended for a fresh DB only.
     # Games can be present from Liquibase's seed migration, so check tournament names.
@@ -489,6 +695,9 @@ def main() -> int:
     print("Creating accounts via /register (backend hashes passwords)...")
     users = create_users(api, args.admin, args.postgres_container)
     admin = users[args.admin]["token"]
+
+    print("Configuring account settings and profile pictures...")
+    profiles = configure_accounts(api, users)
 
     print("Creating games and statistics...")
     # Migrations may preseed Counter-Strike 2, so reuse games by name when found.
@@ -529,6 +738,12 @@ def main() -> int:
     created["double_elimination"] = seed_elimination(api, admin, users, chess["id"], wins["id"], "double_elim", complete_first=False)
     created["swiss"] = seed_swiss(api, admin, users, chess["id"])
     created["completed"] = seed_completed_duel(api, admin, users, chess["id"], wins["id"])
+    created["registration_management"] = seed_registration_management(
+        api, admin, users, tft["id"]
+    )
+    created["invitation_only"] = seed_private_access(
+        api, admin, users, chess["id"]
+    )
 
     cancelled = create_tournament(api, admin, "DEMO - Cancelled tournament", chess["id"], 4)
     set_tournament_status(api, admin, cancelled, "cancelled")
@@ -540,6 +755,7 @@ def main() -> int:
         "api": args.url,
         "users": {username: info["id"] for username, info in users.items()},
         "login_emails": {username: info["email"] for username, info in users.items()},
+        "profiles": profiles,
         "global_teams": {name: team["id"] for name, team in global_teams.items()},
         "tournaments": {
             key: {"id": value.id, "steps": value.step_ids, "registrations": value.registrations}
@@ -551,6 +767,12 @@ def main() -> int:
         output.write("\n")
     print(f"Seed complete. Manifest (no passwords or tokens): {args.output}")
     print(f"All {len(users)} accounts use the requested development password.")
+    print("Email fixtures use example.test: replace and verify an address before testing Resend.")
+    print("No push tokens are seeded: sign in on a physical device to register one.")
+    print("Use this single account for the complete mobile test session:")
+    print(f"  email: {users[args.admin]['email']}")
+    print(f"  password: {PASSWORD}")
+    print("All other accounts are fixtures; you do not need to sign in as them.")
     return 0
 
 

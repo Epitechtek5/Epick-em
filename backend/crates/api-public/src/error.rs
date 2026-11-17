@@ -60,10 +60,24 @@ pub enum ApiError {
     StepPositionTaken,
     /// Les inscriptions ne sont pas ouvertes.
     RegistrationClosed,
+    /// La fenêtre de pointage n'est pas ouverte.
+    CheckInClosed,
+    /// L'inscrit n'est pas dans le statut attendu pour cette opération.
+    InvalidParticipantState,
+    /// Le propriétaire du tournoi a changé entre-temps.
+    OwnershipChanged,
     /// Changement de statut impossible depuis le statut actuel.
     InvalidTransition,
     /// Adresse e-mail déjà utilisée par un autre compte.
     EmailTaken,
+    /// Invitation déjà en attente pour ce compte et cette ressource.
+    InvitationDuplicate,
+    /// Invitation acceptée, refusée ou révoquée.
+    InvitationNotPending,
+    /// Invitation expirée.
+    InvitationExpired,
+    /// Ressource de l'invitation disparue ou fermée.
+    InvitationUnavailable,
     /// Lien de réinitialisation du mot de passe inconnu, expiré ou déjà utilisé.
     InvalidResetToken,
     EmailUnverified,
@@ -176,6 +190,21 @@ impl ApiError {
                 "registration_closed",
                 "Les inscriptions à ce tournoi ne sont pas ouvertes",
             ),
+            ApiError::CheckInClosed => (
+                StatusCode::CONFLICT,
+                "check_in_closed",
+                "La fenêtre de pointage de ce tournoi n'est pas ouverte",
+            ),
+            ApiError::InvalidParticipantState => (
+                StatusCode::CONFLICT,
+                "invalid_participant_state",
+                "Cet inscrit n'est pas dans le statut attendu pour cette opération",
+            ),
+            ApiError::OwnershipChanged => (
+                StatusCode::CONFLICT,
+                "ownership_changed",
+                "Le propriétaire du tournoi a changé : réessayez",
+            ),
             ApiError::InvalidTransition => (
                 StatusCode::CONFLICT,
                 "invalid_status_transition",
@@ -185,6 +214,26 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "email_taken",
                 "Cette adresse e-mail est déjà utilisée",
+            ),
+            ApiError::InvitationDuplicate => (
+                StatusCode::CONFLICT,
+                "invitation_already_pending",
+                "Une invitation est déjà en attente pour ce compte et cette ressource",
+            ),
+            ApiError::InvitationNotPending => (
+                StatusCode::CONFLICT,
+                "invitation_not_pending",
+                "Cette invitation n'est plus en attente",
+            ),
+            ApiError::InvitationExpired => (
+                StatusCode::GONE,
+                "invitation_expired",
+                "Cette invitation a expiré",
+            ),
+            ApiError::InvitationUnavailable => (
+                StatusCode::CONFLICT,
+                "invitation_unavailable",
+                "La ressource de cette invitation n'accepte plus de nouveau membre ou participant",
             ),
             ApiError::InvalidResetToken => (
                 StatusCode::BAD_REQUEST,

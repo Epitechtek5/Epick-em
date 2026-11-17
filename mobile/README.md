@@ -1,6 +1,6 @@
 # Epick’em mobile
 
-Expo SDK 58 / React Native 0.88 application using TypeScript 6 and Expo Router, with backend authentication, account management, bilingual English/French screens and persistent appearance settings.
+Expo SDK 58 / React Native 0.88 application using TypeScript 6 and Expo Router, with backend authentication, account management, English/French/Spanish screens, synchronized settings and native push notifications.
 
 Use Node.js **24.21.0** and npm (the committed lockfile is authoritative):
 

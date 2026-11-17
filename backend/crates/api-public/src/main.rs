@@ -2,7 +2,9 @@
 
 use actix_web::HttpServer;
 use api_public::config::AuthConfig;
-use api_public::mail::{MailConfig, ResendMailer};
+use api_public::invitations::{EngineInvitationNotifier, InvitationTtl};
+use api_public::mail::{MailConfig, ResendMailer, public_url_from_env};
+use api_public::push::ExpoPush;
 use api_public::store::PgStore;
 use api_public::{AppState, app};
 use std::error::Error;
@@ -30,7 +32,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let store = Arc::new(PgStore::new(db));
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
-        .with_cache(cache);
+        .with_cache(cache)
+        .with_public_url(&public_url_from_env())
+        .with_invitation_ttl(invitation_ttl()?);
     let state = match MailConfig::from_env() {
         Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
         None => {
@@ -39,6 +43,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let state = match ExpoPush::from_env() {
+        Some(push) => state.with_push(Arc::new(push?)),
+        None => {
+            eprintln!("api-public : PUSH_ENABLED absente, les notifications push seront ignorées");
+            state
+        }
+    };
+    let notifier = Arc::new(EngineInvitationNotifier::from_state(&state));
+    let state = state.with_invitation_notifier(notifier);
+    api_public::invitations::spawn_expiry_task(state.clone());
     let server = HttpServer::new(move || app(state.clone())).bind(format!("0.0.0.0:{port}"))?;
     println!(
         "api-public (domain {}) en écoute sur :{port}",
@@ -46,4 +60,28 @@ async fn run() -> Result<(), Box<dyn Error>> {
     );
     server.run().await?;
     Ok(())
+}
+
+/// Validité des invitations : `INVITATION_DEFAULT_TTL_HOURS` (168 par défaut) et
+/// `INVITATION_MAX_TTL_HOURS` (720 par défaut).
+fn invitation_ttl() -> Result<InvitationTtl, Box<dyn Error>> {
+    let hours = |name: &str, default: u64| -> Result<std::time::Duration, Box<dyn Error>> {
+        let value = match std::env::var(name) {
+            Ok(value) => value
+                .parse::<u64>()
+                .ok()
+                .filter(|hours| *hours >= 1)
+                .ok_or_else(|| format!("{name} doit être un nombre d'heures entier, au moins 1"))?,
+            Err(_) => default,
+        };
+        Ok(std::time::Duration::from_secs(value * 3600))
+    };
+    let ttl = InvitationTtl {
+        default: hours("INVITATION_DEFAULT_TTL_HOURS", 7 * 24)?,
+        max: hours("INVITATION_MAX_TTL_HOURS", 30 * 24)?,
+    };
+    if ttl.default > ttl.max {
+        return Err("INVITATION_DEFAULT_TTL_HOURS dépasse INVITATION_MAX_TTL_HOURS".into());
+    }
+    Ok(ttl)
 }
