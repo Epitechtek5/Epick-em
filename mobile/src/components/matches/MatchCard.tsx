@@ -14,7 +14,7 @@ export function MatchCard({
   onPress,
 }: {
   match: Match;
-  context: MatchContext;
+  context: Pick<MatchContext, 'matches' | 'names' | 'groups'>;
   onPress?: () => void;
 }) {
   const { t, i18n } = useTranslation();

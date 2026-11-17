@@ -60,7 +60,8 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "start": "expo start",
+    "start": "node scripts/start-expo.mjs",
+    "expo-go:install:windows": "node scripts/install-expo-go.mjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "lint": "eslint . --max-warnings=0",
@@ -75,7 +76,7 @@
     "build:android": "node scripts/build-native.mjs android",
     "build:ios:simulator": "node scripts/build-native.mjs ios",
     "build:ios:device": "node scripts/build-native.mjs ios --device",
-    "build:apk": "npm run build:android && mkdir -p binaries && mv android/app/build/outputs/apk/release/app-release.apk binaries/epickem.apk",
+    "build:apk": "node scripts/build-native.mjs android --apk",
     "validate": "npm run lint && npm run format:check && npm run typecheck && npm test -- --watch=false && npm run config:check && npm run build",
     "openapi:generate": "node ../openapi/fetch.mjs",
     "openapi:build": "openapi-typescript ../openapi/openapi.json -o src/api/generated/schema.ts"

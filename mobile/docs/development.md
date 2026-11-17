@@ -57,12 +57,12 @@ EXPO_PUBLIC_API_URL=http://10.0.2.2:8080
 # From mobile/, with backend Compose services running on port 8080:
 npm run android   # initial debug native compile/install; starts Metro
 # On later sessions, keep the installed debug app and run:
-npm start -- --localhost
+npm start
 ```
 
 UI and TypeScript edits use Metro/Fast Refresh. Recompile after native dependency, config plugin, permissions, SDK or native configuration changes. For an existing generated project, apply config changes first with `npx expo prebuild --clean --platform android --no-install`, then `npm run android`. This regenerates disposable native directories. This change needs that initial regeneration/reinstall. Expo Go does not use this project's native plugin; test the installed debug app or demo APK when checking transport policy.
 
-For WSL with a Windows emulator, use Windows SDK `adb.exe` from WSL (or configure a shared ADB server), confirm the emulator with `adb.exe devices`, then run `adb.exe reverse tcp:8081 tcp:8081`. Windows must be able to reach WSL Metro at `http://localhost:8081/status`; verify that first (WSL localhost forwarding or mirrored networking and firewall configuration may be needed). Launch the installed debug app against `http://localhost:8081` through its development menu. The reverse maps emulator localhost to Windows, and Windows forwards to WSL. If Expo CLI cannot see Windows ADB, generate/install the debug APK with the Linux SDK and use Windows `adb.exe install -r android/app/build/outputs/apk/debug/app-debug.apk`, then open it manually. Never mix independent ADB servers unknowingly.
+For WSL with a Windows emulator, install the SDK-compatible Expo Go client once with `npm run expo-go:install:windows`. Then `npm start` advertises `exp://127.0.0.1:8081`, discovers the Windows SDK `adb.exe`, configures `adb reverse tcp:8081 tcp:8081`, and opens the URL in the running emulator. Windows must be able to reach WSL Metro at `http://localhost:8081/status` (WSL localhost forwarding or mirrored networking and firewall configuration may be needed). Set `WINDOWS_ADB` to the full `adb.exe` path only when the SDK is installed outside the standard Windows user directory. The reverse maps emulator localhost to Windows, and Windows forwards to WSL. If no emulator is running, start it before Metro and open `exp://127.0.0.1:8081` manually. Never mix independent ADB servers unknowingly.
 
 If Windows ADB is available as `adb.exe` on your WSL PATH but Expo cannot discover it, use this documented fallback after configuring the Linux Android SDK:
 

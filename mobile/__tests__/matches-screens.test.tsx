@@ -48,6 +48,7 @@ jest.mock('react-native-gesture-handler', () => {
   };
 });
 jest.mock('expo-router', () => ({
+  useFocusEffect: jest.requireActual('react').useEffect,
   router: { push: jest.fn(), replace: jest.fn(), back: jest.fn() },
 }));
 jest.mock('react-native-safe-area-context', () => ({

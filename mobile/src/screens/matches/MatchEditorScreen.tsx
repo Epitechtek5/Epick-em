@@ -15,18 +15,20 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { Input } from '@/components/ui/input';
 import { ScreenState, FormMessage } from '@/components/ui/feedback';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 export default function MatchEditorScreen() {
   const { t } = useTranslation();
-  const { user, token } = useAuth();
+  const { token } = useAuth();
   const state = useMatchContext();
+  const { canReferee } = useTournamentAccess(state.tournamentId);
 
   if (!state.data) return <MatchState {...state} />;
 
   const { step, match } = state.data;
   if (
     !token ||
-    user?.role !== 'admin' ||
+    !canReferee ||
     step.status !== 'ongoing' ||
     (match && !['scheduled', 'ongoing'].includes(match.status))
   ) {

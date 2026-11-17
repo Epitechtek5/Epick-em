@@ -54,7 +54,7 @@ export function MatchBracket({
   context,
   open,
 }: {
-  context: MatchContext;
+  context: Pick<MatchContext, 'matches' | 'names'>;
   open: (id: string) => void;
 }) {
   const { t } = useTranslation();
