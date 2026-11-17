@@ -17,7 +17,7 @@ use connectors::model::{
     BracketFormat, CompetitionState, ExternalEvent, ExternalMatch, ExternalPhase,
     ExternalTournament, MatchState,
 };
-use connectors::sync::Projector;
+use connectors::sync::{ProjectionEntry, Projector};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -39,18 +39,18 @@ impl StoreProjector {
 
 #[async_trait]
 impl Projector for StoreProjector {
-    async fn project(
+    async fn prepare(
         &self,
         tournament_id: Uuid,
         snapshot: &ExternalTournament,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<ProjectionEntry>, String> {
         match self
             .store
-            .project_external(tournament_id, projection(snapshot))
+            .prepare_external(tournament_id, projection(snapshot))
             .await
         {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(format!("tournoi local {tournament_id} introuvable")),
+            Ok(Some(entries)) => Ok(entries),
+            Ok(None) => Err(format!("tournoi local {tournament_id} introuvable")),
             Err(err) => Err(err.to_string()),
         }
     }

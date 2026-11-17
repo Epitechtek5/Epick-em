@@ -49,7 +49,20 @@ fn change(match_id: &str) -> ChangeEvent {
 
 /// `tag` rend les identifiants externes uniques : le test PostgreSQL peut être rejoué sur la
 /// même base. `tournament` doit exister dans `tournaments` pour PostgreSQL (clé étrangère).
-async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
+async fn contract(
+    store: &dyn SyncStore,
+    tag: &str,
+    tournament: Option<Uuid>,
+    cache: Arc<dyn infra::Cache>,
+) {
+    let projection_key = format!("test-projection-{tag}");
+    let projection = |value: &str| {
+        vec![connectors::sync::ProjectionEntry {
+            key: projection_key.clone(),
+            value: value.as_bytes().to_vec(),
+            ttl_secs: 600,
+        }]
+    };
     let now = 1_800_000_000;
     let a = format!("a-{tag}");
     let b = format!("b-{tag}");
@@ -140,6 +153,7 @@ async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
             first.id,
             now + 600,
             Success {
+                projection: projection("current"),
                 snapshot: snapshot(&a),
                 capabilities: Capabilities {
                     matches: true,
@@ -155,6 +169,10 @@ async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
         )
         .await
         .unwrap();
+    assert_eq!(
+        cache.get(&projection_key).await.unwrap(),
+        Some(b"current".to_vec())
+    );
     let saved = store.find(first.id).await.unwrap().unwrap();
     assert_eq!(saved.snapshot, Some(snapshot(&a)));
     assert_eq!(saved.cursor.updated_after, Some(now));
@@ -172,6 +190,7 @@ async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
                 first.id,
                 now + 600,
                 Success {
+                    projection: projection("stale"),
                     snapshot: snapshot(&b),
                     capabilities: Capabilities::default(),
                     cursor: SyncCursor::default(),
@@ -183,6 +202,10 @@ async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
             .await,
         Err(StoreError::LeaseLost)
     ));
+    assert_eq!(
+        cache.get(&projection_key).await.unwrap(),
+        Some(b"current".to_vec())
+    );
     assert!(matches!(
         store
             .save_failure(first.id, now + 600, "ancien", now + 3, now + 3)
@@ -243,7 +266,14 @@ async fn contract(store: &dyn SyncStore, tag: &str, tournament: Option<Uuid>) {
 
 #[tokio::test]
 async fn memory_store_honours_the_contract() {
-    contract(&MemorySyncStore::new(), "mem", Some(Uuid::new_v4())).await;
+    let cache: Arc<dyn infra::Cache> = Arc::new(MemoryCache::new());
+    contract(
+        &MemorySyncStore::new().with_projection_cache(cache.clone()),
+        "mem",
+        Some(Uuid::new_v4()),
+        cache,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -280,7 +310,13 @@ async fn redis_store_honours_the_contract() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    contract(&store(shared.clone()), &tag, Some(tournament)).await;
+    contract(
+        &store(shared.clone()),
+        &tag,
+        Some(tournament),
+        shared.clone(),
+    )
+    .await;
 
     // La base ne garde que le lien : l'instantané, le bail et les événements sont dans Redis.
     let redis_store = store(shared.clone());
@@ -302,6 +338,7 @@ async fn redis_store_honours_the_contract() {
             source.id,
             610,
             Success {
+                projection: Vec::new(),
                 snapshot: snapshot("c"),
                 capabilities: Capabilities::default(),
                 cursor: SyncCursor::default(),

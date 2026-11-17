@@ -368,6 +368,39 @@ impl Imports {
             .map_err(|err| format!("écriture de {key} : {err}"))
     }
 
+    pub fn cache(&self) -> Arc<dyn Cache> {
+        self.cache.clone()
+    }
+
+    pub fn prepare(
+        model: &ImportedTournament,
+    ) -> Result<Vec<connectors::sync::ProjectionEntry>, String> {
+        let id = model.tournament_id;
+        let mut entries = Vec::new();
+        let mut add = |key, value: Vec<u8>| {
+            entries.push(connectors::sync::ProjectionEntry {
+                key,
+                value,
+                ttl_secs: TTL.as_secs(),
+            })
+        };
+        for element in model.element_ids() {
+            add(
+                Self::owner_key(element),
+                serde_json::to_vec(&id).map_err(|e| e.to_string())?,
+            );
+        }
+        add(
+            Self::tournament_key(id),
+            serde_json::to_vec(model).map_err(|e| e.to_string())?,
+        );
+        add(
+            Self::summary_key(id),
+            serde_json::to_vec(&model.summary()).map_err(|e| e.to_string())?,
+        );
+        Ok(entries)
+    }
+
     /// Modèle du tournoi, s'il est importé.
     pub async fn tournament(&self, id: Uuid) -> Option<ImportedTournament> {
         self.read(&Self::tournament_key(id)).await
