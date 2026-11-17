@@ -141,8 +141,16 @@ pub async fn confirm(
     >,
     email: &str,
 ) {
-    tokio::task::yield_now().await;
     let mailer = MAILBOX.with_borrow(Arc::clone);
+    eventually(|| {
+        mailer
+            .verification
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(to, _)| to.eq_ignore_ascii_case(email))
+    })
+    .await;
     let link = mailer
         .verification
         .lock()

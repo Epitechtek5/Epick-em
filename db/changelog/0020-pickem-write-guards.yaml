@@ -1,0 +1,51 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0020-pickem-write-guards
+      author: epickem
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              ALTER TABLE pickem_question ADD COLUMN opens_at timestamptz;
+              UPDATE pickem_question SET opens_at = LEAST(created_at, locks_at - interval '1 microsecond');
+              ALTER TABLE pickem_question ALTER COLUMN opens_at SET NOT NULL;
+              ALTER TABLE pickem_question ADD CONSTRAINT pickem_question_window CHECK (opens_at < locks_at);
+              CREATE FUNCTION guard_pickem_question() RETURNS trigger LANGUAGE plpgsql AS $$
+              BEGIN
+                IF OLD.opens_at <= clock_timestamp() THEN
+                  RAISE EXCEPTION 'question locked' USING ERRCODE = 'P2002';
+                END IF;
+                IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+                RETURN NEW;
+              END $$;
+              CREATE TRIGGER guard_pickem_question BEFORE UPDATE ON pickem_question
+                FOR EACH ROW EXECUTE FUNCTION guard_pickem_question();
+              CREATE FUNCTION guard_pickem_answer() RETURNS trigger LANGUAGE plpgsql AS $$
+              DECLARE q pickem_question;
+              BEGIN
+                SELECT * INTO q FROM pickem_question WHERE id = NEW.question_id FOR SHARE;
+                IF q.id IS NULL OR clock_timestamp() < q.opens_at OR clock_timestamp() >= q.locks_at THEN
+                  RAISE EXCEPTION 'question locked' USING ERRCODE = 'P2002';
+                END IF;
+                RETURN NEW;
+              END $$;
+              CREATE TRIGGER guard_pickem_answer BEFORE INSERT OR UPDATE OF answer ON pickem_answer
+                FOR EACH ROW EXECUTE FUNCTION guard_pickem_answer();
+              CREATE FUNCTION guard_prediction() RETURNS trigger LANGUAGE plpgsql AS $$
+              DECLARE p prediction; m match; t tournaments;
+              BEGIN
+                IF TG_OP = 'DELETE' THEN p := OLD; ELSE p := NEW; END IF;
+                SELECT * INTO t FROM tournaments WHERE id = p.tournament_id FOR SHARE;
+                -- A parent deletion cascades to predictions and must remain possible.
+                IF TG_OP = 'DELETE' AND t.id IS NULL THEN RETURN OLD; END IF;
+                SELECT * INTO m FROM match WHERE id = p.match_id FOR SHARE;
+                IF t.id IS NULL OR t.status IN ('finished', 'cancelled') OR
+                  (m.id IS NOT NULL AND (m.status <> 'scheduled' OR m.started_at IS NOT NULL OR
+                    m.scheduled_at <= clock_timestamp())) THEN
+                  RAISE EXCEPTION 'prediction locked' USING ERRCODE = 'P2001';
+                END IF;
+                IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+                RETURN NEW;
+              END $$;
+              CREATE TRIGGER guard_prediction BEFORE INSERT OR UPDATE OF winner_id, ranking OR DELETE ON prediction
+                FOR EACH ROW EXECUTE FUNCTION guard_prediction();

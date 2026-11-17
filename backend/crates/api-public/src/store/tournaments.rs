@@ -382,6 +382,10 @@ pub struct TournamentParticipant {
     /// Réponses aux champs d'inscription personnalisés (`registration_fields`), par clé.
     #[schema(value_type = Object, example = json!({"ingame_name": "Faker"}))]
     pub responses: serde_json::Value,
+    /// Inscrit importé d'une source externe, sans compte local : son identifiant chez la source.
+    pub external_id: Option<String>,
+    /// Nom affiché d'un inscrit importé (son nom chez la source).
+    pub display_name: Option<String>,
 }
 
 /// Barème d'une statistique : `linear` donne `valeur × coefficient`, `table` associe une valeur

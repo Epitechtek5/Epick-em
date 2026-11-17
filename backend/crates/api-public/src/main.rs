@@ -4,9 +4,11 @@ use actix_web::HttpServer;
 use api_public::config::AuthConfig;
 use api_public::invitations::{EngineInvitationNotifier, InvitationTtl};
 use api_public::mail::{MailConfig, ResendMailer, public_url_from_env};
+use api_public::projection::StoreProjector;
 use api_public::push::ExpoPush;
 use api_public::store::PgStore;
 use api_public::{AppState, app};
+use connectors::sync::{RedisSyncStore, SyncPolicy, SyncService};
 use std::error::Error;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -29,12 +31,26 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let db = infra::connect(&config).await?;
 
     let cache = db.cache().clone();
-    let store = Arc::new(PgStore::new(db));
+    let registry = connectors::registry_from_env(Some(cache.clone()))?;
+    let store = Arc::new(PgStore::new(db.clone()));
+    // Chaque instantané importé est reporté dans le tournoi local (inscrits, étapes, matchs).
+    // L'état de synchronisation et le tournoi importé vivent dans Redis ; la base ne garde que
+    // le lien source ↔ tournoi.
+    let redis = infra::RedisCache::connect(&config.redis_url).await?;
+    let sync = Arc::new(
+        SyncService::new(
+            registry,
+            Arc::new(RedisSyncStore::new(db.clone(), redis.connection())),
+            SyncPolicy::default(),
+        )
+        .with_projector(Arc::new(StoreProjector::new(store.clone()))),
+    );
     let state = AppState::new(store, auth_config)
         .map_err(|err| format!("initialisation du hachage de mots de passe : {err}"))?
         .with_cache(cache)
         .with_public_url(&public_url_from_env())
-        .with_invitation_ttl(invitation_ttl()?);
+        .with_invitation_ttl(invitation_ttl()?)
+        .with_sync(sync);
     let state = match MailConfig::from_env() {
         Some(mail) => state.with_mailer(Arc::new(ResendMailer::new(&mail)?), &mail.public_url),
         None => {

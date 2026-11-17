@@ -773,8 +773,15 @@ async fn prepare(
                     && current.is_template
                 {
                     reasons.push("name : ce nom est déjà pris par un modèle.".into());
-                } else if let Some(current) =
-                    lookups.existing.get(&(game_id, input.name.to_lowercase()))
+                }
+                let current = lookups.existing.get(&(game_id, input.name.to_lowercase()));
+                if let Some(current) = current
+                    && crate::external::is_external(state, current.id).await?
+                {
+                    reasons.push(
+                        "ce tournoi est géré par une source externe : import impossible.".into(),
+                    );
+                } else if let Some(current) = current
                     && matches!(
                         current.status,
                         TournamentStatus::Ongoing | TournamentStatus::Finished

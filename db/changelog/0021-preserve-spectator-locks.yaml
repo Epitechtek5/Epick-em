@@ -1,0 +1,67 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0021-preserve-spectator-locks
+      author: epickem
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              ALTER TABLE match ADD COLUMN predictions_locked boolean NOT NULL DEFAULT false;
+              ALTER TABLE tournaments ADD COLUMN pickem_locked boolean NOT NULL DEFAULT false;
+              CREATE OR REPLACE FUNCTION guard_prediction() RETURNS trigger LANGUAGE plpgsql AS $$
+              DECLARE p prediction; m match; t tournaments;
+              BEGIN
+                IF TG_OP = 'DELETE' THEN p := OLD; ELSE p := NEW; END IF;
+                SELECT * INTO t FROM tournaments WHERE id = p.tournament_id FOR SHARE;
+                -- A parent deletion cascades to predictions and must remain possible.
+                IF TG_OP = 'DELETE' AND t.id IS NULL THEN RETURN OLD; END IF;
+                SELECT * INTO m FROM match WHERE id = p.match_id FOR SHARE;
+                IF t.id IS NULL OR t.status IN ('finished', 'cancelled') OR
+                  (m.id IS NOT NULL AND (m.predictions_locked OR m.status <> 'scheduled' OR m.started_at IS NOT NULL OR
+                    m.scheduled_at <= clock_timestamp())) THEN
+                  RAISE EXCEPTION 'prediction locked' USING ERRCODE = 'P2001';
+                END IF;
+                IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+                RETURN NEW;
+              END $$;
+              CREATE OR REPLACE FUNCTION guard_pickem_answer() RETURNS trigger LANGUAGE plpgsql AS $$
+              DECLARE q pickem_question; t tournaments;
+              BEGIN
+                SELECT * INTO t FROM tournaments WHERE id = NEW.tournament_id FOR SHARE;
+                SELECT * INTO q FROM pickem_question WHERE id = NEW.question_id FOR SHARE;
+                IF t.id IS NULL OR t.pickem_locked OR t.status IN ('finished', 'cancelled') OR q.id IS NULL OR clock_timestamp() < q.opens_at OR clock_timestamp() >= q.locks_at THEN
+                  RAISE EXCEPTION 'question locked' USING ERRCODE = 'P2002';
+                END IF;
+                RETURN NEW;
+              END $$;
+      rollback:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE OR REPLACE FUNCTION guard_prediction() RETURNS trigger LANGUAGE plpgsql AS $$
+              DECLARE p prediction; m match; t tournaments;
+              BEGIN
+                IF TG_OP = 'DELETE' THEN p := OLD; ELSE p := NEW; END IF;
+                SELECT * INTO t FROM tournaments WHERE id = p.tournament_id FOR SHARE;
+                -- A parent deletion cascades to predictions and must remain possible.
+                IF TG_OP = 'DELETE' AND t.id IS NULL THEN RETURN OLD; END IF;
+                SELECT * INTO m FROM match WHERE id = p.match_id FOR SHARE;
+                IF t.id IS NULL OR t.status IN ('finished', 'cancelled') OR
+                  (m.id IS NOT NULL AND (m.status <> 'scheduled' OR m.started_at IS NOT NULL OR
+                    m.scheduled_at <= clock_timestamp())) THEN
+                  RAISE EXCEPTION 'prediction locked' USING ERRCODE = 'P2001';
+                END IF;
+                IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+                RETURN NEW;
+              END $$;
+              CREATE OR REPLACE FUNCTION guard_pickem_answer() RETURNS trigger LANGUAGE plpgsql AS $$
+              DECLARE q pickem_question;
+              BEGIN
+                SELECT * INTO q FROM pickem_question WHERE id = NEW.question_id FOR SHARE;
+                IF q.id IS NULL OR clock_timestamp() < q.opens_at OR clock_timestamp() >= q.locks_at THEN
+                  RAISE EXCEPTION 'question locked' USING ERRCODE = 'P2002';
+                END IF;
+                RETURN NEW;
+              END $$;
+              ALTER TABLE match DROP COLUMN predictions_locked;
+              ALTER TABLE tournaments DROP COLUMN pickem_locked;
