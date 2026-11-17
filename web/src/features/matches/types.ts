@@ -33,6 +33,7 @@ export interface MatchParticipant {
 }
 
 export interface Match {
+  best_of?: 1 | 3 | 5;
   id: string
   game_id: string
   step_id: string

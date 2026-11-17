@@ -1,3 +1,4 @@
+import { MatchWorkflowPanel } from '@/components/matches/MatchWorkflowPanel'
 import {
   ArrowLeft01Icon,
   Calendar03Icon,
@@ -405,6 +406,7 @@ export default function MatchDetailsPage() {
             ) : null}
           </article>
 
+          <MatchWorkflowPanel tournamentId={tournamentId} match={match} identity={identity} onChanged={reload} stats={stats} />
           <SectionCard id="match-participants-title" icon={UserMultipleIcon} title={t('matches.participants')} subtitle={t('matches.serverValues')}>
             {people.state.status === 'error' ? (
               <StateMessage
