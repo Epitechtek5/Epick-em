@@ -34,6 +34,8 @@ pub fn route_policy(path: &str) -> RoutePolicy {
         | "/hello"
         | "/health"
         | "/openapi.json" => RoutePolicy::Public,
+        // Le WebSocket s'authentifie par son premier message (voir `ws`).
+        "/ws" => RoutePolicy::Public,
         "/docs" => RoutePolicy::Public,
         _ if path.starts_with("/docs/") => RoutePolicy::Public,
         "/refresh" => RoutePolicy::SignatureOnly,

@@ -368,7 +368,7 @@ impl PickemStore for PgStore {
         predictions: Vec<Resolved>,
         answers: Vec<Resolved>,
         settled: bool,
-    ) -> Result<(), StoreError> {
+    ) -> Result<u64, StoreError> {
         fn columns(rows: &[Resolved]) -> (Vec<Uuid>, Vec<String>, Vec<f64>) {
             (
                 rows.iter().map(|r| r.id).collect(),
@@ -379,6 +379,7 @@ impl PickemStore for PgStore {
             )
         }
         let mut tx = self.pool.begin().await?;
+        let mut changed = 0;
         for (table, rows) in [("prediction", &predictions), ("pickem_answer", &answers)] {
             if rows.is_empty() {
                 continue;
@@ -386,7 +387,7 @@ impl PickemStore for PgStore {
             let (ids, outcomes, points) = columns(rows);
             // Seules les lignes dont l'issue change sont réécrites : une résolution rejouée ne
             // touche rien.
-            sqlx::query(&format!(
+            changed += sqlx::query(&format!(
                 "UPDATE {table} AS t SET outcome = u.outcome, points = u.points, \
                  updated_at = now() \
                  FROM unnest($1::uuid[], $2::text[], $3::float8[]) AS u(id, outcome, points) \
@@ -398,7 +399,8 @@ impl PickemStore for PgStore {
             .bind(&points)
             .bind(tournament_id)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
         }
         sqlx::query(
             "INSERT INTO pickem_resolution (tournament_id, resolved_at, settled) \
@@ -410,7 +412,7 @@ impl PickemStore for PgStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(changed)
     }
 
     async fn tournaments_to_resolve(&self, limit: i64) -> Result<Vec<Uuid>, StoreError> {

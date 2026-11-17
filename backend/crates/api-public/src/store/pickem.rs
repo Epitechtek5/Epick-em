@@ -229,7 +229,7 @@ pub trait PickemStore: Send + Sync {
         predictions: Vec<Resolved>,
         answers: Vec<Resolved>,
         settled: bool,
-    ) -> Result<(), StoreError>;
+    ) -> Result<u64, StoreError>;
 
     /// Tournois qui ont des pronostics ou des questions et ne sont pas réglés, les moins
     /// récemment résolus d'abord.

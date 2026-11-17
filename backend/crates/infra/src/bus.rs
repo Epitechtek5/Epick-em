@@ -405,6 +405,8 @@ async fn relay(client: redis::Client, sender: broadcast::Sender<LiveMessage>) {
         match client.get_async_pubsub().await {
             Ok(mut pubsub) => match pubsub.psubscribe(format!("{LIVE_PREFIX}*")).await {
                 Ok(()) => {
+                    // Invalidate existing sockets after subscribing, before forwarding new events.
+                    let _ = sender.send(LiveMessage::resync());
                     let mut messages = pubsub.on_message();
                     while let Some(message) = messages.next().await {
                         if let Ok(live) =
