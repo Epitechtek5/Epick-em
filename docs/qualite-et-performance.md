@@ -74,6 +74,20 @@ ordre de focus visuel et rendu réel des lecteurs d'écran ne sont pas vérifié
 
 ### Audit manuel
 
+This PR is partial validation of #175. It must not close that issue or claim manual accessibility approval until the evidence below is recorded. Automated axe and component tests do not satisfy this gate.
+
+| Required evidence | Status | Record to attach |
+|---|---|---|
+| Keyboard-only web journey | Pending | Commit, browser/version, focus order, visible focus, dialog escape, failures |
+| NVDA + Firefox | Pending | NVDA/browser versions, actual announcements, headings/landmarks/table navigation, errors |
+| VoiceOver + Safari | Pending | macOS/Safari versions and actual spoken output on the same journey |
+| Android TalkBack | Pending | APK commit, device/API and TalkBack versions, reading order, roles, target sizes, 200% text |
+| iOS VoiceOver | Pending | Build commit, device/iOS version and the same checks |
+| Light/dark contrast | Pending | Measured foreground/background pairs and WCAG ratios |
+
+An audit record must identify the tested revision, date, tester, scenario, expected and observed behavior, and linked defects. “Pending” may only become “Pass” after exercising the named assistive technology; inspecting ARIA attributes is not equivalent. Result confirmation and dispute tests also remain dependent on the missing features. Keep #175 open until these requirements are completed.
+
+
 **Non réalisé dans le cadre de cette PR** : aucun résultat d'audit manuel n'est revendiqué ici.
 Protocole à suivre et à consigner dans ce document (date, version, navigateur ou appareil,
 technologie d'assistance, résultat par point, anomalies ouvertes) :
