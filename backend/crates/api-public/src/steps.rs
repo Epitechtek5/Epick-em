@@ -504,6 +504,13 @@ pub(crate) async fn close_step_of(
     if step.status != StepStatus::Ongoing {
         return Err(ApiError::InvalidTransition);
     }
+    let expected_revision = state
+        .store
+        .competition_snapshot(tournament.id)
+        .await
+        .map_err(ApiError::internal)?
+        .revision()
+        .map_err(ApiError::internal)?;
     let data = ranking_data(state, tournament.id, step).await?;
     let mut outcomes = Vec::with_capacity(data.members.len());
     for group in &data.groups {
@@ -553,6 +560,7 @@ pub(crate) async fn close_step_of(
     let finished = state
         .store
         .close_step(StepClosing {
+            expected_competition_revision: Some(expected_revision),
             step_id: step.id,
             outcomes,
             next,

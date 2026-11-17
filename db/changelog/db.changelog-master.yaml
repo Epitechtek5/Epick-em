@@ -40,3 +40,7 @@ databaseChangeLog:
       file: changelog/0016-extend-tournaments.yaml
   - include:
       file: changelog/0017-create-invitations.yaml
+  - include:
+      file: changelog/0019-match-workflows.yaml
+  - include:
+      file: changelog/0020-archive-corrected-matches.yaml

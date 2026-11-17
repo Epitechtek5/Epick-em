@@ -1,0 +1,26 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0019-match-workflows
+      author: epickem
+      comment: Separate reports, confirmations, disputes, scheduling and audit from authoritative results.
+      changes:
+        - sql:
+            sql: >-
+              CREATE TABLE match_workflow (
+                match_id uuid PRIMARY KEY REFERENCES match(id) ON DELETE CASCADE,
+                document jsonb NOT NULL,
+                CONSTRAINT match_workflow_revision CHECK ((document->>'revision')::bigint >= 0)
+              );
+              CREATE TABLE match_evidence (
+                id uuid PRIMARY KEY,
+                match_id uuid NOT NULL REFERENCES match(id) ON DELETE CASCADE,
+                actor_id uuid NOT NULL,
+                filename varchar(160) NOT NULL,
+                media_type varchar(40) NOT NULL CHECK (media_type IN ('image/png', 'image/jpeg', 'application/pdf')),
+                content bytea NOT NULL CHECK (octet_length(content) BETWEEN 1 AND 5242880),
+                created_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX match_evidence_match_idx ON match_evidence(match_id);
+      rollback:
+        - sql:
+            sql: DROP TABLE match_evidence; DROP TABLE match_workflow;

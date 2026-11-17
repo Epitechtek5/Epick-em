@@ -17,8 +17,8 @@ use crate::store::{
     Bracket, GeneratedMatch, Generation, Match, MatchParticipant, MatchStatus, MatchType, Step,
     StepFormat, StepParticipant, StepStatus, Tournament,
 };
+use crate::tournament_access::access_of;
 use crate::tournaments::{active_participants, find_tournament};
-use crate::users::require_admin;
 use actix_web::{HttpResponse, get, post, web};
 use domain::bracket::{
     BracketKind, PlannedMatch, double_elimination, round_robin, single_elimination,
@@ -71,8 +71,14 @@ async fn preview_step(
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
+    let access_tournament = find_tournament(&state, tournament_id).await?;
+    if !access_of(&state, &claims, &access_tournament)
+        .await?
+        .can_manage()
+    {
+        return Err(ApiError::Forbidden);
+    }
     let step = find_step(&state, tournament_id, step_id).await?;
     Ok(HttpResponse::Ok().json(initial_plan(&state, &step).await?))
 }
@@ -357,8 +363,14 @@ async fn generate_step(
     path: web::Path<(Uuid, Uuid)>,
     request: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
+    let access_tournament = find_tournament(&state, tournament_id).await?;
+    if !access_of(&state, &claims, &access_tournament)
+        .await?
+        .can_manage()
+    {
+        return Err(ApiError::Forbidden);
+    }
     let tournament = find_tournament(&state, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let preview = initial_plan(&state, &step).await?;
@@ -445,8 +457,14 @@ async fn next_round(
     path: web::Path<(Uuid, Uuid)>,
     body: Option<web::Json<NextRoundRequest>>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
+    let access_tournament = find_tournament(&state, tournament_id).await?;
+    if !access_of(&state, &claims, &access_tournament)
+        .await?
+        .can_manage()
+    {
+        return Err(ApiError::Forbidden);
+    }
     let tournament = find_tournament(&state, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let allow = body.is_some_and(|b| b.allow_rematches);

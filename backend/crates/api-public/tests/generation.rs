@@ -1104,3 +1104,234 @@ async fn preview_is_read_only_and_confirmation_checks_the_revision() {
     let (status, _) = get(&app, &preview_path, &setup.admin).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+fn report_for(found: &Value, reverse: bool) -> Value {
+    json!({"results": members(found).iter().enumerate().map(|(index, id)| json!({
+        "participant_id": id, "stats": {}, "rank": if reverse { 2 - index } else { index + 1 }
+    })).collect::<Vec<_>>()})
+}
+
+#[actix_web::test]
+async fn participant_reports_require_independent_confirmation_and_replay_safely() {
+    let (app, setup) = setup(2).await;
+    let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 2, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run).await.remove(0);
+    let base = format!("{}/matches/{}", run.base(), id(&found));
+    let path = format!("{base}/workflow");
+    let operation = json!({"operation_id": Uuid::new_v4(), "revision": 0, "action": {"kind": "submit", "report": report_for(&found, false)}});
+    let (status, response) = post(&app, &path, &setup.players[0], operation.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(matches(&app, &setup, &run).await[0]["status"], "scheduled");
+    let (status, replay) = post(&app, &path, &setup.players[0], operation).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response, replay);
+    let submission = &response["workflow"]["submissions"][0]["id"];
+    let confirmation = json!({"operation_id": Uuid::new_v4(), "revision": 1, "action": {"kind": "confirm", "submission_id": submission}});
+    let (status, _) = post(&app, &path, &setup.players[0], confirmation.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = post(
+        &app,
+        &format!("{base}/status"),
+        &setup.admin,
+        json!({"status":"finished"}),
+    )
+    .await;
+    assert!(!status.is_success());
+    let (status, accepted) = post(&app, &path, &setup.players[1], confirmation.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["workflow"]["submissions"][0]["status"], "accepted");
+    assert_eq!(matches(&app, &setup, &run).await[0]["status"], "finished");
+    let (status, repeated) = post(&app, &path, &setup.players[1], confirmation).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated, accepted);
+}
+
+#[actix_web::test]
+async fn conflicting_reports_block_finalization_until_an_organizer_decides() {
+    let (app, setup) = setup(2).await;
+    let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 2, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run).await.remove(0);
+    let path = format!("{}/matches/{}/workflow", run.base(), id(&found));
+    for index in 0..2 {
+        let (status, response) = post(&app, &path, &setup.players[index], json!({"operation_id":Uuid::new_v4(),"revision":index,"action":{"kind":"submit","report": report_for(&found, index == 1)}})).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+    }
+    let (_, view) = get(&app, &path, &setup.admin).await;
+    assert_eq!(view["workflow"]["disputes"].as_array().unwrap().len(), 1);
+    assert_eq!(matches(&app, &setup, &run).await[0]["status"], "scheduled");
+    let dispute = &view["workflow"]["disputes"][0]["id"];
+    let submission = &view["workflow"]["submissions"][1]["id"];
+    let action = json!({"operation_id":Uuid::new_v4(),"revision":2,"action":{"kind":"resolve","dispute_id":dispute,"submission_id":submission,"accepted":true,"reason":"Evidence confirms the second report"}});
+    let (status, _) = post(&app, &path, &setup.players[0], action.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, resolved) = post(&app, &path, &setup.admin, action).await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert!(resolved["workflow"]["disputes"][0]["decision"].is_object());
+    assert_eq!(matches(&app, &setup, &run).await[0]["status"], "finished");
+}
+
+#[actix_web::test]
+async fn ffa_needs_every_participant_and_rejects_partial_reports() {
+    let (app, setup) = setup(4).await;
+    let (_, _, run) = running(&app, &setup, step("pool", "ffa", 4, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run).await.remove(0);
+    let path = format!("{}/matches/{}/workflow", run.base(), id(&found));
+    let results: Vec<Value> = members(&found)
+        .iter()
+        .enumerate()
+        .map(|(i, id)| json!({"participant_id":id,"stats":{},"rank":i+1}))
+        .collect();
+    let partial = json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"submit","report":{"results":[results[0]]}}});
+    let (status, _) = post(&app, &path, &setup.players[0], partial).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, response) = post(&app, &path, &setup.players[0], json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"submit","report":{"results":results}}})).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let submission = &response["workflow"]["submissions"][0]["id"];
+    for index in 1..4 {
+        assert_eq!(matches(&app, &setup, &run).await[0]["status"], "scheduled");
+        let (status, response) = post(&app, &path, &setup.players[index], json!({"operation_id":Uuid::new_v4(),"revision":index,"action":{"kind":"confirm","submission_id":submission}})).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+    }
+    assert_eq!(matches(&app, &setup, &run).await[0]["status"], "finished");
+}
+
+#[actix_web::test]
+async fn correction_previews_downstream_reset_and_rejects_stale_or_unacknowledged_changes() {
+    let (app, setup) = setup(4).await;
+    let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 4, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run)
+        .await
+        .into_iter()
+        .find(|m| m["round"] == 1)
+        .unwrap();
+    let base = format!("{}/matches/{}", run.base(), id(&found));
+    let action = json!({"operation_id":Uuid::new_v4(), "revision":0,"action":{"kind":"adjudicate","reason":"Verified scores","report":report_for(&found,false)}});
+    let (status, response) = post(&app, &format!("{base}/workflow"), &setup.admin, action).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let input = json!({"report": report_for(&found,true),"reason":"Corrected winner after reviewing evidence"});
+    let (status, preview) = post(
+        &app,
+        &format!("{base}/correction-preview"),
+        &setup.admin,
+        input.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["affected"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["requires_resolution"], true);
+    let mut correction = json!({"operation_id":Uuid::new_v4(),"revision":preview["revision"],"reset_downstream":false,"report":input["report"],"reason":input["reason"]});
+    let path = format!("{base}/corrections");
+    let (status, _) = post(&app, &path, &setup.admin, correction.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    correction["reset_downstream"] = json!(true);
+    let (status, _) = post(&app, &path, &setup.players[0], correction.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let mut stale = correction.clone();
+    stale["revision"] = json!("stale");
+    let (status, _) = post(&app, &path, &setup.admin, stale).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, outcome) = post(&app, &path, &setup.admin, correction.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{outcome}");
+    assert_eq!(outcome["history"].as_array().unwrap().len(), 2);
+    let all = matches(&app, &setup, &run).await;
+    let next = all.iter().find(|m| m["round"] == 2).unwrap();
+    assert!(members(next).contains(&members(&found)[1]));
+    assert!(!members(next).contains(&members(&found)[0]));
+    let (status, replay) = post(&app, &path, &setup.admin, correction).await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(outcome, replay);
+}
+
+#[actix_web::test]
+async fn round_defaults_preserve_individual_overrides_and_replay_once() {
+    let (app, setup) = setup(4).await;
+    let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 4, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let first = matches(&app, &setup, &run)
+        .await
+        .into_iter()
+        .find(|m| m["round"] == 1)
+        .unwrap();
+    let workflow = format!("{}/matches/{}/workflow", run.base(), id(&first));
+    let (status, _) = post(&app,&workflow,&setup.admin,json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"schedule","scheduled_at":"2027-01-01T14:00:00Z","duration_minutes":30,"venue":"Court A","station":"1"}})).await;
+    assert_eq!(status, StatusCode::OK);
+    let path = format!("{}/rounds/1/schedule", run.base());
+    let defaults = json!({"operation_id":Uuid::new_v4(),"scheduled_at":"2027-01-01T12:00:00Z","duration_minutes":45,"venue":"Main hall","station":null});
+    let (status, _) = post(&app, &path, &setup.players[0], defaults.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, response) = post(&app, &path, &setup.admin, defaults.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["updated"], 1);
+    let (_, own) = get(&app, &workflow, &setup.admin).await;
+    assert_eq!(own["workflow"]["schedule"]["venue"], "Court A");
+    let (status, replay) = post(&app, &path, &setup.admin, defaults).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replay["replayed"], true);
+}
+
+#[actix_web::test]
+async fn reports_block_legacy_games_and_manual_step_closing() {
+    let (app, setup) = setup(2).await;
+    let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 2, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run).await.remove(0);
+    let base = format!("{}/matches/{}", run.base(), id(&found));
+    let (status,body)=post(&app,&format!("{base}/workflow"),&setup.players[0],json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"submit","report":report_for(&found,false)}})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = post(&app, &format!("{base}/games"), &setup.admin, json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = post(
+        &app,
+        &format!("{}/close", run.base()),
+        &setup.admin,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[actix_web::test]
+async fn evidence_is_private_until_attached_and_cannot_be_replaced() {
+    let (app, setup) = setup(2).await;
+    let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 2, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run).await.remove(0);
+    let base = format!("{}/matches/{}", run.base(), id(&found));
+    let evidence_id = Uuid::new_v4();
+    let path = format!("{base}/evidence/{evidence_id}");
+    let upload = || {
+        request(TestRequest::put(), &path, Some(&setup.players[0]))
+            .insert_header(("content-type", "application/pdf"))
+            .set_payload("%PDF-1.7\n%%EOF")
+    };
+    let (status, _) = call(&app, upload()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(&app, upload()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = get(&app, &path, &setup.players[1]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(
+        &app,
+        request(TestRequest::put(), &path, Some(&setup.players[1]))
+            .insert_header(("content-type", "application/pdf"))
+            .set_payload("%PDF-1.7\n%%EOF"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status,body)=post(&app,&format!("{base}/workflow"),&setup.players[0],json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"dispute","submission_id":null,"reason":"Please review the scores","evidence":[evidence_id]}})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let response = actix_web::test::call_service(
+        &app,
+        request(TestRequest::get(), &path, Some(&setup.players[1])).to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("cache-control").unwrap(),
+        "private, no-store"
+    );
+}

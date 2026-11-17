@@ -689,6 +689,7 @@ impl TournamentChild for StoreSteps {
                 if status == StepStatus::Finished {
                     self.store
                         .close_step(StepClosing {
+                            expected_competition_revision: None,
                             step_id: created.id,
                             outcomes,
                             next: None,

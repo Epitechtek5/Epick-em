@@ -740,6 +740,23 @@ pub(crate) async fn finish_series(
     members: &[MatchParticipant],
     game: Option<GameFinish>,
 ) -> Result<Match, ApiError> {
+    let finish = prepare_series_finish(state, step, current, members, game).await?;
+    state
+        .store
+        .finish_match(finish)
+        .await
+        .map_err(match_error)?
+        .ok_or(ApiError::NotFound)
+}
+
+/// Build the same authoritative finalization for administrator and participant workflows.
+pub(crate) async fn prepare_series_finish(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+    game: Option<GameFinish>,
+) -> Result<MatchFinish, ApiError> {
     // Une série se décide aux manches : ses rangs en viennent, avant toute autre validation.
     let members = series_members(step, current, members)?;
     let mut scores =
@@ -774,19 +791,14 @@ pub(crate) async fn finish_series(
         })
         .collect();
 
-    state
-        .store
-        .finish_match(MatchFinish {
-            match_id: current.id,
-            scores,
-            placements,
-            cancel,
-            step_points,
-            game,
-        })
-        .await
-        .map_err(match_error)?
-        .ok_or(ApiError::NotFound)
+    Ok(MatchFinish {
+        match_id: current.id,
+        scores,
+        placements,
+        cancel,
+        step_points,
+        game,
+    })
 }
 
 /// Série au meilleur de 3 ou 5 : le vainqueur est celui qui atteint la majorité des manches.
@@ -992,7 +1004,7 @@ pub(crate) async fn close_if_complete(
 }
 
 /// Chaque groupe a au moins un match terminé et aucun match n'est encore à jouer.
-fn is_complete(step: &Step, groups: &[Uuid], matches: &[Match]) -> bool {
+pub(crate) fn is_complete(step: &Step, groups: &[Uuid], matches: &[Match]) -> bool {
     // Une étape suisse générée n'est terminée qu'après sa dernière ronde.
     if step.format == StepFormat::Swiss
         && matches.iter().any(|m| m.number.is_some())

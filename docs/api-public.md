@@ -322,3 +322,18 @@ Le changement apparaît dans le jeton d'accès au prochain `/refresh` ou `/login
 ### Match generation previews
 
 `GET /tournaments/{id}/steps/{step_id}/generation-preview` is administrator-only and read-only. It returns `matches` (the server's planned matches, including progression slots and byes) and `revision`. The stage must be ongoing without existing matches. Confirm with `POST .../generate` and `{ "revision": "..." }`; a stale revision returns 409 without creating matches. Existing clients may still generate without a revision. Match creation retains its transactional duplicate-generation protection.
+
+
+### Match reporting, scheduling and corrections
+
+The authenticated match base path is `/tournaments/{id}/steps/{step_id}/matches/{match_id}`.
+
+- `GET /workflow` returns scheduling, attendance, participant submissions, independent confirmations, disputes, private audit entries, display identities, and the current user's participant/management permissions.
+- `POST /workflow` accepts `{ operation_id, revision, action }`. Actions cover scheduling, calls, delays, attendance, submissions, confirmations, disputes and organizer decisions. A repeated operation with the same payload returns its recorded outcome; reusing its identifier for another payload is rejected. Stale revisions return 409.
+- `POST /tournaments/{id}/steps/{step_id}/rounds/{round}/schedule` applies duration, venue, station and start-time defaults atomically to scheduled matches, preserving individual overrides.
+- `PUT /evidence/{evidence_id}` uploads raw PNG, JPEG or PDF content (maximum 5 MiB). Downloads use `GET` on the same path and require match authorization. Unattached files remain private to the uploader and organizers. Files are served as attachments with private/no-store and nosniff headers.
+- `POST /correction-preview` accepts a complete report and mandatory reason and returns a competition revision plus affected downstream matches. `POST /corrections` adds `operation_id`, that revision, and `reset_downstream`. Affected matches require explicit acknowledgement. Corrections use the existing finalization/ranking/qualification engines in an isolated projection, then atomically compare and apply the competition state. Superseded downstream matches are archived; previous results and decisions remain in audit history. Stale downstream submissions cannot become authoritative after a reset.
+
+Participant reports never directly overwrite authoritative scores. Solo participants and team owners can report their own matches; the same account cannot confirm both sides. Duels require both participants and FFA requires all participants, unless an organizer adjudicates. Conflicting reports block legacy finalization and manual stage closing. Administrative decisions require a reason. Finished matches may be contested; changing their authoritative result requires the correction workflow.
+
+Match exports optionally include `schedule` metadata, while older files remain valid. Operational submissions, audit identities and private evidence are not accepted from import files. Notification events use the existing localized catalog and preferences. Actual email/push delivery still requires the existing provider configuration.

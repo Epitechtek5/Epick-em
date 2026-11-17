@@ -2,6 +2,11 @@
 //! voir `db/changelog`).
 
 use super::{
+    CompetitionCorrection, CompetitionSnapshot, MatchEvidence, MatchWorkflow, WorkflowCommit,
+};
+#[path = "postgres_competition.rs"]
+mod competition;
+use super::{
     AuthStore, CheckInSettlement, Game, GameFinish, GameInput, GameScores, GameUpdate, Generation,
     Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
     InvitationInput, InvitationStatus, InvitationType, Match, MatchFinish, MatchGame,
@@ -1017,6 +1022,15 @@ async fn load_games(
     condition: &str,
     param: Uuid,
 ) -> Result<Vec<MatchGame>, StoreError> {
+    let mut connection = pool.acquire().await?;
+    load_games_in(&mut connection, condition, param).await
+}
+
+async fn load_games_in(
+    connection: &mut sqlx::PgConnection,
+    condition: &str,
+    param: Uuid,
+) -> Result<Vec<MatchGame>, StoreError> {
     let rows = sqlx::query_as::<_, MatchGameRow>(&format!(
         "SELECT g.id, g.match_id, g.number, g.status, g.attributes::text, {} AS started_at, \
          {} AS ended_at, {} AS created_at, {} AS updated_at \
@@ -1027,7 +1041,7 @@ async fn load_games(
         ts("g.updated_at"),
     ))
     .bind(param)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     let members = sqlx::query_as::<_, GameParticipantRow>(&format!(
         "SELECT p.game_id, p.participant_id, p.stats::text, p.points::float8, p.rank, p.result \
@@ -1035,7 +1049,7 @@ async fn load_games(
          WHERE {condition} ORDER BY p.game_id, p.participant_id"
     ))
     .bind(param)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     let json =
         |text: &str| serde_json::from_str(text).map_err(|err| StoreError::Other(err.to_string()));
@@ -1068,10 +1082,102 @@ async fn load_games(
 }
 
 /// Verrouille le match et vérifie qu'il accepte encore des résultats.
+async fn finish_match_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    finish: MatchFinish,
+) -> Result<Option<Match>, StoreError> {
+    let Some(step_id) = lock_open_match_unchecked(tx, finish.match_id).await? else {
+        return Ok(None);
+    };
+    if let Some(game) = finish.game {
+        finish_game_in(tx, game).await?;
+    }
+    save_match_scores_in(tx, finish.match_id, finish.scores).await?;
+    for placement in &finish.placements {
+        insert_match_participant(
+            tx,
+            placement.match_id,
+            placement.participant_id,
+            placement.slot,
+        )
+        .await?;
+    }
+    if !finish.cancel.is_empty() {
+        sqlx::query(
+            "UPDATE match SET status = 'cancelled', ended_at = now(), updated_at = now() \
+                 WHERE id = ANY($1) AND status = 'scheduled'",
+        )
+        .bind(&finish.cancel)
+        .execute(&mut **tx)
+        .await?;
+    }
+    for (participant_id, points) in finish.step_points {
+        sqlx::query(
+            "UPDATE step_participant SET points = $3::float8::numeric \
+                 WHERE step_id = $1 AND participant_id = $2",
+        )
+        .bind(step_id)
+        .bind(participant_id)
+        .bind(points)
+        .execute(&mut **tx)
+        .await?;
+    }
+    let row = sqlx::query_as::<_, MatchRow>(&format!(
+        "UPDATE match SET status = 'finished', started_at = COALESCE(started_at, now()), \
+                 ended_at = now(), updated_at = now() WHERE id = $1 RETURNING {}",
+        match_columns()
+    ))
+    .bind(finish.match_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(Some(match_from(row)?))
+}
+
+/// Use a stable lock order for workflow finalization and existing match writes.
+async fn lock_match_step(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    match_id: Uuid,
+) -> Result<(), StoreError> {
+    let step_id = sqlx::query_scalar::<_, Uuid>("SELECT step_id FROM match WHERE id = $1")
+        .bind(match_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if let Some(step_id) = step_id {
+        sqlx::query("SELECT id FROM step WHERE id = $1 FOR UPDATE")
+            .bind(step_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn lock_open_match(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     match_id: Uuid,
 ) -> Result<Option<Uuid>, StoreError> {
+    let step = lock_open_match_unchecked(tx, match_id).await?;
+    let document = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT document FROM match_workflow WHERE match_id = $1",
+    )
+    .bind(match_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let workflow: MatchWorkflow = document
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| StoreError::Other(e.to_string()))?
+        .unwrap_or_default();
+    if workflow.requires_decision() {
+        return Err(StoreError::MatchState);
+    }
+    Ok(step)
+}
+
+async fn lock_open_match_unchecked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    match_id: Uuid,
+) -> Result<Option<Uuid>, StoreError> {
+    lock_match_step(tx, match_id).await?;
     let row = sqlx::query_as::<_, (String, Uuid)>(
         "SELECT status, step_id FROM match WHERE id = $1 FOR UPDATE",
     )
@@ -3799,6 +3905,29 @@ impl AuthStore for PgStore {
 
     async fn close_step(&self, closing: StepClosing) -> Result<Option<Step>, StoreError> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM step WHERE id = $1 FOR UPDATE")
+            .bind(closing.step_id)
+            .execute(&mut *tx)
+            .await?;
+        let documents = sqlx::query_scalar::<_, serde_json::Value>("SELECT w.document FROM match_workflow w JOIN match m ON m.id = w.match_id WHERE m.step_id = $1 AND NOT m.archived").bind(closing.step_id).fetch_all(&mut *tx).await?;
+        for document in documents {
+            let workflow: MatchWorkflow =
+                serde_json::from_value(document).map_err(|e| StoreError::Other(e.to_string()))?;
+            if workflow.requires_decision() {
+                return Err(StoreError::StepState);
+            }
+        }
+
+        if let Some(expected) = &closing.expected_competition_revision {
+            let tid = sqlx::query_scalar::<_, Uuid>("SELECT tournament_id FROM step WHERE id = $1")
+                .bind(closing.step_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(StoreError::StepState)?;
+            if competition::snapshot(&mut tx, tid).await?.revision()? != *expected {
+                return Err(StoreError::StepState);
+            }
+        }
         let updated = sqlx::query_as::<_, StepRow>(&format!(
             "UPDATE step SET status = 'finished', updated_at = now() \
              WHERE id = $1 AND status = 'ongoing' RETURNING {}",
@@ -3864,7 +3993,7 @@ impl AuthStore for PgStore {
     ) -> Result<Vec<Match>, StoreError> {
         sqlx::query_as::<_, MatchRow>(&format!(
             "SELECT {} FROM match \
-             WHERE step_id = $1 AND ($2::uuid IS NULL OR group_id = $2) \
+             WHERE step_id = $1 AND NOT archived AND ($2::uuid IS NULL OR group_id = $2) \
                  AND ($3::text IS NULL OR status = $3) \
              ORDER BY (SELECT index FROM step_group WHERE id = match.group_id), round, \
                  CASE bracket WHEN 'losers' THEN 1 WHEN 'grand_final' THEN 2 ELSE 0 END, number, \
@@ -3899,7 +4028,7 @@ impl AuthStore for PgStore {
     ) -> Result<Vec<MatchParticipant>, StoreError> {
         sqlx::query_as::<_, MatchParticipantRow>(&format!(
             "SELECT {MATCH_PARTICIPANT_COLUMNS} FROM match_participant \
-             WHERE match_id IN (SELECT id FROM match WHERE step_id = $1) \
+             WHERE match_id IN (SELECT id FROM match WHERE step_id = $1 AND NOT archived) \
              ORDER BY match_id, participant_id"
         ))
         .bind(step_id)
@@ -4027,52 +4156,259 @@ impl AuthStore for PgStore {
 
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError> {
         let mut tx = self.pool.begin().await?;
-        let Some(step_id) = lock_open_match(&mut tx, finish.match_id).await? else {
-            return Ok(None);
-        };
-        if let Some(game) = finish.game {
-            finish_game_in(&mut tx, game).await?;
-        }
-        save_match_scores_in(&mut tx, finish.match_id, finish.scores).await?;
-        for placement in &finish.placements {
-            insert_match_participant(
-                &mut tx,
-                placement.match_id,
-                placement.participant_id,
-                placement.slot,
-            )
-            .await?;
-        }
-        if !finish.cancel.is_empty() {
-            sqlx::query(
-                "UPDATE match SET status = 'cancelled', ended_at = now(), updated_at = now() \
-                 WHERE id = ANY($1) AND status = 'scheduled'",
-            )
-            .bind(&finish.cancel)
-            .execute(&mut *tx)
-            .await?;
-        }
-        for (participant_id, points) in finish.step_points {
-            sqlx::query(
-                "UPDATE step_participant SET points = $3::float8::numeric \
-                 WHERE step_id = $1 AND participant_id = $2",
-            )
-            .bind(step_id)
-            .bind(participant_id)
-            .bind(points)
-            .execute(&mut *tx)
-            .await?;
-        }
-        let row = sqlx::query_as::<_, MatchRow>(&format!(
-            "UPDATE match SET status = 'finished', started_at = COALESCE(started_at, now()), \
-                 ended_at = now(), updated_at = now() WHERE id = $1 RETURNING {}",
-            match_columns()
-        ))
+        lock_match_step(&mut tx, finish.match_id).await?;
+        let document = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT document FROM match_workflow WHERE match_id = $1",
+        )
         .bind(finish.match_id)
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
+        if let Some(document) = document {
+            let workflow: MatchWorkflow = serde_json::from_value(document)
+                .map_err(|error| StoreError::Other(error.to_string()))?;
+            if workflow.requires_decision() {
+                return Err(StoreError::MatchState);
+            }
+        }
+        let result = finish_match_in(&mut tx, finish).await?;
         tx.commit().await?;
-        Ok(Some(match_from(row)?))
+        Ok(result)
+    }
+
+    async fn competition_snapshot(
+        &self,
+        tournament_id: Uuid,
+    ) -> Result<CompetitionSnapshot, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let snapshot = competition::snapshot(&mut tx, tournament_id).await?;
+        tx.commit().await?;
+        Ok(snapshot)
+    }
+
+    async fn commit_competition_correction(
+        &self,
+        correction: CompetitionCorrection,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let tid = correction.next.tournament.id;
+        sqlx::query("SELECT id FROM tournaments WHERE id = $1 FOR UPDATE")
+            .bind(tid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT id FROM step WHERE tournament_id = $1 ORDER BY position FOR UPDATE")
+            .bind(tid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT id FROM match WHERE step_id IN (SELECT id FROM step WHERE tournament_id = $1) ORDER BY id FOR UPDATE").bind(tid).execute(&mut *tx).await?;
+        let before = competition::snapshot(&mut tx, tid).await?;
+        if before.revision()? != correction.expected_revision {
+            return Err(StoreError::MatchState);
+        }
+        let previous = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT document FROM match_workflow WHERE match_id = $1",
+        )
+        .bind(correction.match_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let previous: MatchWorkflow = previous
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| StoreError::Other(e.to_string()))?
+            .unwrap_or_default();
+        if !previous.accepts(&correction.workflow, correction.expected_workflow_revision) {
+            return Err(StoreError::MatchState);
+        }
+        for m in &before.matches {
+            if correction.invalidates(m) {
+                let document = sqlx::query_scalar::<_, serde_json::Value>(
+                    "SELECT document FROM match_workflow WHERE match_id = $1",
+                )
+                .bind(m.id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let previous = document
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|e| StoreError::Other(e.to_string()))?
+                    .unwrap_or_default();
+                let updated = correction.invalidate_workflow(previous);
+                sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2) ON CONFLICT (match_id) DO UPDATE SET document = EXCLUDED.document").bind(m.id).bind(serde_json::to_value(updated).map_err(|e| StoreError::Other(e.to_string()))?).execute(&mut *tx).await?;
+            }
+        }
+        competition::apply(&mut tx, &before, &correction.next).await?;
+        sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2) ON CONFLICT (match_id) DO UPDATE SET document = EXCLUDED.document")
+            .bind(correction.match_id).bind(serde_json::to_value(correction.workflow).map_err(|e| StoreError::Other(e.to_string()))?).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn match_workflow(&self, match_id: Uuid) -> Result<MatchWorkflow, StoreError> {
+        let value = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT document FROM match_workflow WHERE match_id = $1",
+        )
+        .bind(match_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        value
+            .map(serde_json::from_value)
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+            .map_err(|error| StoreError::Other(error.to_string()))
+    }
+
+    async fn commit_schedule_batch(
+        &self,
+        mut updates: Vec<WorkflowCommit>,
+    ) -> Result<(), StoreError> {
+        updates.sort_by_key(|u| u.match_id);
+        let mut tx = self.pool.begin().await?;
+        let mut ids = std::collections::HashSet::new();
+        for update in updates {
+            if !ids.insert(update.match_id) || update.finish.is_some() || update.games.is_some() {
+                return Err(StoreError::MatchState);
+            }
+            lock_match_step(&mut tx, update.match_id).await?;
+            let current = sqlx::query_as::<_, (String, String)>(&format!(
+                "SELECT status, {} FROM match WHERE id = $1 FOR UPDATE",
+                ts("updated_at")
+            ))
+            .bind(update.match_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if current != Some(("scheduled".into(), update.expected_updated_at)) {
+                return Err(StoreError::MatchState);
+            }
+            let document = sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT document FROM match_workflow WHERE match_id = $1",
+            )
+            .bind(update.match_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let previous: MatchWorkflow = document
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| StoreError::Other(e.to_string()))?
+                .unwrap_or_default();
+            if !previous.accepts(&update.workflow, update.expected_revision) {
+                return Err(StoreError::MatchState);
+            }
+            sqlx::query("UPDATE match SET scheduled_at = $2::text::timestamptz, updated_at = now() WHERE id = $1").bind(update.match_id).bind(&update.workflow.schedule.scheduled_at).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2) ON CONFLICT (match_id) DO UPDATE SET document = EXCLUDED.document").bind(update.match_id).bind(serde_json::to_value(update.workflow).map_err(|e| StoreError::Other(e.to_string()))?).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn commit_match_workflow(
+        &self,
+        update: WorkflowCommit,
+    ) -> Result<MatchWorkflow, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        lock_match_step(&mut tx, update.match_id).await?;
+        let exists = sqlx::query_scalar::<_, String>(&format!(
+            "SELECT {} FROM match WHERE id = $1 FOR UPDATE",
+            ts("updated_at")
+        ))
+        .bind(update.match_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if exists.as_deref() != Some(update.expected_updated_at.as_str()) {
+            return Err(StoreError::MatchState);
+        }
+        let previous = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT document FROM match_workflow WHERE match_id = $1",
+        )
+        .bind(update.match_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let previous: MatchWorkflow = previous
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| StoreError::Other(error.to_string()))?
+            .unwrap_or_default();
+        if !previous.accepts(&update.workflow, update.expected_revision) {
+            return Err(StoreError::MatchState);
+        }
+        if update.games.is_some() {
+            let exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM match_game WHERE match_id = $1)",
+            )
+            .bind(update.match_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if exists {
+                return Err(StoreError::MatchState);
+            }
+        }
+        if let Some(finish) = update.finish {
+            if finish.match_id != update.match_id {
+                return Err(StoreError::MatchState);
+            }
+            let finished = finish_match_in(&mut tx, finish)
+                .await?
+                .ok_or(StoreError::MatchState)?;
+            sqlx::query("UPDATE step_participant sp SET points = COALESCE((SELECT SUM(mp.points) FROM match_participant mp JOIN match m ON m.id = mp.match_id WHERE m.step_id = sp.step_id AND m.status = 'finished' AND mp.participant_id = sp.participant_id), 0) WHERE sp.step_id = $1")
+                .bind(finished.step_id).execute(&mut *tx).await?;
+        }
+        if let Some(games) = update.games {
+            for (index, game) in games.into_iter().enumerate() {
+                let id = sqlx::query_scalar::<_, Uuid>("INSERT INTO match_game (match_id, number, status, attributes, started_at, ended_at) VALUES ($1, $2, $3, $4, $5::text::timestamptz, $6::text::timestamptz) RETURNING id")
+                    .bind(update.match_id).bind(i32::try_from(index + 1).map_err(|_| StoreError::MatchState)?)
+                    .bind(game.status.as_str()).bind(game.attributes).bind(game.started_at).bind(game.ended_at)
+                    .fetch_one(&mut *tx).await?;
+                for score in &game.participants {
+                    insert_game_participant(&mut tx, id, score.participant_id).await?;
+                }
+                save_game_scores_in(&mut tx, id, game.participants).await?;
+            }
+        }
+        let document = serde_json::to_value(&update.workflow)
+            .map_err(|error| StoreError::Other(error.to_string()))?;
+        sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2) ON CONFLICT (match_id) DO UPDATE SET document = EXCLUDED.document")
+            .bind(update.match_id).bind(document).execute(&mut *tx).await?;
+        sqlx::query("UPDATE match SET scheduled_at = $2::text::timestamptz, updated_at = now() WHERE id = $1")
+            .bind(update.match_id).bind(&update.workflow.schedule.scheduled_at).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(update.workflow)
+    }
+
+    async fn insert_match_evidence(&self, evidence: MatchEvidence) -> Result<(), StoreError> {
+        sqlx::query("INSERT INTO match_evidence (id, match_id, actor_id, filename, media_type, content, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7::text::timestamptz) ON CONFLICT (id) DO NOTHING")
+            .bind(evidence.id).bind(evidence.match_id).bind(evidence.actor_id).bind(&evidence.filename)
+            .bind(&evidence.media_type).bind(&evidence.bytes).bind(&evidence.created_at).execute(&self.pool).await?;
+        let previous = self
+            .match_evidence(evidence.id)
+            .await?
+            .ok_or(StoreError::MatchState)?;
+        if previous.match_id != evidence.match_id
+            || previous.actor_id != evidence.actor_id
+            || previous.filename != evidence.filename
+            || previous.media_type != evidence.media_type
+            || previous.bytes != evidence.bytes
+        {
+            return Err(StoreError::MatchState);
+        }
+        Ok(())
+    }
+
+    async fn match_evidence(&self, id: Uuid) -> Result<Option<MatchEvidence>, StoreError> {
+        let row = sqlx::query(&format!("SELECT id, match_id, actor_id, filename, media_type, content, {} AS created_at FROM match_evidence WHERE id = $1", ts("created_at")))
+            .bind(id).fetch_optional(&self.pool).await?;
+        row.map(|row| {
+            Ok(MatchEvidence {
+                id: row.try_get("id")?,
+                match_id: row.try_get("match_id")?,
+                actor_id: row.try_get("actor_id")?,
+                filename: row.try_get("filename")?,
+                media_type: row.try_get("media_type")?,
+                bytes: row.try_get("content")?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .transpose()
     }
 
     async fn generate_matches(&self, generation: Generation) -> Result<Vec<Match>, StoreError> {
@@ -4088,7 +4424,7 @@ impl AuthStore for PgStore {
         }
         if generation.initial {
             let any = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM match WHERE step_id = $1)",
+                "SELECT EXISTS (SELECT 1 FROM match WHERE step_id = $1 AND NOT archived)",
             )
             .bind(generation.step_id)
             .fetch_one(&mut *tx)
@@ -4230,6 +4566,21 @@ impl AuthStore for PgStore {
             ids.push(id);
         }
         for (import, id) in matches.into_iter().zip(&ids) {
+            if let Some(schedule) = import.schedule {
+                let workflow = MatchWorkflow {
+                    revision: 1,
+                    schedule,
+                    ..Default::default()
+                };
+                sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2)")
+                    .bind(id)
+                    .bind(
+                        serde_json::to_value(workflow)
+                            .map_err(|e| StoreError::Other(e.to_string()))?,
+                    )
+                    .execute(&mut *tx)
+                    .await?;
+            }
             let next = import.next.and_then(|next| ids.get(next));
             let loser_next = import.loser_next.and_then(|next| ids.get(next));
             if next.is_some() || loser_next.is_some() {
@@ -4278,7 +4629,7 @@ impl AuthStore for PgStore {
     async fn list_step_match_games(&self, step_id: Uuid) -> Result<Vec<MatchGame>, StoreError> {
         load_games(
             &self.pool,
-            "g.match_id IN (SELECT id FROM match WHERE step_id = $1)",
+            "g.match_id IN (SELECT id FROM match WHERE step_id = $1 AND NOT archived)",
             step_id,
         )
         .await

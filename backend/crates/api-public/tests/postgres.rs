@@ -1866,6 +1866,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     assert!(
         store
             .close_step(StepClosing {
+                expected_competition_revision: None,
                 step_id: first.id,
                 outcomes: outcomes.clone(),
                 next: Some(StepStart {
@@ -1885,6 +1886,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
 
     let finished = store
         .close_step(StepClosing {
+            expected_competition_revision: None,
             step_id: first.id,
             outcomes,
             next: Some(StepStart {
@@ -1917,6 +1919,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     assert!(matches!(
         store
             .close_step(StepClosing {
+                expected_competition_revision: None,
                 step_id: first.id,
                 outcomes: vec![],
                 next: None,
@@ -2027,6 +2030,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .collect();
     store
         .close_step(StepClosing {
+            expected_competition_revision: None,
             step_id: first.id,
             outcomes,
             next: Some(StepStart {
@@ -3450,6 +3454,7 @@ async fn match_games_are_stored_finished_and_aggregated_atomically() {
             step.id,
             game_id,
             vec![api_public::store::MatchImport {
+                schedule: None,
                 group_id: Some(group),
                 round: Some(1),
                 bracket: None,
@@ -4516,4 +4521,143 @@ async fn profile_pictures_are_set_cleared_and_kept_by_other_updates() {
             .picture_url,
         None
     );
+}
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL (DATABASE_URL)"]
+async fn workflow_compare_and_swap_preserves_audit_and_rejects_concurrent_updates() {
+    use api_public::store::{MatchAuditEntry, MatchWorkflow, WorkflowCommit};
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let participant = store
+        .add_participant(ParticipantInput {
+            tournament_id: tournament.id,
+            user_id: Some(user(&store, "reporter").await),
+            tournament_team_id: None,
+            responses: no_responses(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: step_definition(1, 1, 2, 1),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![vec![participant.id]],
+            seeds: vec![],
+        })
+        .await
+        .unwrap();
+    let group_id = store.list_step_groups(step.id).await.unwrap()[0].id;
+    let found = store
+        .create_match(MatchInput {
+            game_id,
+            step_id: step.id,
+            group_id,
+            round: Some(1),
+            bracket: None,
+            next_match_id: None,
+            best_of: 1,
+            scheduled_at: None,
+            participants: vec![participant.id],
+        })
+        .await
+        .unwrap();
+    let mut workflow = MatchWorkflow {
+        revision: 1,
+        ..MatchWorkflow::default()
+    };
+    workflow.history.push(MatchAuditEntry {
+        id: Uuid::new_v4(),
+        actor_id: participant.user_id.unwrap(),
+        action: "match.called".to_string(),
+        reason: None,
+        created_at: found.created_at.clone(),
+        before: serde_json::json!({}),
+        after: serde_json::json!({}),
+    });
+    let update = WorkflowCommit {
+        match_id: found.id,
+        expected_revision: 0,
+        expected_updated_at: found.updated_at.clone(),
+        workflow: workflow.clone(),
+        finish: None,
+        games: None,
+    };
+    let (left, right) = tokio::join!(
+        store.commit_match_workflow(update.clone()),
+        store.commit_match_workflow(update)
+    );
+    assert_ne!(left.is_ok(), right.is_ok());
+    assert_eq!(store.match_workflow(found.id).await.unwrap(), workflow);
+    let current = store.find_match(found.id).await.unwrap().unwrap();
+    let mut invalid = workflow.clone();
+    invalid.revision = 2;
+    invalid.history.clear();
+    assert!(
+        store
+            .commit_match_workflow(WorkflowCommit {
+                match_id: found.id,
+                expected_revision: 1,
+                expected_updated_at: current.updated_at,
+                workflow: invalid,
+                finish: None,
+                games: None
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(store.match_workflow(found.id).await.unwrap(), workflow);
+    let snapshot = store.competition_snapshot(tournament.id).await.unwrap();
+    let mut next = snapshot.clone();
+    next.matches
+        .iter_mut()
+        .find(|m| m.id == found.id)
+        .unwrap()
+        .status = MatchStatus::Finished;
+    next.members[0].rank = Some(1);
+    let mut audit = workflow.clone();
+    audit.revision += 1;
+    audit.history.push(MatchAuditEntry {
+        id: Uuid::new_v4(),
+        actor_id: participant.user_id.unwrap(),
+        action: "match.corrected".into(),
+        reason: Some("Verified correction".into()),
+        created_at: found.created_at.clone(),
+        before: serde_json::json!({}),
+        after: serde_json::json!({}),
+    });
+    let correction = api_public::store::CompetitionCorrection {
+        expected_revision: snapshot.revision().unwrap(),
+        next,
+        match_id: found.id,
+        expected_workflow_revision: 1,
+        workflow: audit.clone(),
+    };
+    store
+        .commit_competition_correction(correction.clone())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .commit_competition_correction(correction)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.find_match(found.id).await.unwrap().unwrap().status,
+        MatchStatus::Finished
+    );
+    assert_eq!(store.match_workflow(found.id).await.unwrap(), audit);
 }
