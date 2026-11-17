@@ -260,3 +260,5 @@ UPDATE users SET role = 'admin' WHERE lower(username) = lower('<nom>');
 ```
 
 Le changement apparaît dans le jeton d'accès au prochain `/refresh` ou `/login`. Les routes réservées aux administrateurs ne se fient pas au claim `role` (qui peut dater de `ACCESS_TOKEN_TTL_SECS`) : elles relisent le rôle courant en base (hors cache), si bien qu'un administrateur rétrogradé ou supprimé perd ses droits immédiatement. Le framework est actix-web ([ADR-010](adr/010-api-publique-actix-web.md)).
+
+Import concurrency: PostgreSQL acquires SHARE ROW EXCLUSIVE locks on the imported tables before checking the complete preview digest. These short administrative transactions serialize imports and block concurrent writes (including child-row updates and inserts), while reads remain available. The same digest is included in the preview fingerprint.

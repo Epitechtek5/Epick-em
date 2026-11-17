@@ -2889,3 +2889,74 @@ async fn apply_import_is_one_transaction_with_seeds_and_lock() {
         );
     }
 }
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL"]
+async fn import_rechecks_after_a_concurrent_scoring_update() {
+    let store = Arc::new(store().await);
+    let game_id = game(&store).await;
+    let name = unique("ConcurrentImport");
+    let saved = store
+        .apply_import(import_plan(game_id, &name, "original", &[], 0))
+        .await
+        .unwrap();
+    let id = saved[0].0.id;
+    let stat = store
+        .create_stat(StatInput {
+            name: "Kills".into(),
+            key: unique("kills").replace('-', "_"),
+            kind: StatType::Flat,
+        })
+        .await
+        .unwrap();
+    store.link_stat(game_id, stat.id).await.unwrap();
+    let rule = store
+        .create_scoring_rule(ScoringRuleInput {
+            tournament_id: id,
+            stat_id: stat.id,
+            definition: ScoringRuleDefinition {
+                mode: ScoringMode::Linear,
+                coefficient: Some(1.0),
+                points_table: None,
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let mut plan = import_plan(game_id, &name, "replacement", &[], 0);
+    plan.tournaments[0].expected = Some(store.tournament_digest(id).await.unwrap());
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let mut writer = pool.begin().await.unwrap();
+    sqlx::query("UPDATE scoring_rule SET coefficient = 9 WHERE id = $1")
+        .bind(rule.id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let importer = store.clone();
+    let task = tokio::spawn(async move { importer.apply_import(plan).await });
+    // The old implementation reads the old digest, then waits on DELETE and loses this update.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    writer.commit().await.unwrap();
+    assert!(matches!(task.await.unwrap(), Err(StoreError::ImportStale)));
+    assert_eq!(
+        store
+            .find_scoring_rule(rule.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .coefficient,
+        Some(9.0)
+    );
+    assert_eq!(
+        store
+            .find_tournament(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .description
+            .as_deref(),
+        Some("original")
+    );
+}

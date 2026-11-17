@@ -2680,6 +2680,16 @@ impl AuthStore for PgStore {
 
     async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
         let mut tx = self.pool.begin().await?;
+        // Child updates do not necessarily lock their tournament. Freeze all imported tables
+        // before reading the digest, including inserts into a previously empty tournament.
+        // Imports are rare administrative operations; readers remain unblocked.
+        sqlx::query(
+            "LOCK TABLE tournaments, scoring_rule, tournament_participant, tournament_teams, \
+             tournament_team_member, step, step_group, step_participant, match, match_participant \
+             IN SHARE ROW EXCLUSIVE MODE",
+        )
+        .execute(&mut *tx)
+        .await?;
         let mut result = Vec::with_capacity(plan.tournaments.len());
         for tournament_plan in plan.tournaments {
             let TournamentPlan {

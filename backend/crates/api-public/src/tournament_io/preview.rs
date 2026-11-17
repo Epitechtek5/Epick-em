@@ -367,16 +367,23 @@ pub(super) async fn analyze(
             Some(tournament) => Some((tournament, current(state, tournament).await?)),
             None => None,
         };
-        signatures.push(current.as_ref().map(|(_, c)| c.signature.to_string()));
-        // L'état vu par l'aperçu est revérifié dans la transaction qui applique le plan.
-        if let (Some(tournament), Some(plan)) = (existing, plans.get_mut(index)) {
-            plan.expected = Some(
+        let expected = match existing {
+            Some(tournament) => Some(
                 state
                     .store
                     .tournament_digest(tournament.id)
                     .await
                     .map_err(ApiError::internal)?,
-            );
+            ),
+            None => None,
+        };
+        // Bind the preview fingerprint and the transaction to the same complete snapshot.
+        signatures.push((
+            current.as_ref().map(|(_, c)| c.signature.to_string()),
+            expected.clone(),
+        ));
+        if let Some(plan) = plans.get_mut(index) {
+            plan.expected = expected;
         }
         let after_matches = item.matches.len()
             + item
@@ -533,7 +540,8 @@ pub(super) async fn analyze(
         }
     }
     for signature in &signatures {
-        hasher.update(signature.as_deref().unwrap_or("absent"));
+        hasher.update(signature.0.as_deref().unwrap_or("absent"));
+        hasher.update(signature.1.as_deref().unwrap_or("absent"));
     }
     Ok(Ok(Analysis {
         plan: atomic.then_some(ImportPlan { tournaments: plans }),
