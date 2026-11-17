@@ -15,6 +15,7 @@ interface BracketParticipant {
   score: string;
   winner: boolean;
   placeholder: boolean;
+  seed?: number | null;
 }
 
 function winnerId(match: Match) {
@@ -25,10 +26,11 @@ function winnerId(match: Match) {
 
 function bracketParticipants(
   match: Match,
-  context: Pick<MatchContext, 'matches' | 'names'>,
+  context: Pick<MatchContext, 'matches' | 'names'> &
+    Partial<Pick<MatchContext, 'groups'>>,
   t: ReturnType<typeof useTranslation>['t'],
 ): BracketParticipant[] {
-  const participants = [...match.participants]
+  const participants: BracketParticipant[] = [...match.participants]
     .sort(
       (left, right) =>
         (left.slot ?? left.rank ?? Infinity) -
@@ -47,6 +49,9 @@ function bracketParticipants(
 
       return {
         key: participant.participant_id,
+        seed: context.groups
+          ?.flatMap((g) => g.participants)
+          .find((p) => p.participant_id === participant.participant_id)?.seed,
         name:
           context.names[participant.participant_id] ??
           t('steps.unknownParticipant'),
@@ -114,13 +119,23 @@ export function BracketMatchCard({
   onPress,
 }: {
   match: Match;
-  context: Pick<MatchContext, 'matches' | 'names'>;
+  context: Pick<MatchContext, 'matches' | 'names'> &
+    Partial<Pick<MatchContext, 'groups'>>;
   onPress: () => void;
 }) {
   const { t } = useTranslation();
   const number = matchNumber(context.matches, match.id);
   const participants = bracketParticipants(match, context, t);
-  const title = number ? t('matches.number', { number }) : t('matches.detail');
+  const reset =
+    match.bracket === 'grand_final' &&
+    context.matches.some(
+      (m) => m.next_match_id === match.id && m.loser_next_match_id === match.id,
+    );
+  const title = reset
+    ? t('steps.advanced.finalReset')
+    : number
+      ? t('matches.number', { number })
+      : t('matches.detail');
   const participantSummary = participants
     .map((participant) =>
       participant.winner
@@ -167,6 +182,7 @@ export function BracketMatchCard({
             numberOfLines={1}
             ellipsizeMode="tail"
           >
+            {participant.seed ? `#${participant.seed} ` : ''}
             {participant.name}
           </Text>
           <Text className={participant.winner ? 'font-semibold' : ''}>

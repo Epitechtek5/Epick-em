@@ -37,6 +37,10 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 const reload = jest.fn().mockResolvedValue(undefined);
 const api = {
+  workflow: jest.fn(),
+  updateWorkflow: jest.fn(),
+  previewCorrection: jest.fn(),
+  correct: jest.fn(),
   list: jest.fn(),
   get: jest.fn(),
   create: jest.fn(),

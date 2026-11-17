@@ -19,13 +19,13 @@ Notifications.setNotificationHandler({
   }),
 });
 
-function notificationPath(data: Record<string, unknown>): Href | null {
+export function notificationPath(data: Record<string, unknown>): Href | null {
   const path = data.path;
   const invitation = invitationTarget(path);
   if (invitation) return invitation;
   if (
     typeof path !== 'string' ||
-    !/^\/tournaments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/steps\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i.test(
+    !/^\/tournaments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/steps\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/matches\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/workflow)?)?)?$/i.test(
       path,
     )
   ) {

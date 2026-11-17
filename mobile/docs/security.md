@@ -1,5 +1,11 @@
 # Dependency security
 
+## Current blocking advisory: 2026-11-17
+
+Both strict audit trees fail on `picomatch` [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), a high-severity regular-expression denial of service affecting versions through 4.0.7. At verification time the registry publishes no patched release. The finding propagates through existing Expo/Metro/Jest/Tailwind dependencies; the number of affected packages is not a count of distinct vulnerabilities.
+
+The new SDK-compatible `expo-crypto` dependency provides native operation UUIDs. Reproducible installation and Expo compatibility checks pass, but **the dependency security gate does not pass**. No audit exception, forced upgrade, SDK downgrade or speculative global override was added. Adopt an upstream compatible fix and rerun full and production audits before considering this gate resolved. Earlier snapshots below are historical.
+
 ## npm advisory range correction: 2026-11-03
 
 GitHub's aggregated advisory for

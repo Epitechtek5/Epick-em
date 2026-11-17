@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { View } from 'react-native';
 import { StepOptionSelect } from '@/components/steps/option-select';
 import { Button } from '@/components/ui/button';
@@ -25,6 +26,7 @@ export function StepRulesFields({
 
   function changeRound(previous: string, next: string, bestOf: 1 | 3 | 5) {
     const values = { ...rules.best_of_by_round };
+    if (previous !== next && values[next] !== undefined) return;
     delete values[previous];
     values[next] = bestOf;
     onChange({ ...rules, best_of_by_round: values });
@@ -74,8 +76,8 @@ export function StepRulesFields({
                 onChange({ ...rules, best_of: Number(value) as 1 | 3 | 5 })
               }
             />
-            {rounds.map(([round, bestOf]) => (
-              <View key={round} className="gap-2 border-t border-border pt-3">
+            {rounds.map(([round, bestOf], index) => (
+              <View key={index} className="gap-2 border-t border-border pt-3">
                 <Text>{t('steps.advanced.round')}</Text>
                 <Input
                   accessibilityLabel={t('steps.advanced.round')}
@@ -157,16 +159,16 @@ export function StepRulesFields({
               {(['win', 'draw', 'loss'] as const).map((key) => (
                 <View key={key} className="gap-2">
                   <Text>{t(`steps.advanced.points.${key}`)}</Text>
-                  <Input
+                  <RuleNumberInput
                     accessibilityLabel={t(`steps.advanced.points.${key}`)}
                     keyboardType="numbers-and-punctuation"
-                    value={String(rules.scoring![key])}
-                    onChangeText={(text) =>
+                    value={rules.scoring![key]}
+                    onNumberChange={(number) =>
                       onChange({
                         ...rules,
                         scoring: {
                           ...rules.scoring!,
-                          [key]: Number(text.replace(',', '.')),
+                          [key]: number,
                         },
                       })
                     }
@@ -177,23 +179,20 @@ export function StepRulesFields({
                 <View className="gap-2">
                   <Text>{t('steps.advanced.placementPoints')}</Text>
                   {rules.scoring.placement.map((points, index) => (
-                    <Input
+                    <RuleNumberInput
                       key={index}
                       accessibilityLabel={t('steps.advanced.rankPoints', {
                         rank: index + 1,
                       })}
                       keyboardType="numbers-and-punctuation"
-                      value={String(points)}
-                      onChangeText={(text) =>
+                      value={points}
+                      onNumberChange={(number) =>
                         onChange({
                           ...rules,
                           scoring: {
                             ...rules.scoring!,
                             placement: rules.scoring!.placement.map(
-                              (value, i) =>
-                                i === index
-                                  ? Number(text.replace(',', '.'))
-                                  : value,
+                              (value, i) => (i === index ? number : value),
                             ),
                           },
                         })
@@ -221,5 +220,28 @@ export function StepRulesFields({
         </CardContent>
       </Card>
     </View>
+  );
+}
+
+function RuleNumberInput({
+  value,
+  onNumberChange,
+  ...props
+}: Omit<React.ComponentProps<typeof Input>, 'value' | 'onChangeText'> & {
+  value: number;
+  onNumberChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const parse = (text: string) =>
+    text.trim() ? Number(text.replace(',', '.')) : NaN;
+  return (
+    <Input
+      {...props}
+      value={Object.is(parse(draft), value) ? draft : String(value)}
+      onChangeText={(text) => {
+        setDraft(text);
+        onNumberChange(parse(text));
+      }}
+    />
   );
 }

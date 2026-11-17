@@ -99,6 +99,17 @@ export default function MatchDetailsScreen() {
       {notice ? <FormMessage success>{t(notice)}</FormMessage> : null}
 
       <MatchScoreboard match={match} data={data} />
+      <Button
+        onPress={() =>
+          router.push({
+            pathname:
+              '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/workflow',
+            params,
+          })
+        }
+      >
+        <Text>{t('matchWorkflow.title')}</Text>
+      </Button>
       <MatchGames match={match} data={data} onCreated={state.reload} />
 
       {match.next_match_id ? (

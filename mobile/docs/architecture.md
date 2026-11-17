@@ -147,3 +147,13 @@ Saving and finishing are separate actions. Editing disables completion until a s
 The stage editor sends seeding, qualification placement, per-round BO formats and optional stage scoring in `rules`. Historical stages without this field use the backend defaults. Manual seed order is confirmed when starting the stage; eligibility comes from registrations or the previous stage's authoritative qualified participants.
 
 `StepGeneration` requests `/generation-preview` and sends its revision to `/generate`. It never computes pairings locally. Swiss retries may explicitly allow rematches after a pairing failure. Bracket layout uses both stored winner and loser links, with dashed loser connectors, and retains zoom/pan controls.
+
+## Match operations (#160 / #164)
+
+Match details open an authenticated `matches/[matchId]/workflow` screen. The same path is accepted by notification deep links. Four sections cover submitted results, scheduling and attendance, disputes, and the immutable audit trail. The backend supplies participant representation and tournament-management permissions; an organizer who also participates explicitly chooses between submitting their own report and making an administrative decision.
+
+Reports contain complete per-game placements, numeric totals, roster-player statistics, selections and MVP attributes. The server validates the series and computes its aggregate. Reports remain separate from official results until all participants independently agree or an organizer decides with a reason. Scheduling supports dates, duration, venue, station, calls, delays and attendance; forfeits require confirmation.
+
+Dispute evidence uses native document selection and authenticated binary upload/download (PNG, JPEG or PDF, at most 5 MiB each and five attachments). Corrections require a reason, a server preview and explicit acknowledgement of downstream resets. The preview identifies each affected stage, group, round and match. Old results remain available in the audit history; clients never recalculate brackets themselves.
+
+A pending operation keeps its UUID and revision after a network failure. Retrying the same payload replays the server receipt instead of duplicating the action. Validation/conflict responses refresh authoritative state. UUIDs use the SDK-compatible `expo-crypto` native implementation. FR/EN/ES strings, existing Hugeicons, theme tokens and purple primary buttons are reused.

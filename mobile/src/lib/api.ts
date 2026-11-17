@@ -51,6 +51,13 @@ export async function apiRequest<T>(
       errors && typeof errors === 'object'
         ? Object.keys(errors).filter((field) =>
             [
+              'rules',
+              'seed_order',
+              'pairing',
+              'revision',
+              'reason',
+              'evidence',
+              'schedule',
               'name',
               'key',
               'type',

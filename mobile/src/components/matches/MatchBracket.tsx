@@ -54,7 +54,8 @@ export function MatchBracket({
   context,
   open,
 }: {
-  context: Pick<MatchContext, 'matches' | 'names'>;
+  context: Pick<MatchContext, 'matches' | 'names'> &
+    Partial<Pick<MatchContext, 'groups'>>;
   open: (id: string) => void;
 }) {
   const { t } = useTranslation();
