@@ -2,7 +2,7 @@
 
 use super::teams::now_rfc3339;
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
+    AuthStore, Game, GameInput, GameUpdate, Imports, Match, MatchFinish, MatchImport, MatchInput,
     MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
     ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
     StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
@@ -66,6 +66,8 @@ struct State {
 #[derive(Default)]
 pub struct MemoryStore {
     state: Mutex<State>,
+    /// Tournois importés, dans un cache en mémoire.
+    imports: Imports,
 }
 
 impl MemoryStore {
@@ -102,6 +104,10 @@ impl MemoryStore {
 
 #[async_trait]
 impl AuthStore for MemoryStore {
+    fn imports(&self) -> &Imports {
+        &self.imports
+    }
+
     async fn create_user_with_token(
         &self,
         username: &str,
@@ -1123,9 +1129,14 @@ impl AuthStore for MemoryStore {
             .tournaments
             .iter()
             .filter(|t| game_id.is_none_or(|id| t.game_id == id))
-            .filter(|t| status.is_none_or(|status| t.status == status))
             .cloned()
             .collect();
+        for tournament in &mut tournaments {
+            if let Some(summary) = self.imports.summary(tournament.id).await {
+                summary.apply(tournament);
+            }
+        }
+        tournaments.retain(|t| status.is_none_or(|status| t.status == status));
         tournaments.sort_by_key(|t| (t.start_date.clone(), t.id));
         Ok(tournaments
             .into_iter()
@@ -1135,12 +1146,19 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_tournament(&self, id: Uuid) -> Result<Option<Tournament>, StoreError> {
-        Ok(self
+        let found = self
             .state()
             .tournaments
             .iter()
             .find(|t| t.id == id)
-            .cloned())
+            .cloned();
+        let Some(mut tournament) = found else {
+            return Ok(None);
+        };
+        if let Some(summary) = self.imports.summary(id).await {
+            summary.apply(&mut tournament);
+        }
+        Ok(Some(tournament))
     }
 
     async fn create_tournament(&self, input: TournamentInput) -> Result<Tournament, StoreError> {
@@ -1241,6 +1259,7 @@ impl AuthStore for MemoryStore {
     }
 
     async fn delete_tournament(&self, id: Uuid) -> Result<bool, StoreError> {
+        self.imports.forget(id).await;
         let mut state = self.state();
         let before = state.tournaments.len();
         state.remove_tournament(id);
@@ -1344,6 +1363,9 @@ impl AuthStore for MemoryStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TournamentParticipant>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.participants(limit, offset));
+        }
         let mut participants: Vec<TournamentParticipant> = self
             .state()
             .participants
@@ -1363,6 +1385,9 @@ impl AuthStore for MemoryStore {
         &self,
         id: Uuid,
     ) -> Result<Option<TournamentParticipant>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.participant(id)) {
+            return Ok(Some(found));
+        }
         Ok(self
             .state()
             .participants
@@ -1413,6 +1438,8 @@ impl AuthStore for MemoryStore {
             tournament_team_id: input.tournament_team_id,
             status: ParticipantStatus::Registered,
             registered_at: now_rfc3339(),
+            external_id: None,
+            display_name: None,
         };
         state.participants.push(participant.clone());
         Ok(Some(participant))
@@ -1443,6 +1470,9 @@ impl AuthStore for MemoryStore {
         &self,
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.points());
+        }
         let state = self.state();
         let mut points: HashMap<Uuid, f64> = state
             .participants
@@ -1467,6 +1497,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.steps);
+        }
         let mut steps: Vec<Step> = self
             .state()
             .steps
@@ -1479,6 +1512,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.step(id)) {
+            return Ok(Some(found));
+        }
         Ok(self.state().steps.iter().find(|s| s.id == id).cloned())
     }
 
@@ -1561,6 +1597,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.groups(step_id));
+        }
         let mut groups: Vec<StepGroup> = self
             .state()
             .step_groups
@@ -1576,6 +1615,9 @@ impl AuthStore for MemoryStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<StepParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.step_participants(step_id));
+        }
         let state = self.state();
         let index_of = |group_id: Uuid| {
             state
@@ -1658,6 +1700,9 @@ impl AuthStore for MemoryStore {
         group_id: Option<Uuid>,
         status: Option<MatchStatus>,
     ) -> Result<Vec<Match>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.matches(step_id, group_id, status));
+        }
         let state = self.state();
         let index_of = |group: Option<Uuid>| {
             state
@@ -1680,6 +1725,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_match(&self, id: Uuid) -> Result<Option<Match>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.find_match(id)) {
+            return Ok(Some(found));
+        }
         Ok(self.state().matches.iter().find(|m| m.id == id).cloned())
     }
 
@@ -1687,6 +1735,9 @@ impl AuthStore for MemoryStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<MatchParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.match_participants(step_id));
+        }
         let state = self.state();
         let in_step = |match_id: Uuid| {
             state
@@ -2002,6 +2053,8 @@ impl AuthStore for MemoryStore {
                 tournament_team_id: p.tournament_team_id,
                 status: p.status,
                 registered_at: p.registered_at.unwrap_or_else(|| now.clone()),
+                external_id: None,
+                display_name: None,
             }));
         Ok(())
     }
