@@ -1,17 +1,22 @@
 import {
+  approveParticipant,
+  assignTournamentRole,
   checkInParticipant,
   createScoringRule,
   createTournament,
   deleteScoringRule,
   exportTournaments,
   getPlayerRanking,
+  getPublicTournament,
   getTeamRanking,
   importTournaments,
   listParticipants,
+  listTournamentRoles,
   listScoringRules,
   listTournaments,
   registerParticipant,
   removeParticipant,
+  promoteWaitingList,
   setTournamentStatus,
   updateParticipantStatus,
   updateScoringRule,
@@ -32,7 +37,18 @@ const input = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo' as const,
-  team_size: null,
+  mode: 'online' as const,
+  location: null,
+  visibility: 'public' as const,
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open' as const,
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 32,
   team_scoring_mode: 'none' as const,
   team_scoring_n: null,
@@ -92,13 +108,13 @@ it('uses status, participant and check-in contracts without impersonation', asyn
   await registerParticipant('token', id);
   expect(fetch).toHaveBeenLastCalledWith(
     `${base}/tournaments/${id}/participants`,
-    expect.objectContaining({ method: 'POST', body: '{}' }),
+    expect.objectContaining({ method: 'POST', body: '{"responses":{}}' }),
   );
   await registerParticipant('token', id, other);
   expect(fetch).toHaveBeenLastCalledWith(
     `${base}/tournaments/${id}/participants`,
     expect.objectContaining({
-      body: JSON.stringify({ tournament_team_id: other }),
+      body: JSON.stringify({ tournament_team_id: other, responses: {} }),
     }),
   );
   await listParticipants('token', id, 20, 40);
@@ -125,6 +141,42 @@ it('uses status, participant and check-in contracts without impersonation', asyn
   expect(noContent.json).not.toHaveBeenCalled();
   expect(JSON.stringify(jest.mocked(fetch).mock.calls)).not.toContain(
     'X-User-Id',
+  );
+});
+
+it('uses approval, waiting-list, scoped-role and unauthenticated public contracts', async () => {
+  jest.mocked(fetch).mockResolvedValue(response(200, {}));
+  await approveParticipant('token', id, other);
+  expect(fetch).toHaveBeenLastCalledWith(
+    `${base}/tournaments/${id}/participants/${other}/approve`,
+    expect.objectContaining({ method: 'POST' }),
+  );
+  await promoteWaitingList('token', id);
+  expect(fetch).toHaveBeenLastCalledWith(
+    `${base}/tournaments/${id}/waiting-list/promote`,
+    expect.objectContaining({ method: 'POST' }),
+  );
+  await listTournamentRoles('token', id);
+  expect(fetch).toHaveBeenLastCalledWith(
+    `${base}/tournaments/${id}/roles`,
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer token' }),
+    }),
+  );
+  await assignTournamentRole('token', id, other, 'referee');
+  expect(fetch).toHaveBeenLastCalledWith(
+    `${base}/tournaments/${id}/roles/${other}`,
+    expect.objectContaining({
+      method: 'PUT',
+      body: '{"role":"referee"}',
+    }),
+  );
+  await getPublicTournament(id);
+  expect(fetch).toHaveBeenLastCalledWith(
+    `${base}/public/tournaments/${id}`,
+    expect.not.objectContaining({
+      headers: expect.objectContaining({ Authorization: expect.anything() }),
+    }),
   );
 });
 

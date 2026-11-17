@@ -34,6 +34,11 @@ Install Xcode and its command line tools for iOS, accept the Xcode license and i
 
 ## Working conventions
 
+Registration sends the current interface language (`fr`, `en`, `es`) to the backend.
+The backend persists it before sending welcome and verification emails, then uses
+account settings for subsequent account emails. Resend aliases are documented in
+the repository's `emails/README.md`.
+
 Run `npm run validate` before submitting changes. Use `npm run lint:fix` and `npm run format` for automatic fixes. No credentials belong in application source or `EXPO_PUBLIC_*` variables; those values are public in the application bundle.
 
 Install dependencies using `npx expo install <package>` (add `--dev` for tooling). Read the SDK 58 docs first, then run `npx expo install --check` and `npx expo-doctor`. Review security implications and lockfile changes. Generated `android/`, `ios/`, bundles and native artifacts are ignored.
@@ -46,18 +51,18 @@ Keep exactly one local `.env`, at the repository root (copy the root `.env.examp
 EXPO_PUBLIC_API_URL=http://10.0.2.2:8080
 ```
 
-`app.config.js` and Metro load only `EXPO_PUBLIC_API_URL` and the non-secret `PUBLIC_URL`, without overriding shell/CI values. Docker credentials are never copied into Expo config or the client. CI and Jest skip the personal root file. Do not create `mobile/.env*`. The API client uses Expo's statically inlined `process.env.EXPO_PUBLIC_API_URL`; changing it requires restarting Metro with `npm start -- --clear` and fully reloading the app (or rebuilding a standalone APK).
+`app.config.js` and Metro load only `EXPO_PUBLIC_API_URL`, the public `EXPO_PUBLIC_EAS_PROJECT_ID`, and the non-secret `PUBLIC_URL`, without overriding shell/CI values. Docker credentials are never copied into Expo config or the client. CI and Jest skip the personal root file. Do not create `mobile/.env*`. Expo statically inlines public values; changing them requires restarting Metro with `npm start -- --clear` and rebuilding when native configuration is affected.
 
 ```sh
 # From mobile/, with backend Compose services running on port 8080:
 npm run android   # initial debug native compile/install; starts Metro
 # On later sessions, keep the installed debug app and run:
-npm start -- --localhost
+npm start
 ```
 
 UI and TypeScript edits use Metro/Fast Refresh. Recompile after native dependency, config plugin, permissions, SDK or native configuration changes. For an existing generated project, apply config changes first with `npx expo prebuild --clean --platform android --no-install`, then `npm run android`. This regenerates disposable native directories. This change needs that initial regeneration/reinstall. Expo Go does not use this project's native plugin; test the installed debug app or demo APK when checking transport policy.
 
-For WSL with a Windows emulator, use Windows SDK `adb.exe` from WSL (or configure a shared ADB server), confirm the emulator with `adb.exe devices`, then run `adb.exe reverse tcp:8081 tcp:8081`. Windows must be able to reach WSL Metro at `http://localhost:8081/status`; verify that first (WSL localhost forwarding or mirrored networking and firewall configuration may be needed). Launch the installed debug app against `http://localhost:8081` through its development menu. The reverse maps emulator localhost to Windows, and Windows forwards to WSL. If Expo CLI cannot see Windows ADB, generate/install the debug APK with the Linux SDK and use Windows `adb.exe install -r android/app/build/outputs/apk/debug/app-debug.apk`, then open it manually. Never mix independent ADB servers unknowingly.
+For WSL with a Windows emulator, install the SDK-compatible Expo Go client once with `npm run expo-go:install:windows`. Then `npm start` advertises `exp://127.0.0.1:8081`, discovers the Windows SDK `adb.exe`, configures `adb reverse tcp:8081 tcp:8081`, and opens the URL in the running emulator. Windows must be able to reach WSL Metro at `http://localhost:8081/status` (WSL localhost forwarding or mirrored networking and firewall configuration may be needed). Set `WINDOWS_ADB` to the full `adb.exe` path only when the SDK is installed outside the standard Windows user directory. The reverse maps emulator localhost to Windows, and Windows forwards to WSL. If no emulator is running, start it before Metro and open `exp://127.0.0.1:8081` manually. Never mix independent ADB servers unknowingly.
 
 If Windows ADB is available as `adb.exe` on your WSL PATH but Expo cannot discover it, use this documented fallback after configuring the Linux Android SDK:
 
@@ -77,9 +82,19 @@ For an iOS simulator, use the existing root configuration with `EXPO_PUBLIC_API_
 
 ## Language and appearance preferences
 
-Settings provides Account, Appearance, Language and Session sections. Theme and language selections apply without restarting and persist independently of authentication. The first language comes from the device (`fr` uses French; unsupported languages use English), while the initial theme follows the system. To change copy, edit the matching keys in both bundled files under `src/i18n/locales/`; do not add language conditionals to screens or translate backend role values.
+Settings provides Account, Appearance, Language, Notifications and Session sections. Theme and language selections apply without restarting, synchronize with the backend, and remain cached under an account-scoped key. The first language comes from the device (`fr` and `es` are supported; other languages use English), while the initial theme follows the system. To change copy, edit the matching keys in all three bundled files under `src/i18n/locales/`; do not add language conditionals to screens or translate backend role values.
 
 Expo Localization is a native dependency and config plugin. Rebuild the native app after installing these changes; Fast Refresh alone cannot install the native module. The existing API URL configuration, backend connectivity and release build commands are unchanged.
+
+## Push notifications
+
+Set the public EAS project UUID before generating a native build:
+
+```dotenv
+EXPO_PUBLIC_EAS_PROJECT_ID=00000000-0000-0000-0000-000000000000
+```
+
+The value is an identifier, not a secret. `app.config.js` exposes it as `extra.eas.projectId`; EAS-managed builds may provide the same value through `Constants.easConfig`. Rebuild after installing or changing `expo-notifications`. Test permission prompts, foreground delivery, background delivery, terminated-app taps and token refresh on a physical iOS or Android device. Simulators intentionally skip token registration. Backend delivery additionally requires `PUSH_ENABLED=true`; keep `EXPO_ACCESS_TOKEN` only on the backend and never place it in an `EXPO_PUBLIC_*` variable.
 
 ## Password reset links
 
@@ -147,3 +162,11 @@ The API accepts alias overrides through `RESEND_EMAIL_VERIFICATION_TEMPLATE` and
 Public resend returns 204 for any syntactically valid address. The database enforces a 60-second cooldown and five issuances per account or address per hour. Registration, enrollment and resend share a limit of 30 requests per hour per direct network peer. Instances behind the same proxy share its allowance. The API ignores forwarded IP headers. Configure trusted ingress limits for larger deployments.
 
 Verification and password reset share `PUBLIC_URL`. The verification email opens `/verify-email?token=...`. The browser offers confirmation and a link to the installed app. Verified HTTPS links can open the native screen directly after rebuilding the app with the public host and deploying the platform association files. A localhost URL works only on the device hosting the web service. Disable click tracking for transactional links.
+
+## Invitation links
+
+Rebuild native applications with the same HTTPS `PUBLIC_URL` as the backend and web application. Android intent filters include `/invite/` and `/invitations/`. Extend the existing Apple association file's paths with `/invite/*` and `/invitations/*` (retain password reset and verification). Android's existing assetlinks relation covers these paths when the installed build's signing certificate matches. Association files must be deployed on that public host; repository configuration alone cannot verify a production domain.
+
+For route smoke tests, use non-secret fixtures such as `epickem://invitations/22222222-2222-4222-8222-222222222222`. Check cold launch, foreground and background taps, guest login/registration, expired and revoked links, account switching during a delayed request, and the native share sheet. Repeat with a real test invitation on a test HTTPS domain with valid association files, then check the same URL in a browser without the app. iOS native validation requires macOS/Xcode; a JavaScript export is not a native build or runtime test.
+
+For Android remote pushes, set EXPO_PUBLIC_EAS_PROJECT_ID and GOOGLE_SERVICES_JSON (path to the Firebase client configuration) when building, configure the corresponding FCM v1 service credentials in Expo, and enable PUSH_ENABLED on the API. Do not commit service-account credentials. Android emulators need Google Play services; they are no longer excluded by the registration code. Without this configuration, in-app activity still updates while foregrounded or after resuming, but an app closed on the home screen cannot receive remote notifications.

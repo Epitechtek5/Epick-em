@@ -19,7 +19,18 @@ const input: TournamentInput = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo',
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 32,
   team_scoring_mode: 'none',
   team_scoring_n: null,
@@ -40,7 +51,12 @@ it('validates dates and mode-dependent fields without exceeding backend limits',
     'tournaments.validation.dates',
   );
   expect(
-    validateTournament({ ...input, participant_type: 'team', team_size: null }),
+    validateTournament({
+      ...input,
+      participant_type: 'team',
+      team_min_starters: null,
+      team_max_starters: null,
+    }),
   ).toBe('tournaments.validation.teamSize');
   expect(
     validateTournament({
@@ -52,25 +68,44 @@ it('validates dates and mode-dependent fields without exceeding backend limits',
   expect(validateTournament({ ...input, max_participants: 10001 })).toBe(
     'tournaments.validation.capacity',
   );
+  expect(
+    validateTournament({ ...input, mode: 'in_person', location: null }),
+  ).toBe('tournaments.validation.location');
+  expect(
+    validateTournament({
+      ...input,
+      registration_fields: [
+        {
+          key: 'platform',
+          label: 'Platform',
+          field_type: 'select',
+          required: true,
+          options: [],
+        },
+      ],
+    }),
+  ).toBe('tournaments.validation.registrationFields');
 });
 
 it('omits irrelevant configuration and emits null only for changed nullable PATCH fields', () => {
   const next = buildTournamentInput({
     ...input,
     name: ' Open ',
-    team_size: 4,
+    team_min_starters: 4,
+    team_max_starters: 4,
     team_scoring_n: 3,
   });
   expect(next).toMatchObject({
     name: 'Open',
-    team_size: null,
+    team_min_starters: null,
     team_scoring_n: null,
   });
   expect(
     buildTournamentInput({
       ...input,
       participant_type: 'team',
-      team_size: 3,
+      team_min_starters: 3,
+      team_max_starters: 3,
       team_scoring_mode: 'top_n',
       team_scoring_n: 2,
     }),
@@ -89,13 +124,15 @@ it('omits irrelevant configuration and emits null only for changed nullable PATC
       {
         ...current,
         participant_type: 'team',
-        team_size: 3,
+        team_min_starters: 3,
+        team_max_starters: 3,
         team_scoring_mode: 'sum',
       },
       {
         ...next,
         participant_type: 'team',
-        team_size: 3,
+        team_min_starters: 3,
+        team_max_starters: 3,
         team_scoring_mode: 'none',
       },
     ),

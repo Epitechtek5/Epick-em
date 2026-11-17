@@ -38,6 +38,18 @@ describe('mobile environment', () => {
       PUBLIC_URL: 'https://app.example.test',
     });
   });
+  it('loads the public EAS project identifier without importing Expo secrets', () => {
+    writeFileSync(
+      filename,
+      'EXPO_PUBLIC_API_URL=https://api.example.test\nEXPO_PUBLIC_EAS_PROJECT_ID=22222222-2222-4222-8222-222222222222\nEXPO_ACCESS_TOKEN=secret\n',
+    );
+    const env = {};
+    loadRootEnvironment({ env, filename });
+    expect(env).toEqual({
+      EXPO_PUBLIC_API_URL: 'https://api.example.test',
+      EXPO_PUBLIC_EAS_PROJECT_ID: '22222222-2222-4222-8222-222222222222',
+    });
+  });
   it.each([
     { CI: '1' },
     { NODE_ENV: 'test' },

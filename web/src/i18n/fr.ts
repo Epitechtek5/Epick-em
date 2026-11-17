@@ -1,4 +1,12 @@
 export const fr = {
+  invitation: {
+    title: 'Invitation', login: 'Connectez-vous pour consulter cette invitation et y répondre.',
+    unavailable: 'Cette invitation est indisponible, expirée ou déjà traitée.',
+    error: 'Impossible de charger cette invitation. Réessayez.', expires: 'Expire le',
+    accept: 'Accepter l’invitation', decline: 'Refuser', confirmDecline: 'Refuser cette invitation ?',
+    accepted: 'Invitation acceptée. Consultez la ressource pour voir votre statut de participation.',
+    declined: 'Invitation refusée.', openResource: 'Ouvrir la ressource', openApp: 'Ouvrir dans l’application',
+  },
   common: {
     language: 'Langue',
     french: 'Français',

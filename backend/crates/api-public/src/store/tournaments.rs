@@ -157,7 +157,11 @@ pub struct RegistrationField {
 
 /// Configuration d'un tournoi : tout ce qu'un doublon ou un modèle recopie, sans état de
 /// fonctionnement (inscrits, résultats, statut).
+///
+/// En sortie, `team_size` (ancien nombre fixe de titulaires, égal à `team_max_starters`)
+/// accompagne la fourchette tant que les clients mobiles le lisent encore.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(into = "SettingsOutput")]
 pub struct TournamentSettings {
     pub mode: TournamentMode,
     /// Lieu, pour les tournois `in_person` et `hybrid`.
@@ -204,6 +208,106 @@ impl TournamentSettings {
             team_min_starters: Some(starters),
             team_max_starters: Some(starters),
             ..Self::solo()
+        }
+    }
+}
+
+/// Forme sérialisée de [`TournamentSettings`] : les réglages plus l'ancien `team_size`.
+#[derive(Serialize)]
+struct SettingsOutput {
+    mode: TournamentMode,
+    location: Option<String>,
+    visibility: Visibility,
+    rules: Option<String>,
+    team_min_starters: Option<i32>,
+    team_max_starters: Option<i32>,
+    team_max_substitutes: Option<i32>,
+    /// Obsolète : `team_max_starters`, pour les clients qui ne connaissent pas la fourchette.
+    team_size: Option<i32>,
+    registration_policy: RegistrationPolicy,
+    waiting_list_enabled: bool,
+    registration_fields: Vec<RegistrationField>,
+    check_in_open_at: Option<String>,
+    check_in_close_at: Option<String>,
+}
+
+impl From<TournamentSettings> for SettingsOutput {
+    fn from(settings: TournamentSettings) -> Self {
+        SettingsOutput {
+            team_size: settings.team_max_starters,
+            mode: settings.mode,
+            location: settings.location,
+            visibility: settings.visibility,
+            rules: settings.rules,
+            team_min_starters: settings.team_min_starters,
+            team_max_starters: settings.team_max_starters,
+            team_max_substitutes: settings.team_max_substitutes,
+            registration_policy: settings.registration_policy,
+            waiting_list_enabled: settings.waiting_list_enabled,
+            registration_fields: settings.registration_fields,
+            check_in_open_at: settings.check_in_open_at,
+            check_in_close_at: settings.check_in_close_at,
+        }
+    }
+}
+
+/// Modification partielle de la configuration : seuls les champs renseignés sont écrits, pour
+/// qu'une modification concurrente d'un autre champ (la visibilité, par exemple) ne soit pas
+/// écrasée par une valeur relue avant elle. `Some(None)` efface une valeur facultative.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SettingsUpdate {
+    pub mode: Option<TournamentMode>,
+    pub location: Option<Option<String>>,
+    pub visibility: Option<Visibility>,
+    pub rules: Option<Option<String>>,
+    pub team_min_starters: Option<i32>,
+    pub team_max_starters: Option<i32>,
+    pub team_max_substitutes: Option<Option<i32>>,
+    pub registration_policy: Option<RegistrationPolicy>,
+    pub waiting_list_enabled: Option<bool>,
+    pub registration_fields: Option<Vec<RegistrationField>>,
+    pub check_in_open_at: Option<Option<String>>,
+    pub check_in_close_at: Option<Option<String>>,
+}
+
+impl SettingsUpdate {
+    /// Applique les champs renseignés à `settings`.
+    pub fn apply(self, settings: &mut TournamentSettings) {
+        if let Some(mode) = self.mode {
+            settings.mode = mode;
+        }
+        if let Some(location) = self.location {
+            settings.location = location;
+        }
+        if let Some(visibility) = self.visibility {
+            settings.visibility = visibility;
+        }
+        if let Some(rules) = self.rules {
+            settings.rules = rules;
+        }
+        if let Some(min) = self.team_min_starters {
+            settings.team_min_starters = Some(min);
+        }
+        if let Some(max) = self.team_max_starters {
+            settings.team_max_starters = Some(max);
+        }
+        if let Some(substitutes) = self.team_max_substitutes {
+            settings.team_max_substitutes = substitutes;
+        }
+        if let Some(policy) = self.registration_policy {
+            settings.registration_policy = policy;
+        }
+        if let Some(waiting_list) = self.waiting_list_enabled {
+            settings.waiting_list_enabled = waiting_list;
+        }
+        if let Some(fields) = self.registration_fields {
+            settings.registration_fields = fields;
+        }
+        if let Some(open) = self.check_in_open_at {
+            settings.check_in_open_at = open;
+        }
+        if let Some(close) = self.check_in_close_at {
+            settings.check_in_close_at = close;
         }
     }
 }
@@ -308,8 +412,8 @@ pub struct TournamentUpdate {
     pub max_participants: Option<i32>,
     pub team_scoring_mode: Option<TeamScoringMode>,
     pub team_scoring_n: Option<Option<i32>>,
-    /// Remplace l'ensemble de la configuration (l'appelant fusionne avec l'existante).
-    pub settings: Option<TournamentSettings>,
+    /// Champs de configuration à écrire ; les autres restent tels qu'en base.
+    pub settings: SettingsUpdate,
 }
 
 /// Règle de barème à créer ; `coefficient` est renseigné pour `linear`, `points_table` pour
@@ -398,6 +502,22 @@ pub struct RoleAuditEntry {
 pub struct CheckInSettlement {
     pub absent: Vec<TournamentParticipant>,
     pub promoted: Vec<TournamentParticipant>,
+}
+
+/// Changement de statut d'un inscrit, avec les inscrits promus de la liste d'attente dans la
+/// même transaction quand une place s'est libérée.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantChange {
+    pub participant: TournamentParticipant,
+    pub promoted: Vec<TournamentParticipant>,
+}
+
+/// Inscrit en lice avec les noms à afficher publiquement (compte et équipe de tournoi).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedParticipant {
+    pub participant: TournamentParticipant,
+    pub username: Option<String>,
+    pub team_name: Option<String>,
 }
 
 /// Réponses d'inscription vides (objet JSON).

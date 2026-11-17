@@ -28,7 +28,7 @@ pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
 pub use self::settings::{
     Category, Channel, ChannelPreferences, Language, MAX_PUSH_TOKENS, Platform, PushToken,
-    SettingsUpdate, Theme, UserSettings, override_key,
+    SettingsUpdate as UserSettingsUpdate, Theme, UserSettings, override_key,
 };
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::steps::{
@@ -41,11 +41,12 @@ pub use self::teams::{
     TournamentTeamInput, TournamentTeamMember,
 };
 pub use self::tournaments::{
-    CheckInSettlement, FieldType, ParticipantImport, ParticipantInput, ParticipantStatus,
-    ParticipantType, RegistrationField, RegistrationPolicy, RoleAssignment, RoleAuditAction,
-    RoleAuditEntry, ScoringMode, ScoringRule, ScoringRuleDefinition, ScoringRuleImport,
-    ScoringRuleInput, TeamScoringMode, Tournament, TournamentImport, TournamentInput,
-    TournamentInvitation, TournamentMode, TournamentParticipant, TournamentRole,
+    CheckInSettlement, FieldType, NamedParticipant, ParticipantChange, ParticipantImport,
+    ParticipantInput, ParticipantStatus, ParticipantType, RegistrationField, RegistrationPolicy,
+    RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringMode, ScoringRule,
+    ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput,
+    SettingsUpdate as TournamentSettingsUpdate, TeamScoringMode, Tournament, TournamentImport,
+    TournamentInput, TournamentInvitation, TournamentMode, TournamentParticipant, TournamentRole,
     TournamentSettings, TournamentStatus, TournamentUpdate, Visibility, no_responses,
 };
 
@@ -182,6 +183,8 @@ pub enum StoreError {
     InvitationExpired,
     /// La ressource visée n'existe plus ou n'accepte plus de nouveau membre ou participant.
     InvitationUnavailable,
+    /// L'équipe de tournoi a atteint la limite de titulaires ou de remplaçants (la valeur).
+    TeamRosterFull(i32),
     Other(String),
 }
 
@@ -215,6 +218,7 @@ impl fmt::Display for StoreError {
             StoreError::InvitationUnavailable => {
                 f.write_str("ressource de l'invitation indisponible")
             }
+            StoreError::TeamRosterFull(limit) => write!(f, "équipe limitée à {limit} joueurs"),
             StoreError::Other(detail) => f.write_str(detail),
         }
     }
@@ -268,6 +272,12 @@ pub trait AuthStore: Send + Sync {
     /// Cherche un compte par adresse e-mail (en minuscules).
     async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, StoreError>;
 
+    /// Find the account targeted by a verification email, including pending addresses.
+    async fn find_user_by_verification_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserRecord>, StoreError>;
+
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError>;
 
     /// Profil public d'un compte (sans empreinte de mot de passe), éventuellement mis en cache.
@@ -293,7 +303,7 @@ pub trait AuthStore: Send + Sync {
     async fn update_user_settings(
         &self,
         user_id: Uuid,
-        update: SettingsUpdate,
+        update: UserSettingsUpdate,
     ) -> Result<Option<UserSettings>, StoreError>;
 
     /// Enregistre l'appareil ; un jeton déjà connu change de propriétaire (l'appareil a changé
@@ -332,6 +342,10 @@ pub trait AuthStore: Send + Sync {
     ) -> Result<(), StoreError>;
 
     /// Supprime le compte (et ses jetons de rafraîchissement) ; `false` s'il n'existait pas.
+    /// Dans la même transaction, chaque tournoi dont il est propriétaire passe à un successeur :
+    /// le plus ancien administrateur du tournoi, sinon le plus ancien administrateur global
+    /// (transfert consigné dans le journal des rôles). Un tournoi ne perd son propriétaire que
+    /// s'il n'existe aucun autre administrateur.
     async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError>;
 
     /// Enregistre l'empreinte d'un jeton de rafraîchissement valable pendant `ttl`.
@@ -511,7 +525,9 @@ pub trait AuthStore: Send + Sync {
     ) -> Result<Option<Vec<TournamentTeamMember>>, StoreError>;
 
     /// Ajoute le compte à l'équipe de tournoi ; `None` si l'équipe ou le compte n'existe pas,
-    /// [`StoreError::PlayerAlreadyRegistered`] s'il est déjà dans une équipe de ce tournoi.
+    /// [`StoreError::PlayerAlreadyRegistered`] s'il est déjà dans une équipe de ce tournoi,
+    /// [`StoreError::TeamRosterFull`] si l'équipe a déjà le maximum de titulaires (ou de
+    /// remplaçants) permis par le tournoi. Le contrôle et l'ajout sont sérialisés par équipe.
     async fn add_tournament_team_member(
         &self,
         id: Uuid,
@@ -519,7 +535,9 @@ pub trait AuthStore: Send + Sync {
         role: TeamRole,
     ) -> Result<Option<TournamentTeamMember>, StoreError>;
 
-    /// Change le rôle d'un membre ; `None` s'il n'est pas dans l'équipe.
+    /// Change le rôle d'un membre ; `None` s'il n'est pas dans l'équipe,
+    /// [`StoreError::TeamRosterFull`] si le nouveau rôle dépasse la limite du tournoi. Le
+    /// contrôle et la modification sont sérialisés par équipe.
     async fn set_tournament_team_member_role(
         &self,
         id: Uuid,
@@ -617,15 +635,32 @@ pub trait AuthStore: Send + Sync {
         participant: ParticipantInput,
     ) -> Result<Option<TournamentParticipant>, StoreError>;
 
-    /// Change le statut d'un inscrit ; `None` s'il n'existe pas.
+    /// Change le statut d'un inscrit, sous le verrou du tournoi ; `None` s'il n'existe pas.
+    /// Passer d'un statut sans place à un statut qui en occupe une exige une place libre
+    /// ([`StoreError::TournamentFull`] sinon). Libérer une place promeut la liste d'attente dans
+    /// la même transaction (liste d'attente activée, tournoi `draft` ou `registration`).
     async fn set_participant_status(
         &self,
         id: Uuid,
         status: ParticipantStatus,
-    ) -> Result<Option<TournamentParticipant>, StoreError>;
+    ) -> Result<Option<ParticipantChange>, StoreError>;
 
-    /// Supprime l'inscription ; `false` si elle n'existait pas.
-    async fn delete_participant(&self, id: Uuid) -> Result<bool, StoreError>;
+    /// Supprime l'inscription et, si elle occupait une place, promeut la liste d'attente dans la
+    /// même transaction (mêmes conditions que [`AuthStore::set_participant_status`]) ; renvoie
+    /// les promus, `None` si l'inscription n'existait pas.
+    async fn delete_participant(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<Vec<TournamentParticipant>>, StoreError>;
+
+    /// Inscrits en lice (`registered`, `checked_in`) par date d'inscription, avec le nom du
+    /// compte et de l'équipe ; filtrés et paginés en base.
+    async fn list_named_participants(
+        &self,
+        tournament_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<NamedParticipant>, StoreError>;
 
     /// Approuve un inscrit `pending` : `registered` s'il reste une place, sinon `waitlisted`
     /// (liste d'attente activée) ou [`StoreError::TournamentFull`]. `None` s'il n'existe pas,
@@ -726,8 +761,7 @@ pub trait AuthStore: Send + Sync {
 
     async fn has_invitation(&self, tournament_id: Uuid, user_id: Uuid) -> Result<bool, StoreError>;
 
-    /// Points de chaque inscrit (par identifiant d'inscription), somme de ses points dans les
-    /// étapes du tournoi ; un inscrit absent d'une étape n'a aucun point.
+    /// Points per participant, summed across tournament steps.
     async fn participant_points(
         &self,
         tournament_id: Uuid,

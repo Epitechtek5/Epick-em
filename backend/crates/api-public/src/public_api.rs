@@ -20,7 +20,6 @@ use crate::teams::Pagination;
 use crate::tournaments::{TeamRank, find_tournament, player_ranks, settle_if_due, team_ranks};
 use actix_web::{HttpResponse, get, web};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
@@ -193,45 +192,32 @@ async fn public_participants(
 ) -> Result<HttpResponse, ApiError> {
     let tournament = public_tournament(&state, id.into_inner()).await?;
     let (limit, offset) = page.bounds();
-    let teams: HashMap<Uuid, String> = state
+    // Filtrage, pagination et noms en une requête : le coût suit la taille de la page, pas
+    // celle du tournoi.
+    let out: Vec<PublicParticipant> = state
         .store
-        .list_tournament_teams(tournament.id, i64::MAX, 0)
+        .list_named_participants(tournament.id, limit, offset)
         .await
         .map_err(ApiError::internal)?
         .into_iter()
-        .map(|team| (team.id, team.name))
-        .collect();
-    let all = state
-        .store
-        .list_participants(tournament.id, i64::MAX, 0)
-        .await
-        .map_err(ApiError::internal)?;
-    let mut out = Vec::new();
-    for participant in all.into_iter().filter(|p| {
-        matches!(
-            p.status,
-            ParticipantStatus::Registered | ParticipantStatus::CheckedIn
-        )
-    }) {
-        let team = participant
-            .tournament_team_id
-            .and_then(|id| teams.get(&id).cloned());
-        let (kind, name) = match participant.user_id {
-            Some(user_id) => ("player", username(&state, user_id).await?),
-            None => ("team", team.clone().unwrap_or_default()),
-        };
-        out.push(PublicParticipant {
-            id: participant.id,
-            kind,
-            name,
-            team: if kind == "player" { team } else { None },
-            status: participant.status,
-        });
-    }
-    let out: Vec<PublicParticipant> = out
-        .into_iter()
-        .skip(usize::try_from(offset).unwrap_or(0))
-        .take(usize::try_from(limit).unwrap_or(0))
+        .map(|named| {
+            let participant = named.participant;
+            let (kind, name, team) = match participant.user_id {
+                Some(_) => (
+                    "player",
+                    named.username.unwrap_or_default(),
+                    named.team_name,
+                ),
+                None => ("team", named.team_name.unwrap_or_default(), None),
+            };
+            PublicParticipant {
+                id: participant.id,
+                kind,
+                name,
+                team,
+                status: participant.status,
+            }
+        })
         .collect();
     Ok(HttpResponse::Ok().json(out))
 }

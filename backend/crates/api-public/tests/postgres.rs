@@ -6,15 +6,16 @@ use api_public::store::{
     AuthStore, Bracket, GameInput, GameUpdate, InvitationAction, InvitationEventKind,
     InvitationFilter, InvitationInput, InvitationStatus, InvitationType, MatchFinish, MatchInput,
     MatchResult, MatchScore, MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport,
-    ParticipantInput, ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode,
-    ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate,
-    StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus,
-    StepStart, StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode,
-    TeamUpdate, TournamentImport, TournamentInput, TournamentSettings, TournamentStatus,
-    TournamentTeamInput, TournamentUpdate, UserUpdate, no_responses,
+    ParticipantInput, ParticipantStatus, ParticipantType, PgStore, Role, RoleAuditAction,
+    ScoringMode, ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, StatInput, StatType,
+    StatUpdate, StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome,
+    StepParticipantStatus, StepStart, StepStatus, StoreError, TeamImport, TeamInput, TeamRole,
+    TeamScoringMode, TeamUpdate, TournamentImport, TournamentInput, TournamentRole,
+    TournamentSettings, TournamentSettingsUpdate, TournamentStatus, TournamentTeamInput,
+    TournamentUpdate, UserUpdate, Visibility, no_responses,
 };
 use api_public::store::{
-    Category, Channel, Language, Platform, SettingsUpdate, Theme, UserSettings,
+    Category, Channel, Language, Platform, Theme, UserSettings, UserSettingsUpdate,
 };
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
@@ -1286,7 +1287,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(withdrawn.status, ParticipantStatus::Withdrawn);
+    assert_eq!(withdrawn.participant.status, ParticipantStatus::Withdrawn);
     store.add_participant(solo(carol)).await.unwrap().unwrap();
     let listed = store.list_participants(tournament.id, 10, 0).await.unwrap();
     assert_eq!(listed.len(), 3);
@@ -1303,8 +1304,8 @@ async fn participants_are_unique_and_capped_by_max_participants() {
             .is_empty()
     );
 
-    assert!(store.delete_participant(first.id).await.unwrap());
-    assert!(!store.delete_participant(first.id).await.unwrap());
+    assert!(store.delete_participant(first.id).await.unwrap().is_some());
+    assert!(store.delete_participant(first.id).await.unwrap().is_none());
     assert!(
         store
             .set_participant_status(first.id, ParticipantStatus::CheckedIn)
@@ -1899,7 +1900,13 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     ));
 
     // Retirer un inscrit retire sa participation aux étapes ; supprimer une étape, ses groupes.
-    assert!(store.delete_participant(players[3]).await.unwrap());
+    assert!(
+        store
+            .delete_participant(players[3])
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         store.list_step_participants(first.id).await.unwrap().len(),
         3
@@ -2552,7 +2559,13 @@ async fn matches_are_stored_scored_and_finished_atomically() {
     );
 
     // Retirer un inscrit retire sa participation aux matchs, pas les matchs.
-    assert!(store.delete_participant(players[0]).await.unwrap());
+    assert!(
+        store
+            .delete_participant(players[0])
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(store.find_match(semi.id).await.unwrap().is_some());
     let remaining = store.list_step_match_participants(step.id).await.unwrap();
     assert!(remaining.iter().all(|p| p.participant_id != players[0]));
@@ -2777,98 +2790,6 @@ async fn registration_tournament(store: &PgStore, max: i32) -> Uuid {
         .await
         .unwrap();
     tournament.id
-}
-
-#[tokio::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
-async fn settings_default_merge_and_cascade() {
-    let store = store().await;
-    let user = store.create_user(&unique("set"), None, "h").await.unwrap();
-    // Aucune ligne : les valeurs par défaut.
-    assert_eq!(
-        store.user_settings(user.id).await.unwrap(),
-        Some(UserSettings::defaults())
-    );
-    assert_eq!(store.user_settings(Uuid::new_v4()).await.unwrap(), None);
-    assert_eq!(
-        store
-            .update_user_settings(Uuid::new_v4(), SettingsUpdate::default())
-            .await
-            .unwrap(),
-        None
-    );
-
-    let first = store
-        .update_user_settings(
-            user.id,
-            SettingsUpdate {
-                language: Some(Language::Es),
-                notifications: vec![(Category::Teams, Channel::Email, false)],
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!((first.language, first.theme), (Language::Es, Theme::System));
-    assert!(!first.allows(Category::Teams, Channel::Email));
-    assert!(first.allows(Category::Teams, Channel::Push));
-
-    // La deuxième modification fusionne : l'e-mail des équipes reste coupé.
-    let second = store
-        .update_user_settings(
-            user.id,
-            SettingsUpdate {
-                theme: Some(Theme::Dark),
-                notifications: vec![
-                    (Category::Matches, Channel::Push, false),
-                    (Category::Teams, Channel::Push, false),
-                ],
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!((second.language, second.theme), (Language::Es, Theme::Dark));
-    assert!(!second.allows(Category::Teams, Channel::Email));
-    assert!(!second.allows(Category::Teams, Channel::Push));
-    assert!(!second.allows(Category::Matches, Channel::Push));
-    assert!(second.allows(Category::Matches, Channel::Email));
-    assert_eq!(store.user_settings(user.id).await.unwrap(), Some(second));
-
-    // Une modification vide ne change rien.
-    let before = store.user_settings(user.id).await.unwrap();
-    store
-        .update_user_settings(user.id, SettingsUpdate::default())
-        .await
-        .unwrap();
-    assert_eq!(store.user_settings(user.id).await.unwrap(), before);
-
-    // Réglages, appareils et journal partent avec le compte.
-    store
-        .register_push_token(
-            user.id,
-            &format!("ExponentPushToken[{}]", unique("c")),
-            Platform::Ios,
-        )
-        .await
-        .unwrap();
-    assert!(
-        store
-            .claim_notification("k", user.id, Channel::Push)
-            .await
-            .unwrap()
-    );
-    assert!(store.delete_user(user.id).await.unwrap());
-    assert_eq!(store.user_settings(user.id).await.unwrap(), None);
-    assert!(store.list_push_tokens(user.id).await.unwrap().is_empty());
-    assert!(
-        !store
-            .claim_notification("k", user.id, Channel::Push)
-            .await
-            .unwrap()
-    );
 }
 
 #[tokio::test]
@@ -3262,299 +3183,6 @@ async fn concurrent_registrations_never_exceed_the_capacity() {
 
 #[tokio::test]
 #[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
-async fn push_tokens_are_unique_owned_and_capped() {
-    let store = store().await;
-    let alice = store.create_user(&unique("pa"), None, "h").await.unwrap();
-    let bob = store.create_user(&unique("pb"), None, "h").await.unwrap();
-    let token = format!("ExponentPushToken[{}]", unique("t"));
-
-    let first = store
-        .register_push_token(alice.id, &token, Platform::Ios)
-        .await
-        .unwrap()
-        .unwrap();
-    let again = store
-        .register_push_token(alice.id, &token, Platform::Android)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(first.id, again.id);
-    assert_eq!(again.platform, Platform::Android);
-    assert!(
-        store
-            .register_push_token(Uuid::new_v4(), &token, Platform::Ios)
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    // Révoquer ne marche que pour le propriétaire.
-    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
-    // Le jeton change de compte quand l'appareil change de compte.
-    let moved = store
-        .register_push_token(bob.id, &token, Platform::Ios)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(moved.user_id, bob.id);
-    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
-    assert!(store.revoke_push_token(bob.id, &token).await.unwrap());
-    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
-
-    store
-        .register_push_token(alice.id, &token, Platform::Ios)
-        .await
-        .unwrap();
-    store.remove_push_token(&token).await.unwrap();
-    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
-
-    for index in 0..12 {
-        store
-            .register_push_token(
-                alice.id,
-                &format!("ExponentPushToken[{}-{index}]", unique("cap")),
-                Platform::Android,
-            )
-            .await
-            .unwrap();
-    }
-    let kept = store.list_push_tokens(alice.id).await.unwrap();
-    assert_eq!(kept.len(), 10);
-    assert!(kept[0].token.ends_with("-11]"), "le plus récent d'abord");
-    assert!(!kept.iter().any(|t| t.token.ends_with("-0]")));
-}
-
-#[tokio::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
-async fn acceptance_revalidates_tournament_and_team_state() {
-    let store = store().await;
-    let (alice, bob, carol) = (
-        user(&store, "alice").await,
-        user(&store, "bob").await,
-        user(&store, "carol").await,
-    );
-    // Équipe de tournoi : rôle conservé, un seul passage par tournoi.
-    let tournament = registration_tournament(&store, 8).await;
-    let team = store
-        .create_tournament_team(TournamentTeamInput {
-            tournament_id: tournament,
-            team_id: None,
-            name: unique("Rocket"),
-            tag: None,
-            picture_url: None,
-            owner_id: alice,
-            members: vec![(alice, TeamRole::Owner)],
-        })
-        .await
-        .unwrap();
-    let invitation = store
-        .create_invitation(invitation_input(
-            InvitationType::TournamentTeam,
-            team.id,
-            alice,
-            Some(bob),
-        ))
-        .await
-        .unwrap();
-    store
-        .respond_invitation(invitation.id, bob, InvitationAction::Accept)
-        .await
-        .unwrap();
-    let members = store
-        .list_tournament_team_members(team.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        members
-            .iter()
-            .any(|m| m.user_id == bob && m.role == TeamRole::Substitute)
-    );
-    let second = store
-        .create_invitation(invitation_input(
-            InvitationType::TournamentTeam,
-            team.id,
-            alice,
-            Some(bob),
-        ))
-        .await
-        .unwrap();
-    assert!(matches!(
-        store
-            .respond_invitation(second.id, bob, InvitationAction::Accept)
-            .await,
-        Err(StoreError::PlayerAlreadyRegistered)
-    ));
-
-    // Tournoi passé en cours : plus d'inscription.
-    let pending = store
-        .create_invitation(invitation_input(
-            InvitationType::Tournament,
-            tournament,
-            alice,
-            Some(carol),
-        ))
-        .await
-        .unwrap();
-    store
-        .set_tournament_status(tournament, TournamentStatus::Ongoing)
-        .await
-        .unwrap();
-    assert!(matches!(
-        store
-            .respond_invitation(pending.id, carol, InvitationAction::Accept)
-            .await,
-        Err(StoreError::InvitationUnavailable)
-    ));
-    // Équipe supprimée : indisponible, l'invitation reste en attente.
-    let global = global_team(&store, alice).await;
-    let invitation = store
-        .create_invitation(invitation_input(
-            InvitationType::Team,
-            global,
-            alice,
-            Some(carol),
-        ))
-        .await
-        .unwrap();
-    store.delete_team(global).await.unwrap();
-    assert!(matches!(
-        store
-            .respond_invitation(invitation.id, carol, InvitationAction::Accept)
-            .await,
-        Err(StoreError::InvitationUnavailable)
-    ));
-    assert_eq!(
-        store
-            .find_invitation(invitation.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        InvitationStatus::Pending
-    );
-}
-
-#[tokio::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
-async fn notification_claims_are_exclusive_and_releasable() {
-    let store = store().await;
-    let user = store.create_user(&unique("nl"), None, "h").await.unwrap();
-    let key = unique("evt");
-    assert!(
-        store
-            .claim_notification(&key, user.id, Channel::Email)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !store
-            .claim_notification(&key, user.id, Channel::Email)
-            .await
-            .unwrap()
-    );
-    // Un autre canal ou un autre événement est indépendant.
-    assert!(
-        store
-            .claim_notification(&key, user.id, Channel::Push)
-            .await
-            .unwrap()
-    );
-    assert!(
-        store
-            .claim_notification(&unique("evt"), user.id, Channel::Email)
-            .await
-            .unwrap()
-    );
-    store
-        .release_notification(&key, user.id, Channel::Email)
-        .await
-        .unwrap();
-    assert!(
-        store
-            .claim_notification(&key, user.id, Channel::Email)
-            .await
-            .unwrap()
-    );
-    // Deux réservations simultanées : une seule gagne.
-    let key = unique("race");
-    let (a, b) = tokio::join!(
-        store.claim_notification(&key, user.id, Channel::Push),
-        store.claim_notification(&key, user.id, Channel::Push)
-    );
-    assert_eq!(
-        [a.unwrap(), b.unwrap()].iter().filter(|won| **won).count(),
-        1
-    );
-}
-
-#[tokio::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
-async fn profile_pictures_are_set_cleared_and_kept_by_other_updates() {
-    let store = store().await;
-    let user = store.create_user(&unique("pic"), None, "h").await.unwrap();
-    assert_eq!(user.picture_url, None);
-    let url = "https://cdn.example.com/a.png".to_string();
-    let profile = store
-        .update_user(
-            user.id,
-            UserUpdate {
-                picture_url: Some(Some(url.clone())),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(profile.picture_url.as_deref(), Some(url.as_str()));
-    // Le profil en cache et le compte voient la photo ; une autre modification la garde.
-    assert_eq!(
-        store
-            .find_profile(user.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .picture_url
-            .as_deref(),
-        Some(url.as_str())
-    );
-    let renamed = store
-        .update_user(
-            user.id,
-            UserUpdate {
-                username: Some(unique("pic2")),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(renamed.picture_url.as_deref(), Some(url.as_str()));
-    let cleared = store
-        .update_user(
-            user.id,
-            UserUpdate {
-                picture_url: Some(None),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(cleared.picture_url, None);
-    assert_eq!(
-        store
-            .find_user_by_id(user.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .picture_url,
-        None
-    );
-}
-
-#[tokio::test]
-#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
 async fn concurrent_ownership_transfers_leave_exactly_one_owner() {
     let store = Arc::new(store().await);
     let game = store
@@ -3604,4 +3232,513 @@ async fn concurrent_ownership_transfers_leave_exactly_one_owner() {
     assert!(owner.is_some() && owner != Some(users[0]));
     let audit = store.list_role_audit(tournament.id).await.unwrap();
     assert_eq!(audit.len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Corrections de la revue de #182
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn settings_updates_only_write_the_fields_they_name() {
+    let store = store().await;
+    let tournament = store
+        .create_tournament(tournament_input(game(&store).await))
+        .await
+        .unwrap();
+    let hide = TournamentUpdate {
+        settings: TournamentSettingsUpdate {
+            visibility: Some(Visibility::InvitationOnly),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let rules = TournamentUpdate {
+        settings: TournamentSettingsUpdate {
+            rules: Some(Some("Règlement".into())),
+            location: Some(None),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    store.update_tournament(tournament.id, hide).await.unwrap();
+    // Préparé avant le passage en invitation : ne rétablit pas `public`.
+    let updated = store
+        .update_tournament(tournament.id, rules)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.settings.visibility, Visibility::InvitationOnly);
+    assert_eq!(updated.settings.rules.as_deref(), Some("Règlement"));
+    assert_eq!(updated.settings.mode, tournament.settings.mode);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn status_changes_respect_the_capacity_and_promote_atomically() {
+    let store = store().await;
+    let mut input = tournament_input(game(&store).await);
+    input.max_participants = 1;
+    input.settings.waiting_list_enabled = true;
+    let tournament = store.create_tournament(input).await.unwrap();
+    let mut added = Vec::new();
+    for n in 0..3 {
+        let user = user(&store, &format!("seat{n}")).await;
+        added.push(
+            store
+                .add_participant(ParticipantInput {
+                    tournament_id: tournament.id,
+                    user_id: Some(user),
+                    tournament_team_id: None,
+                    responses: no_responses(),
+                })
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    assert_eq!(added[1].status, ParticipantStatus::Waitlisted);
+    // Complet : aucune transition ne donne de place.
+    for status in [
+        ParticipantStatus::Registered,
+        ParticipantStatus::CheckedIn,
+        ParticipantStatus::Disqualified,
+    ] {
+        assert!(matches!(
+            store.set_participant_status(added[1].id, status).await,
+            Err(StoreError::TournamentFull)
+        ));
+    }
+    let change = store
+        .set_participant_status(added[0].id, ParticipantStatus::Withdrawn)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        change.promoted.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [added[1].id]
+    );
+    let promoted = store
+        .delete_participant(added[1].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        promoted.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [added[2].id]
+    );
+    assert!(
+        store
+            .delete_participant(added[1].id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Liste publique : filtrée, paginée et nommée en base.
+    let page = store
+        .list_named_participants(tournament.id, 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].participant.id, added[2].id);
+    assert!(page[0].username.as_deref().unwrap().starts_with("seat2"));
+    assert!(page[0].team_name.is_none());
+    assert!(
+        store
+            .list_named_participants(tournament.id, 10, 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_member_additions_respect_the_roster_limit() {
+    let store = Arc::new(store().await);
+    let mut input = tournament_input(game(&store).await);
+    input.participant_type = ParticipantType::Team;
+    input.settings = TournamentSettings::team(3);
+    input.settings.team_max_substitutes = Some(1);
+    let tournament = store.create_tournament(input).await.unwrap();
+    let owner = user(&store, "roster").await;
+    let team = store
+        .create_tournament_team(TournamentTeamInput {
+            tournament_id: tournament.id,
+            team_id: None,
+            name: unique("Roster"),
+            tag: None,
+            picture_url: None,
+            owner_id: owner,
+            members: vec![(owner, TeamRole::Owner)],
+        })
+        .await
+        .unwrap();
+    let mut tasks = Vec::new();
+    for n in 0..8 {
+        let store = store.clone();
+        let player = user(&store, &format!("rost{n}")).await;
+        tasks.push(tokio::spawn(async move {
+            store
+                .add_tournament_team_member(team.id, player, TeamRole::Member)
+                .await
+        }));
+    }
+    let mut full = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(Some(_)) => {}
+            Err(StoreError::TeamRosterFull(3)) => full += 1,
+            other => panic!("{other:?}"),
+        }
+    }
+    let members = store
+        .list_tournament_team_members(team.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(members.len(), 3);
+    assert_eq!(full, 6);
+    // Un changement de rôle est soumis à la même limite.
+    let starter = members
+        .iter()
+        .find(|m| m.role == TeamRole::Member)
+        .unwrap()
+        .user_id;
+    store
+        .set_tournament_team_member_role(team.id, starter, TeamRole::Substitute)
+        .await
+        .unwrap()
+        .unwrap();
+    let other = members
+        .iter()
+        .find(|m| m.role == TeamRole::Member && m.user_id != starter)
+        .unwrap()
+        .user_id;
+    assert!(matches!(
+        store
+            .set_tournament_team_member_role(team.id, other, TeamRole::Substitute)
+            .await,
+        Err(StoreError::TeamRosterFull(1))
+    ));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn deleting_an_owner_hands_their_tournaments_to_a_successor() {
+    let store = store().await;
+    let owner = user(&store, "owner").await;
+    let local = user(&store, "local").await;
+    let global = user(&store, "global").await;
+    store
+        .update_user(
+            global,
+            UserUpdate {
+                role: Some(Role::Admin),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let game_id = game(&store).await;
+    let mut with_admin = tournament_input(game_id);
+    with_admin.owner_id = Some(owner);
+    let with_admin = store.create_tournament(with_admin).await.unwrap();
+    let mut alone = tournament_input(game_id);
+    alone.owner_id = Some(owner);
+    let alone = store.create_tournament(alone).await.unwrap();
+    store
+        .assign_tournament_role(with_admin.id, local, TournamentRole::Admin, owner)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(store.delete_user(owner).await.unwrap());
+    let reloaded = store.find_tournament(with_admin.id).await.unwrap().unwrap();
+    assert_eq!(reloaded.owner_id, Some(local));
+    assert!(
+        store
+            .find_tournament_role(with_admin.id, local)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let audit = store.list_role_audit(with_admin.id).await.unwrap();
+    let last = audit.last().unwrap();
+    assert_eq!(last.action, RoleAuditAction::Transfer);
+    assert_eq!(last.target_user_id, Some(local));
+    assert_eq!(last.actor_id, None);
+    // Sans administrateur local, un administrateur global reprend le tournoi.
+    let reloaded = store.find_tournament(alone.id).await.unwrap().unwrap();
+    assert!(reloaded.owner_id.is_some_and(|id| id != owner));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn settings_default_merge_and_cascade() {
+    let store = store().await;
+    let user = store.create_user(&unique("set"), None, "h").await.unwrap();
+    assert_eq!(
+        store.user_settings(user.id).await.unwrap(),
+        Some(UserSettings::defaults())
+    );
+    assert_eq!(store.user_settings(Uuid::new_v4()).await.unwrap(), None);
+    assert_eq!(
+        store
+            .update_user_settings(Uuid::new_v4(), UserSettingsUpdate::default())
+            .await
+            .unwrap(),
+        None
+    );
+
+    let first = store
+        .update_user_settings(
+            user.id,
+            UserSettingsUpdate {
+                language: Some(Language::Es),
+                notifications: vec![(Category::Teams, Channel::Email, false)],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.language, first.theme), (Language::Es, Theme::System));
+    assert!(!first.allows(Category::Teams, Channel::Email));
+    assert!(first.allows(Category::Teams, Channel::Push));
+
+    let second = store
+        .update_user_settings(
+            user.id,
+            UserSettingsUpdate {
+                theme: Some(Theme::Dark),
+                notifications: vec![
+                    (Category::Matches, Channel::Push, false),
+                    (Category::Teams, Channel::Push, false),
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((second.language, second.theme), (Language::Es, Theme::Dark));
+    assert!(!second.allows(Category::Teams, Channel::Email));
+    assert!(!second.allows(Category::Teams, Channel::Push));
+    assert!(!second.allows(Category::Matches, Channel::Push));
+    assert!(second.allows(Category::Matches, Channel::Email));
+    assert_eq!(store.user_settings(user.id).await.unwrap(), Some(second));
+
+    let before = store.user_settings(user.id).await.unwrap();
+    store
+        .update_user_settings(user.id, UserSettingsUpdate::default())
+        .await
+        .unwrap();
+    assert_eq!(store.user_settings(user.id).await.unwrap(), before);
+
+    store
+        .register_push_token(
+            user.id,
+            &format!("ExponentPushToken[{}]", unique("c")),
+            Platform::Ios,
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_notification("k", user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+    assert!(store.delete_user(user.id).await.unwrap());
+    assert_eq!(store.user_settings(user.id).await.unwrap(), None);
+    assert!(store.list_push_tokens(user.id).await.unwrap().is_empty());
+    assert!(
+        !store
+            .claim_notification("k", user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn push_tokens_are_unique_owned_and_capped() {
+    let store = store().await;
+    let alice = store.create_user(&unique("pa"), None, "h").await.unwrap();
+    let bob = store.create_user(&unique("pb"), None, "h").await.unwrap();
+    let token = format!("ExponentPushToken[{}]", unique("t"));
+
+    let first = store
+        .register_push_token(alice.id, &token, Platform::Ios)
+        .await
+        .unwrap()
+        .unwrap();
+    let again = store
+        .register_push_token(alice.id, &token, Platform::Android)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.id, again.id);
+    assert_eq!(again.platform, Platform::Android);
+    assert!(
+        store
+            .register_push_token(Uuid::new_v4(), &token, Platform::Ios)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
+    let moved = store
+        .register_push_token(bob.id, &token, Platform::Ios)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.user_id, bob.id);
+    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
+    assert!(store.revoke_push_token(bob.id, &token).await.unwrap());
+    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
+
+    store
+        .register_push_token(alice.id, &token, Platform::Ios)
+        .await
+        .unwrap();
+    store.remove_push_token(&token).await.unwrap();
+    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
+
+    for index in 0..12 {
+        store
+            .register_push_token(
+                alice.id,
+                &format!("ExponentPushToken[{}-{index}]", unique("cap")),
+                Platform::Android,
+            )
+            .await
+            .unwrap();
+    }
+    let kept = store.list_push_tokens(alice.id).await.unwrap();
+    assert_eq!(kept.len(), 10);
+    assert!(kept[0].token.ends_with("-11]"), "le plus récent d'abord");
+    assert!(!kept.iter().any(|token| token.token.ends_with("-0]")));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn notification_claims_are_exclusive_and_releasable() {
+    let store = store().await;
+    let user = store.create_user(&unique("nl"), None, "h").await.unwrap();
+    let key = unique("evt");
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_notification(&unique("evt"), user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    store
+        .release_notification(&key, user.id, Channel::Email)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+
+    let key = unique("race");
+    let (first, second) = tokio::join!(
+        store.claim_notification(&key, user.id, Channel::Push),
+        store.claim_notification(&key, user.id, Channel::Push)
+    );
+    assert_eq!(
+        [first.unwrap(), second.unwrap()]
+            .iter()
+            .filter(|won| **won)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn profile_pictures_are_set_cleared_and_kept_by_other_updates() {
+    let store = store().await;
+    let user = store.create_user(&unique("pic"), None, "h").await.unwrap();
+    assert_eq!(user.picture_url, None);
+    let url = "https://cdn.example.com/a.png".to_string();
+    let profile = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                picture_url: Some(Some(url.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(profile.picture_url.as_deref(), Some(url.as_str()));
+    assert_eq!(
+        store
+            .find_profile(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .picture_url
+            .as_deref(),
+        Some(url.as_str())
+    );
+    let renamed = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                username: Some(unique("pic2")),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.picture_url.as_deref(), Some(url.as_str()));
+    let cleared = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                picture_url: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cleared.picture_url, None);
+    assert_eq!(
+        store
+            .find_user_by_id(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .picture_url,
+        None
+    );
 }

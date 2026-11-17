@@ -11,7 +11,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_is_set() {
-        assert!(!VERSION.is_empty());
+    fn version_has_a_semver_core() {
+        let components = VERSION.split('.').collect::<Vec<_>>();
+
+        assert_eq!(components.len(), 3);
+        assert!(
+            components
+                .iter()
+                .all(|component| component.parse::<u64>().is_ok())
+        );
     }
 }

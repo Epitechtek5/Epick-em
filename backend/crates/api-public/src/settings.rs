@@ -6,7 +6,7 @@
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
 use crate::push::is_valid_token;
-use crate::store::{Category, Language, Platform, SettingsUpdate, Theme, UserSettings};
+use crate::store::{Category, Language, Platform, Theme, UserSettings, UserSettingsUpdate};
 use crate::store::{Channel, PushToken};
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::{Deserialize, Serialize};
@@ -111,7 +111,7 @@ async fn update_settings(
         .store
         .update_user_settings(
             claims.sub,
-            SettingsUpdate {
+            UserSettingsUpdate {
                 language,
                 theme,
                 notifications: changes,

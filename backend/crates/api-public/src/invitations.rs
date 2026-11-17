@@ -59,6 +59,8 @@ impl Default for InvitationTtl {
 /// validée. Le moteur de notifications (e-mail localisé, push) s'y branche.
 #[derive(Debug, Clone)]
 pub struct InvitationNotification {
+    /// Distinguishes an explicit resend from the original delivery.
+    pub delivery_id: Option<Uuid>,
     pub kind: InvitationEventKind,
     pub invitation: Invitation,
     /// Auteur du fait ; `None` pour une expiration.
@@ -125,7 +127,10 @@ impl InvitationNotifier for EngineInvitationNotifier {
         self.notifier
             .deliver(Event {
                 kind,
-                key: format!("{kind}:{}:{actor}", invitation.id),
+                key: match notification.delivery_id {
+                    Some(delivery) => format!("{kind}:{}:{actor}:{delivery}", invitation.id),
+                    None => format!("{kind}:{}:{actor}", invitation.id),
+                },
                 audience: Audience::Users(recipients),
                 payload: serde_json::json!({
                     "invitation_id": invitation.id,
@@ -179,6 +184,7 @@ fn publish(
 ) {
     let notifier = state.invitation_notifier.clone();
     let notification = InvitationNotification {
+        delivery_id: None,
         kind,
         invitation: invitation.clone(),
         actor_id: actor,
@@ -224,6 +230,7 @@ pub fn routes(cfg: &mut ServiceConfig) {
         .service(accept_invitation)
         .service(decline_invitation)
         .service(revoke_invitation)
+        .service(resend_invitation)
         .service(resolve_link)
         .service(accept_link);
 }
@@ -585,8 +592,84 @@ async fn revoke_invitation(
     Ok(HttpResponse::Ok().json(invitation))
 }
 
-/// Résout un lien d'invitation pour un compte connecté : type, nom de la ressource et invitant,
-/// sans rien de privé. Un lien inconnu, expiré, révoqué ou épuisé répond toujours 404.
+/// Queues another delivery without extending the invitation lifetime.
+#[utoipa::path(
+    post, path = "/invitations/{id}/resend", tag = "invitations",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Invitation ID")),
+    responses(
+        (status = 200, description = "Delivery queued; expiration is unchanged", body = Invitation),
+        (status = 401, description = "Authentication required", body = ErrorResponse),
+        (status = 403, description = "Sender permission required", body = ErrorResponse),
+        (status = 404, description = "Invitation not found", body = ErrorResponse),
+        (status = 409, description = "Invitation cannot be resent", body = ErrorResponse),
+        (status = 410, description = "Invitation expired", body = ErrorResponse),
+        (status = 429, description = "A resend was already requested this minute"),
+    ),
+)]
+#[post("/invitations/{id}/resend")]
+async fn resend_invitation(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    id: web::Path<Uuid>,
+) -> Result<HttpResponse, ApiError> {
+    expire_due(&state).await?;
+    let invitation = visible_invitation(&state, &claims, id.into_inner()).await?;
+    if invitation.inviter_id != claims.sub {
+        return Err(ApiError::Forbidden);
+    }
+    if invitation.status == InvitationStatus::Expired {
+        return Err(ApiError::InvitationExpired);
+    }
+    if invitation.status != InvitationStatus::Pending || invitation.is_link {
+        return Err(ApiError::InvitationNotPending);
+    }
+    authorize_creation(
+        &state,
+        &claims,
+        &CreateInvitationRequest {
+            kind: invitation.kind,
+            resource_id: invitation.resource_id,
+            recipient_id: invitation.recipient_id,
+            role: invitation.role,
+            max_uses: None,
+            expires_in_hours: None,
+        },
+    )
+    .await?;
+    // Use the shared persistent claim store to limit concurrent resend requests.
+    let minute = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(ApiError::internal)?
+        .as_secs()
+        / 60;
+    let key = format!("invitation.resend:{}:{minute}", invitation.id);
+    if !state
+        .store
+        .claim_notification(&key, claims.sub, crate::store::Channel::Email)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Ok(HttpResponse::TooManyRequests()
+            .json(serde_json::json!({ "error": "resend_rate_limit" })));
+    }
+    let notifier = state.invitation_notifier.clone();
+    let notification = InvitationNotification {
+        kind: InvitationEventKind::Created,
+        invitation: invitation.clone(),
+        actor_id: Some(claims.sub),
+        delivery_id: Some(Uuid::new_v4()),
+    };
+    actix_web::rt::spawn(async move {
+        if let Err(error) = notifier.notify(notification).await {
+            eprintln!("Invitation resend delivery failed: {error}");
+        }
+    });
+    Ok(HttpResponse::Ok().json(invitation))
+}
+
+/// Resolves an invitation link without revealing private resource data.
+/// Unknown, expired, revoked and exhausted links all return 404.
 #[utoipa::path(
     get,
     path = "/invitation-links/{token}",
@@ -895,6 +978,7 @@ fn invitation_error(err: StoreError) -> ApiError {
         StoreError::PlayerAlreadyRegistered => ApiError::PlayerAlreadyRegistered,
         StoreError::AlreadyParticipant => ApiError::AlreadyRegistered,
         StoreError::TournamentFull => ApiError::TournamentFull,
+        StoreError::TeamRosterFull(_) => ApiError::InvitationUnavailable,
         other => ApiError::internal(other),
     }
 }
