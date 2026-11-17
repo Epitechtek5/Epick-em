@@ -136,6 +136,8 @@ pub struct UserUpdate {
 pub enum StoreError {
     /// Le nom d'utilisateur existe déjà (sans tenir compte de la casse).
     UsernameTaken,
+    PredictionLocked,
+    PickemLocked,
     /// Le nom de jeu existe déjà (sans tenir compte de la casse).
     GameNameTaken,
     /// La clé de statistique existe déjà.
@@ -172,6 +174,8 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StoreError::PredictionLocked => f.write_str("prediction locked"),
+            StoreError::PickemLocked => f.write_str("question locked"),
             StoreError::UsernameTaken => f.write_str("nom d'utilisateur déjà pris"),
             StoreError::GameNameTaken => f.write_str("nom de jeu déjà pris"),
             StoreError::StatKeyTaken => f.write_str("clé de statistique déjà prise"),
@@ -201,7 +205,11 @@ impl std::error::Error for StoreError {}
 
 impl From<sqlx::Error> for StoreError {
     fn from(err: sqlx::Error) -> Self {
-        StoreError::Other(err.to_string())
+        match err.as_database_error().and_then(|e| e.code()).as_deref() {
+            Some("P2001") => StoreError::PredictionLocked,
+            Some("P2002") => StoreError::PickemLocked,
+            _ => StoreError::Other(err.to_string()),
+        }
     }
 }
 

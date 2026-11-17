@@ -6,8 +6,8 @@
 //! saisie locale ou changement venu de start.gg — se répercute à la résolution suivante.
 //!
 //! api-internal appelle [`resolve_pending`] à intervalle régulier (`RESOLVE_INTERVAL_SECS`). Un
-//! tournoi local terminé et entièrement résolu est marqué réglé et n'est plus relu ; un tournoi
-//! importé ne l'est jamais, sa source pouvant encore corriger un résultat.
+//! finished tournament remains eligible for recalculation: local and external results can
+//! still be corrected after completion.
 
 use crate::store::{
     Answer, AuthStore, Match, MatchParticipant, MatchResult, MatchStatus, PickOutcome, Prediction,
@@ -25,8 +25,11 @@ pub struct ResolutionReport {
     pub tournament_id: Uuid,
     pub predictions: usize,
     pub answers: usize,
-    /// Plus rien ne changera : le tournoi ne sera plus relu.
+    /// All current results are final; later corrections are still recalculated.
     pub settled: bool,
+    pub changed: usize,
+    /// IDs whose prediction/answer windows are currently closed.
+    pub locked: Vec<Uuid>,
 }
 
 /// État d'un match, vu par les pronostics : annulé (ou supprimé) → sans objet, terminé → rangs
@@ -296,11 +299,39 @@ pub async fn resolve_tournament(
     );
     let imported = store.imports().summary(tournament_id).await.is_some();
     let settled = over && all_final && !imported;
+    let changed = resolved_predictions
+        .iter()
+        .zip(&predictions)
+        .filter(|(r, p)| r.outcome != p.outcome || r.points != p.points)
+        .count()
+        + resolved_answers
+            .iter()
+            .filter(|r| {
+                answers
+                    .iter()
+                    .any(|a| a.id == r.id && (a.outcome != r.outcome || a.points != r.points))
+            })
+            .count();
+    let now = crate::store::now_rfc3339();
+    let mut locked: Vec<Uuid> = matches
+        .values()
+        .filter(|m| crate::predictions::is_locked(m, &facts.tournament, &now))
+        .map(|m| m.id)
+        .chain(
+            questions
+                .values()
+                .filter(|q| q.locks_at <= now || over)
+                .map(|q| q.id),
+        )
+        .collect();
+    locked.sort_unstable();
     let report = ResolutionReport {
         tournament_id,
         predictions: resolved_predictions.len(),
         answers: resolved_answers.len(),
         settled,
+        changed,
+        locked,
     };
     pickem
         .save_resolution(

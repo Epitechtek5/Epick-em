@@ -8,6 +8,14 @@
 //!
 //! Les points sont attribués par la résolution ([`resolution`](crate::resolution)).
 
+fn write_error(err: crate::store::StoreError) -> ApiError {
+    match err {
+        crate::store::StoreError::PredictionLocked => ApiError::PredictionLocked,
+        crate::store::StoreError::PickemLocked => ApiError::PickemLocked,
+        other => ApiError::internal(other),
+    }
+}
+
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
 use crate::external::is_external;
@@ -86,6 +94,8 @@ struct QuestionView {
 #[derive(Deserialize, ToSchema)]
 struct CreateQuestionRequest {
     kind: QuestionKind,
+    /// Opening time; defaults to now. Questions become immutable when answers open.
+    opens_at: Option<String>,
     /// `{"step_id": "…"}` pour `step_qualifiers`, rien pour les autres modèles.
     #[schema(value_type = Option<Object>)]
     params: Option<Value>,
@@ -131,7 +141,7 @@ async fn templates(state: &AppState, tournament: &Tournament) -> Result<Vec<Temp
         .store
         .list_scoring_rules(tournament.id)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     let top_scorer_reason = if over {
         over_reason()
     } else if external {
@@ -146,7 +156,7 @@ async fn templates(state: &AppState, tournament: &Tournament) -> Result<Vec<Temp
         .store
         .list_steps(tournament.id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .into_iter()
         .filter(|s| s.status != StepStatus::Finished && expected_qualifiers(s) > 0)
         .map(|s| EligibleStep {
@@ -191,7 +201,7 @@ async fn find_question(
         .pickem()
         .find_question(question_id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .filter(|q| q.tournament_id == tournament_id)
         .ok_or(ApiError::NotFound)
 }
@@ -202,11 +212,7 @@ async fn expected_of(state: &AppState, question: &Question) -> Result<usize, Api
         return Ok(1);
     }
     let step = match step_param(&question.params) {
-        Some(id) => state
-            .store
-            .find_step(id)
-            .await
-            .map_err(ApiError::internal)?,
+        Some(id) => state.store.find_step(id).await.map_err(write_error)?,
         None => None,
     };
     Ok(step.map(|s| expected_qualifiers(&s)).unwrap_or(1))
@@ -262,11 +268,11 @@ async fn get_pickem(
     let questions = pickem
         .list_questions(tournament.id)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     let mut answers: HashMap<Uuid, Answer> = pickem
         .list_user_answers(claims.sub, tournament.id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .into_iter()
         .map(|a| (a.question_id, a))
         .collect();
@@ -274,7 +280,7 @@ async fn get_pickem(
     let mut views = Vec::with_capacity(questions.len());
     for question in questions {
         views.push(QuestionView {
-            locked: locked(&question, &tournament, &now),
+            locked: question.opens_at > now || locked(&question, &tournament, &now),
             expected: expected_of(&state, &question).await?,
             my_answer: answers.remove(&question.id),
             question,
@@ -366,6 +372,22 @@ async fn create_question(
             .unwrap_or(&tournament.start_date),
         &now,
     )?;
+    let opens_at = request
+        .opens_at
+        .as_deref()
+        .map(|value| {
+            normalize_timestamp(value).ok_or_else(|| {
+                ApiError::Validation(vec![("opens_at", "Invalid timestamp.".into())])
+            })
+        })
+        .transpose()?
+        .unwrap_or_else(|| now.clone());
+    if opens_at >= locks_at {
+        return Err(ApiError::Validation(vec![(
+            "opens_at",
+            "Opening must precede closing.".into(),
+        )]));
+    }
     let question = state
         .store
         .pickem()
@@ -376,14 +398,15 @@ async fn create_question(
             points: request
                 .points
                 .unwrap_or_else(|| default_points(request.kind)),
+            opens_at,
             locks_at,
         })
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     Ok(HttpResponse::Created().json(question))
 }
 
-/// Change les points ou la fermeture d'une question encore ouverte (administrateur).
+/// Changes points or closing time before answers open (administrator).
 #[utoipa::path(
     patch,
     path = "/tournaments/{id}/pickem/questions/{question_id}",
@@ -415,7 +438,7 @@ async fn update_question(
     let tournament = find_tournament(&state, tournament_id).await?;
     let question = find_question(&state, tournament_id, question_id).await?;
     let now = now_rfc3339();
-    if locked(&question, &tournament, &now) {
+    if question.opens_at <= now || locked(&question, &tournament, &now) {
         return Err(ApiError::PickemLocked);
     }
     let request = body.into_inner();
@@ -425,6 +448,12 @@ async fn update_question(
         .as_deref()
         .map(|value| validate_locks_at(value, &now))
         .transpose()?;
+    if locks_at.as_ref().is_some_and(|at| at <= &question.opens_at) {
+        return Err(ApiError::Validation(vec![(
+            "locks_at",
+            "Closing must follow opening.".into(),
+        )]));
+    }
     let updated = state
         .store
         .pickem()
@@ -436,12 +465,12 @@ async fn update_question(
             },
         )
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(updated))
 }
 
-/// Supprime une question encore ouverte et ses réponses (administrateur).
+/// Deletes a question before answers open (administrator).
 #[utoipa::path(
     delete,
     path = "/tournaments/{id}/pickem/questions/{question_id}",
@@ -469,7 +498,7 @@ async fn delete_question(
     let (tournament_id, question_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
     let question = find_question(&state, tournament_id, question_id).await?;
-    if locked(&question, &tournament, &now_rfc3339()) {
+    if question.opens_at <= now_rfc3339() || locked(&question, &tournament, &now_rfc3339()) {
         return Err(ApiError::PickemLocked);
     }
     state
@@ -477,7 +506,7 @@ async fn delete_question(
         .pickem()
         .delete_question(question_id)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     Ok(HttpResponse::NoContent().finish())
 }
 
@@ -510,7 +539,7 @@ async fn answer_question(
     let (tournament_id, question_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
     let question = find_question(&state, tournament_id, question_id).await?;
-    if locked(&question, &tournament, &now_rfc3339()) {
+    if question.opens_at > now_rfc3339() || locked(&question, &tournament, &now_rfc3339()) {
         return Err(ApiError::PickemLocked);
     }
     let request = body.into_inner();
@@ -551,7 +580,7 @@ async fn answer_question(
         .store
         .list_participants(tournament_id, PARTICIPANTS_LIMIT, 0)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .into_iter()
         .map(|p| p.id)
         .collect();
@@ -576,6 +605,6 @@ async fn answer_question(
             answer,
         })
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     Ok(HttpResponse::Ok().json(saved))
 }

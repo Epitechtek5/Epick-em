@@ -34,3 +34,5 @@ databaseChangeLog:
       file: changelog/0017-external-sources.yaml
   - include:
       file: changelog/0019-predictions-pickem.yaml
+  - include:
+      file: changelog/0020-pickem-write-guards.yaml

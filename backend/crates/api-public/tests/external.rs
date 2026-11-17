@@ -994,7 +994,7 @@ async fn spectators_predict_imported_tournaments() {
     let promoted = store.clone();
     let (app, s) = build(
         store.clone(),
-        Arc::new(MemorySyncStore::new()),
+        Arc::new(MemorySyncStore::new().with_projection_cache(store.imports().cache())),
         "root",
         |name| async move { promoted.set_role(&name, Role::Admin) },
     )
