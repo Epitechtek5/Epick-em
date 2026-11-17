@@ -37,6 +37,7 @@ export function useParticipantIdentities(tournament: Pick<Tournament, 'id' | 'pa
     const teamId = participant.tournament_team_id ?? undefined
     const teamName = teamId ? (known?.teams.get(teamId) ?? t('tournaments.participants.unknownTeam')) : undefined
     if (tournament.participant_type === 'team' && teamName) return { name: teamName, teamId }
+    if (participant.display_name) return { name: participant.display_name }
     if (participant.user_id) return { name: names[participant.user_id] ?? t('teams.unknownUser'), detail: teamName, teamId }
     return { name: teamName ?? t('matches.unknownParticipant'), teamId }
   }

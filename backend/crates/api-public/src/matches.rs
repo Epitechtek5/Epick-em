@@ -12,29 +12,46 @@
 //! calculés sur `total`. Les points viennent du barème du tournoi (`scoring_rule`) ; une
 //! statistique sans règle ne rapporte rien.
 //!
-//! Le lancement d'une étape ne génère pas encore ses matchs (calendrier des manches, rondes
-//! suisses, tableau d'élimination) : un administrateur les crée avec `POST .../matches`.
+//! Les matchs d'une étape se génèrent automatiquement (module `generation`) ou se créent à la
+//! main avec `POST .../matches`. Un match porte sa série (`best_of` : 1, 3 ou 5) et se joue de
+//! deux façons :
+//!
+//! - ses parties sont saisies une à une (voir [`crate::match_games`]) : les résultats du match
+//!   s'en déduisent, chaque participant compte ses parties gagnées (`games_won`), et le match se
+//!   termine tout seul quand un vainqueur est connu ;
+//! - ou ses résultats sont saisis directement ici : en duel au meilleur de 3 ou 5, chaque
+//!   participant déclare alors ses manches gagnées (`games_won`).
+//!
+//! Dans les deux cas, le vainqueur d'une série est celui qui atteint la majorité des manches.
+//! `round` reste la ronde de compétition, jamais le numéro de partie. Le barème de l'étape
+//! (`rules.scoring`), s'il existe, remplace les points issus des statistiques pour cette étape.
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::generation::generate_next_round;
+use crate::match_games::{games_problem, series_problem};
 use crate::steps::{CloseResponse, close_step_of, find_step};
 use crate::store::{
-    Bracket, Match, MatchFinish, MatchInput, MatchParticipant, MatchResult, MatchScore,
-    MatchStatus, MatchType, MatchUpdate, ScoringRule, Stat, StatType, Step, StepFormat, StepStatus,
-    StoreError, Tournament,
+    Bracket, GameFinish, Match, MatchFinish, MatchGame, MatchInput, MatchParticipant, MatchResult,
+    MatchScore, MatchStatus, MatchType, MatchUpdate, Placement, ScoringRule, Stat, StatScope,
+    StatType, Step, StepFormat, StepStatus, StoreError, Tournament,
 };
 use crate::team_io::normalize_timestamp;
-use crate::tournaments::{find_tournament, nullable};
-use crate::users::require_admin;
+use crate::tournament_access::{require_manage, require_referee};
+use crate::tournaments::{find_tournament, nullable, visible_tournament};
 use actix_web::{HttpResponse, delete, get, patch, post, put, web};
+use domain::bracket::grand_final_ends_tournament;
+use domain::seeding::{games_to_win, series_is_decided};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
 
 pub(crate) const ROUND_MAX: i32 = 1_000;
+/// Longueurs de série autorisées.
+pub(crate) const BEST_OF: [i32; 3] = [1, 3, 5];
 const STAT_VALUE_MAX: f64 = 1_000_000_000.0;
 
 /// Routes des matchs, avec leur documentation OpenAPI.
@@ -59,6 +76,9 @@ struct CreateMatchRequest {
     bracket: Option<Bracket>,
     /// Match de la même étape où va le vainqueur, en élimination seulement.
     next_match_id: Option<Uuid>,
+    /// Longueur de la série : 1 (par défaut), 3 ou 5 parties.
+    #[schema(minimum = 1, maximum = 5, example = 3)]
+    best_of: Option<i32>,
     /// Horodatage RFC 3339 en UTC (suffixe `Z`).
     #[schema(example = "2026-11-14T18:00:00Z")]
     scheduled_at: Option<String>,
@@ -79,6 +99,9 @@ struct UpdateMatchRequest {
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<Uuid>)]
     next_match_id: Option<Option<Uuid>>,
+    /// 1, 3 ou 5 ; pas moins que le nombre de parties déjà ouvertes.
+    #[schema(minimum = 1, maximum = 5)]
+    best_of: Option<i32>,
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<String>)]
     scheduled_at: Option<Option<String>>,
@@ -112,6 +135,10 @@ struct ResultEntry {
     /// fin du match si aucun participant n'en a.
     #[schema(minimum = 1)]
     rank: Option<i32>,
+    /// Manches gagnées dans une série (BO3, BO5), de 0 au nombre à gagner ; exigé pour terminer
+    /// un duel au meilleur de 3 ou 5.
+    #[schema(minimum = 0)]
+    games_won: Option<i32>,
     /// `win` pour la première place, `loss` sinon, `draw` en cas d'égalité en tête, si absent à
     /// la fin du match.
     result: Option<MatchResult>,
@@ -123,23 +150,27 @@ struct StatusRequest {
     status: MatchStatus,
 }
 
-/// Un match avec ses participants.
+/// Un match avec ses participants et ses parties.
 #[derive(Serialize, ToSchema)]
-struct MatchDetail {
+pub(crate) struct MatchDetail {
     #[serde(flatten)]
     #[schema(inline)]
-    r#match: Match,
-    participants: Vec<MatchParticipant>,
+    pub(crate) r#match: Match,
+    /// Résultats du match : saisis directement (`best_of` = 1 sans partie) ou agrégés depuis les
+    /// parties terminées.
+    pub(crate) participants: Vec<MatchParticipant>,
+    /// Parties de la série, par numéro ; vide pour un match saisi directement.
+    pub(crate) games: Vec<MatchGame>,
 }
 
 /// Résultat d'un changement de statut.
 #[derive(Serialize, ToSchema)]
-struct MatchOutcome {
+pub(crate) struct MatchOutcome {
     #[serde(flatten)]
     #[schema(inline)]
-    detail: MatchDetail,
+    pub(crate) detail: MatchDetail,
     /// Renseigné quand ce match était le dernier de l'étape, qui s'est alors clôturée.
-    step_closed: Option<CloseResponse>,
+    pub(crate) step_closed: Option<CloseResponse>,
 }
 
 /// Matchs de l'étape, par groupe puis par manche, avec leurs participants.
@@ -162,26 +193,47 @@ struct MatchOutcome {
 #[get("/tournaments/{id}/steps/{step_id}/matches")]
 async fn list_matches(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
     query: web::Query<MatchesQuery>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    visible_tournament(&state, &claims, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
+    let details = load_details(&state, &step, query.group_id, query.status).await?;
+    Ok(HttpResponse::Ok().json(details))
+}
+
+/// Matchs de l'étape avec leurs participants (route publique comprise).
+pub(crate) async fn load_details(
+    state: &AppState,
+    step: &Step,
+    group_id: Option<Uuid>,
+    status: Option<MatchStatus>,
+) -> Result<Vec<MatchDetail>, ApiError> {
     let matches = state
         .store
-        .list_matches(step.id, query.group_id, query.status)
+        .list_matches(step.id, group_id, status)
         .await
         .map_err(ApiError::internal)?;
-    let mut participants = participants_by_match(&state, &step).await?;
-    let details: Vec<MatchDetail> = matches
+    let mut participants = participants_by_match(state, step).await?;
+    let mut games: HashMap<Uuid, Vec<MatchGame>> = HashMap::new();
+    for game in state
+        .store
+        .list_step_match_games(step.id)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        games.entry(game.match_id).or_default().push(game);
+    }
+    Ok(matches
         .into_iter()
         .map(|m| MatchDetail {
             participants: participants.remove(&m.id).unwrap_or_default(),
+            games: games.remove(&m.id).unwrap_or_default(),
             r#match: m,
         })
-        .collect();
-    Ok(HttpResponse::Ok().json(details))
+        .collect())
 }
 
 /// Détail d'un match avec ses participants.
@@ -204,10 +256,11 @@ async fn list_matches(
 #[get("/tournaments/{id}/steps/{step_id}/matches/{match_id}")]
 async fn get_match(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id, match_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    visible_tournament(&state, &claims, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let found = find_match(&state, &step, match_id).await?;
     Ok(HttpResponse::Ok().json(detail_of(&state, &step, found).await?))
@@ -240,14 +293,15 @@ async fn create_match(
     path: web::Path<(Uuid, Uuid)>,
     body: web::Json<CreateMatchRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let request = body.into_inner();
     let mut errors = Vec::new();
     let round = check_round(request.round, &mut errors);
     let scheduled_at = check_scheduled_at(request.scheduled_at, &mut errors);
+    let best_of = check_best_of(request.best_of.unwrap_or(1), &mut errors);
     check_bracket(&step, request.bracket, &mut errors);
     let participants = request.participant_ids.unwrap_or_default();
     if let Some(next) = request.next_match_id {
@@ -276,6 +330,7 @@ async fn create_match(
             round,
             bracket: request.bracket,
             next_match_id: request.next_match_id,
+            best_of,
             scheduled_at,
             participants,
         })
@@ -312,9 +367,9 @@ async fn update_match(
     path: web::Path<(Uuid, Uuid, Uuid)>,
     body: web::Json<UpdateMatchRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     let request = body.into_inner();
@@ -329,6 +384,18 @@ async fn update_match(
     }
     if let Some(scheduled_at) = request.scheduled_at {
         update.scheduled_at = Some(check_scheduled_at(scheduled_at, &mut errors));
+    }
+    if let Some(best_of) = request.best_of {
+        let best_of = check_best_of(best_of, &mut errors);
+        let games = state
+            .store
+            .list_match_games(current.id)
+            .await
+            .map_err(ApiError::internal)?;
+        if let Some(problem) = series_problem(best_of, &games) {
+            errors.push(("best_of", problem));
+        }
+        update.best_of = Some(best_of);
     }
     if let Some(next) = request.next_match_id {
         if let Some(next) = next {
@@ -388,9 +455,9 @@ async fn delete_match(
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     require_ongoing(&step)?;
@@ -441,9 +508,9 @@ async fn save_results(
     path: web::Path<(Uuid, Uuid, Uuid)>,
     body: web::Json<ResultsRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_referee(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     require_ongoing(&step)?;
@@ -454,9 +521,12 @@ async fn save_results(
         return Err(ApiError::InvalidTransition);
     }
     let request = body.into_inner();
+    if let Some(problem) = games_problem(&state, &current).await? {
+        return Err(ApiError::Validation(vec![("results", problem)]));
+    }
     let members = match_participants(&state, &step, current.id).await?;
     let (stats, rules) = scoring_of(&state, &tournament).await?;
-    let known: HashMap<String, StatType> = stats.iter().map(|s| (s.key.clone(), s.kind)).collect();
+    let schema = StatSchema::new(&stats);
 
     let mut errors = Vec::new();
     let mut seen = HashSet::new();
@@ -486,13 +556,28 @@ async fn save_results(
             ));
             continue;
         }
-        match parse_stats(&entry.stats, &known) {
+        if let Some(games) = entry.games_won
+            && !(0..=games_to_win(current.best_of)).contains(&games)
+        {
+            errors.push((
+                "results",
+                format!(
+                    "Les manches gagnées de {id} vont de 0 à {} (série au meilleur de {}).",
+                    games_to_win(current.best_of),
+                    current.best_of
+                ),
+            ));
+            continue;
+        }
+        match schema.parse(&entry.stats) {
             Ok(totals) => scores.push(MatchScore {
                 participant_id: id,
                 points: points_of(&totals, &rules, &stats),
                 stats: entry.stats,
                 rank: entry.rank,
                 result: entry.result,
+                games_won: entry.games_won,
+                slot: None,
             }),
             Err(problem) => errors.push(("results", format!("{id} : {problem}"))),
         }
@@ -548,9 +633,9 @@ async fn set_status(
     path: web::Path<(Uuid, Uuid, Uuid)>,
     body: web::Json<StatusRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_referee(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     require_ongoing(&step)?;
@@ -581,7 +666,12 @@ async fn set_status(
             if let Some(problem) = participants_problem(&step, members.len()) {
                 return Err(ApiError::Validation(vec![("participants", problem)]));
             }
-            if target == MatchStatus::Ongoing {
+            let kind = if target == MatchStatus::Ongoing {
+                "match.started"
+            } else {
+                "match.finished"
+            };
+            let updated = if target == MatchStatus::Ongoing {
                 state
                     .store
                     .set_match_status(current.id, target)
@@ -589,10 +679,33 @@ async fn set_status(
                     .map_err(match_error)?
                     .ok_or(ApiError::NotFound)?
             } else {
+                if let Some(problem) = games_problem(&state, &current).await? {
+                    return Err(ApiError::Validation(vec![("results", problem)]));
+                }
                 let finished = finish(&state, &step, &current, &members).await?;
+                // Ronde suisse terminée : la suivante se génère seule (sans revanche). Si elle
+                // est impossible, l'étape attend `POST .../rounds`.
+                if step.format == StepFormat::Swiss
+                    && current.number.is_some()
+                    && let Err(err) = generate_next_round(&state, &tournament, &step, false).await
+                    && !matches!(err, ApiError::InvalidTransition)
+                {
+                    eprintln!("api-public : ronde suivante de l'étape {} : {err}", step.id);
+                }
                 step_closed = close_if_complete(&state, &tournament, &step).await;
                 finished
-            }
+            };
+            crate::notifications::emit(
+                &state,
+                crate::notifications::match_event(
+                    kind,
+                    &tournament,
+                    step.id,
+                    current.id,
+                    members.iter().map(|m| m.participant_id).collect(),
+                ),
+            );
+            updated
         }
     };
     let step = match &step_closed {
@@ -605,42 +718,51 @@ async fn set_status(
     }))
 }
 
-/// Termine le match : rangs et résultats déduits, points de l'étape recalculés, vainqueur placé
-/// dans le match suivant.
+/// Termine un match saisi directement (sans parties) : voir [`finish_series`].
 async fn finish(
     state: &AppState,
     step: &Step,
     current: &Match,
     members: &[MatchParticipant],
 ) -> Result<Match, ApiError> {
-    let scores =
-        settle(members).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
+    finish_series(state, step, current, members, None).await
+}
 
-    let advance = match current.next_match_id {
-        None => None,
-        Some(next_id) => {
-            let winners: Vec<Uuid> = scores
-                .iter()
-                .filter(|s| s.result == Some(MatchResult::Win))
-                .map(|s| s.participant_id)
-                .collect();
-            let [winner] = winners[..] else {
-                return Err(ApiError::Validation(vec![(
-                    "results",
-                    "Un match d'élimination a un seul vainqueur (`win`).".to_string(),
-                )]));
-            };
-            let next = find_match(state, step, next_id).await?;
-            let waiting = match_participants(state, step, next.id).await?;
-            if next.status != MatchStatus::Scheduled
-                || waiting.len() >= capacity(step)
-                || waiting.iter().any(|p| p.participant_id == winner)
-            {
-                return Err(ApiError::InvalidTransition);
-            }
-            Some((next_id, winner))
-        }
-    };
+/// Termine le match avec ses résultats (et la dernière partie de la série, s'il y en a une) :
+/// la série est décidée aux manches, les rangs et résultats sont déduits, le barème de l'étape
+/// appliqué, les participants placés dans les matchs suivants (avec l'annulation éventuelle du
+/// « reset » de grande finale) et les points de l'étape recalculés, le tout en une seule
+/// opération du store.
+pub(crate) async fn finish_series(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+    game: Option<GameFinish>,
+) -> Result<Match, ApiError> {
+    let finish = prepare_series_finish(state, step, current, members, game).await?;
+    state
+        .store
+        .finish_match(finish)
+        .await
+        .map_err(match_error)?
+        .ok_or(ApiError::NotFound)
+}
+
+/// Build the same authoritative finalization for administrator and participant workflows.
+pub(crate) async fn prepare_series_finish(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+    game: Option<GameFinish>,
+) -> Result<MatchFinish, ApiError> {
+    // Une série se décide aux manches : ses rangs en viennent, avant toute autre validation.
+    let members = series_members(step, current, members)?;
+    let mut scores =
+        settle(&members).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
+    apply_step_scoring(step, &mut scores);
+    let (placements, cancel) = progression(state, step, current, &members, &scores).await?;
 
     // Total de l'étape : les matchs déjà terminés plus celui-ci.
     let finished_ids: HashSet<Uuid> = state
@@ -669,23 +791,182 @@ async fn finish(
         })
         .collect();
 
-    state
-        .store
-        .finish_match(MatchFinish {
-            match_id: current.id,
-            scores,
-            advance,
-            step_points,
-        })
-        .await
-        .map_err(match_error)?
-        .ok_or(ApiError::NotFound)
+    Ok(MatchFinish {
+        match_id: current.id,
+        scores,
+        placements,
+        cancel,
+        step_points,
+        game,
+    })
+}
+
+/// Série au meilleur de 3 ou 5 : le vainqueur est celui qui atteint la majorité des manches.
+/// Les rangs et résultats en sont déduits (ils remplacent ceux déduits des points), si bien
+/// qu'une série saisie avec ses seuls `games_won`, sans statistiques ni rang, se termine.
+fn series_members(
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+) -> Result<Vec<MatchParticipant>, ApiError> {
+    let mut scores = members.to_vec();
+    if current.best_of <= 1 || step.match_type != MatchType::Duel || scores.len() != 2 {
+        return Ok(scores);
+    }
+    let invalid = |message: String| ApiError::Validation(vec![("results", message)]);
+    let (Some(a), Some(b)) = (scores[0].games_won, scores[1].games_won) else {
+        return Err(invalid(format!(
+            "Une série au meilleur de {} exige `games_won` pour chaque participant.",
+            current.best_of
+        )));
+    };
+    let (winner, loser) = if a > b { (0, 1) } else { (1, 0) };
+    let (won, lost) = (
+        scores[winner].games_won.unwrap_or(0),
+        scores[loser].games_won.unwrap_or(0),
+    );
+    if !series_is_decided(current.best_of, won, lost) {
+        return Err(invalid(format!(
+            "Au meilleur de {}, le vainqueur compte {} manches et le perdant moins ({won}-{lost} reçu).",
+            current.best_of,
+            games_to_win(current.best_of)
+        )));
+    }
+    scores[winner].rank = Some(1);
+    scores[winner].result = Some(MatchResult::Win);
+    scores[loser].rank = Some(2);
+    scores[loser].result = Some(MatchResult::Loss);
+    Ok(scores)
+}
+
+/// Barème de l'étape : remplace les points issus des statistiques, sans les additionner (pas de
+/// double comptage dans le total de l'étape ni du tournoi).
+fn apply_step_scoring(step: &Step, scores: &mut [MatchScore]) {
+    let Some(scoring) = &step.rules.scoring else {
+        return;
+    };
+    for score in scores {
+        let points = match step.match_type {
+            MatchType::Duel => match score.result {
+                Some(MatchResult::Win) => Some(scoring.win),
+                Some(MatchResult::Draw) => Some(scoring.draw),
+                Some(MatchResult::Loss) => Some(scoring.loss),
+                None => None,
+            },
+            MatchType::Ffa => score.rank.map(|rank| {
+                usize::try_from(rank - 1)
+                    .ok()
+                    .and_then(|i| scoring.placement.get(i))
+                    .copied()
+                    .unwrap_or(0.0)
+            }),
+        };
+        if let Some(points) = points {
+            score.points = points;
+        }
+    }
+}
+
+/// Participants à placer dans les matchs suivants et matchs à annuler quand `current` se termine
+/// (vainqueur, et perdant en double élimination). À la grande finale, la manche de « reset » est
+/// annulée si le vainqueur du tableau des vainqueurs gagne ; sinon les deux finalistes y jouent.
+async fn progression(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+    scores: &[MatchScore],
+) -> Result<(Vec<Placement>, Vec<Uuid>), ApiError> {
+    let Some(next_id) = current.next_match_id else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let winners: Vec<Uuid> = scores
+        .iter()
+        .filter(|s| s.result == Some(MatchResult::Win))
+        .map(|s| s.participant_id)
+        .collect();
+    let [winner] = winners[..] else {
+        return Err(ApiError::Validation(vec![(
+            "results",
+            "Un match d'élimination a un seul vainqueur (`win`).".to_string(),
+        )]));
+    };
+    let loser = scores
+        .iter()
+        .map(|s| s.participant_id)
+        .find(|id| *id != winner);
+    let slot_of = |id: Uuid| {
+        members
+            .iter()
+            .find(|m| m.participant_id == id)
+            .and_then(|m| m.slot)
+    };
+
+    if current.bracket == Some(Bracket::GrandFinal) && current.loser_next_match_id == Some(next_id)
+    {
+        let reset = find_match(state, step, next_id).await?;
+        if reset.status != MatchStatus::Scheduled {
+            return Err(ApiError::InvalidTransition);
+        }
+        let winner_slot = usize::try_from(slot_of(winner).unwrap_or(1) - 1).unwrap_or(0);
+        if grand_final_ends_tournament(winner_slot) {
+            return Ok((Vec::new(), vec![next_id]));
+        }
+        let mut placements = vec![Placement {
+            match_id: next_id,
+            participant_id: winner,
+            slot: slot_of(winner).or(Some(2)),
+        }];
+        if let Some(loser) = loser {
+            placements.push(Placement {
+                match_id: next_id,
+                participant_id: loser,
+                slot: slot_of(loser).or(Some(1)),
+            });
+        }
+        return Ok((placements, Vec::new()));
+    }
+
+    let mut placements = Vec::new();
+    check_open_slot(state, step, next_id, winner).await?;
+    placements.push(Placement {
+        match_id: next_id,
+        participant_id: winner,
+        slot: current.next_slot,
+    });
+    if let (Some(loser_next), Some(loser)) = (current.loser_next_match_id, loser) {
+        check_open_slot(state, step, loser_next, loser).await?;
+        placements.push(Placement {
+            match_id: loser_next,
+            participant_id: loser,
+            slot: current.loser_next_slot,
+        });
+    }
+    Ok((placements, Vec::new()))
+}
+
+/// Le match d'arrivée attend encore des participants et ne contient pas déjà celui-ci.
+async fn check_open_slot(
+    state: &AppState,
+    step: &Step,
+    next_id: Uuid,
+    participant: Uuid,
+) -> Result<(), ApiError> {
+    let next = find_match(state, step, next_id).await?;
+    let waiting = match_participants(state, step, next.id).await?;
+    if next.status != MatchStatus::Scheduled
+        || waiting.len() >= capacity(step)
+        || waiting.iter().any(|p| p.participant_id == participant)
+    {
+        return Err(ApiError::InvalidTransition);
+    }
+    Ok(())
 }
 
 /// Clôture l'étape si tous ses matchs sont terminés ou annulés, avec au moins un match terminé
 /// par groupe. Le match est déjà enregistré : un échec ici se journalise et l'étape se clôture
 /// alors par `POST .../close`.
-async fn close_if_complete(
+pub(crate) async fn close_if_complete(
     state: &AppState,
     tournament: &Tournament,
     step: &Step,
@@ -694,6 +975,7 @@ async fn close_if_complete(
         let groups = state.store.list_step_groups(step.id).await?;
         let matches = state.store.list_matches(step.id, None, None).await?;
         Ok::<_, StoreError>(is_complete(
+            step,
             &groups.iter().map(|g| g.id).collect::<Vec<_>>(),
             &matches,
         ))
@@ -722,7 +1004,14 @@ async fn close_if_complete(
 }
 
 /// Chaque groupe a au moins un match terminé et aucun match n'est encore à jouer.
-fn is_complete(groups: &[Uuid], matches: &[Match]) -> bool {
+pub(crate) fn is_complete(step: &Step, groups: &[Uuid], matches: &[Match]) -> bool {
+    // Une étape suisse générée n'est terminée qu'après sa dernière ronde.
+    if step.format == StepFormat::Swiss
+        && matches.iter().any(|m| m.number.is_some())
+        && matches.iter().filter_map(|m| m.round).max().unwrap_or(0) < step.matches_per_group
+    {
+        return false;
+    }
     !groups.is_empty()
         && matches
             .iter()
@@ -734,7 +1023,11 @@ fn is_complete(groups: &[Uuid], matches: &[Match]) -> bool {
         })
 }
 
-async fn find_match(state: &AppState, step: &Step, match_id: Uuid) -> Result<Match, ApiError> {
+pub(crate) async fn find_match(
+    state: &AppState,
+    step: &Step,
+    match_id: Uuid,
+) -> Result<Match, ApiError> {
     state
         .store
         .find_match(match_id)
@@ -767,7 +1060,7 @@ async fn participants_by_match(
     Ok(grouped)
 }
 
-async fn match_participants(
+pub(crate) async fn match_participants(
     state: &AppState,
     step: &Step,
     match_id: Uuid,
@@ -779,15 +1072,42 @@ async fn match_participants(
         .collect())
 }
 
-async fn detail_of(state: &AppState, step: &Step, found: Match) -> Result<MatchDetail, ApiError> {
+/// Les matchs donnés avec leurs participants.
+pub(crate) async fn details_of(
+    state: &AppState,
+    step: &Step,
+    found: Vec<Match>,
+) -> Result<Vec<MatchDetail>, ApiError> {
+    let mut by_match = participants_by_match(state, step).await?;
+    Ok(found
+        .into_iter()
+        .map(|m| MatchDetail {
+            participants: by_match.remove(&m.id).unwrap_or_default(),
+            // Un match tout juste généré n'a pas encore de partie.
+            games: Vec::new(),
+            r#match: m,
+        })
+        .collect())
+}
+
+pub(crate) async fn detail_of(
+    state: &AppState,
+    step: &Step,
+    found: Match,
+) -> Result<MatchDetail, ApiError> {
     Ok(MatchDetail {
         participants: match_participants(state, step, found.id).await?,
+        games: state
+            .store
+            .list_match_games(found.id)
+            .await
+            .map_err(ApiError::internal)?,
         r#match: found,
     })
 }
 
 /// Statistiques du jeu du tournoi et barème du tournoi.
-async fn scoring_of(
+pub(crate) async fn scoring_of(
     state: &AppState,
     tournament: &Tournament,
 ) -> Result<(Vec<Stat>, Vec<ScoringRule>), ApiError> {
@@ -805,7 +1125,7 @@ async fn scoring_of(
     Ok((stats, rules))
 }
 
-fn require_ongoing(step: &Step) -> Result<(), ApiError> {
+pub(crate) fn require_ongoing(step: &Step) -> Result<(), ApiError> {
     if step.status == StepStatus::Ongoing {
         Ok(())
     } else {
@@ -813,7 +1133,7 @@ fn require_ongoing(step: &Step) -> Result<(), ApiError> {
     }
 }
 
-fn match_error(err: StoreError) -> ApiError {
+pub(crate) fn match_error(err: StoreError) -> ApiError {
     match err {
         StoreError::MatchState => ApiError::InvalidTransition,
         other => ApiError::internal(other),
@@ -833,7 +1153,7 @@ pub(crate) fn capacity_of(match_type: MatchType, group_size: i32) -> usize {
 }
 
 /// Ce qui empêche de jouer un match de `count` participants.
-fn participants_problem(step: &Step, count: usize) -> Option<String> {
+pub(crate) fn participants_problem(step: &Step, count: usize) -> Option<String> {
     playable_problem(step.match_type, step.group_size, count)
 }
 
@@ -854,6 +1174,13 @@ pub(crate) fn playable_problem(
         )),
         _ => None,
     }
+}
+
+fn check_best_of(best_of: i32, errors: &mut Vec<(&'static str, String)>) -> i32 {
+    if !BEST_OF.contains(&best_of) {
+        errors.push(("best_of", "La série compte 1, 3 ou 5 parties.".to_string()));
+    }
+    best_of
 }
 
 fn check_round(round: Option<i32>, errors: &mut Vec<(&'static str, String)>) -> Option<i32> {
@@ -981,6 +1308,174 @@ async fn check_participants(
     Ok(())
 }
 
+/// Ce que le jeu autorise comme valeurs : statistiques numériques (seules à entrer dans le
+/// barème), choix des participants et attributs de la partie (carte, MVP...).
+#[derive(Debug, Default)]
+pub(crate) struct StatSchema {
+    numeric: HashMap<String, StatType>,
+    /// Statistiques `select` de portée `participant`, avec les clés d'options autorisées.
+    selects: HashMap<String, HashSet<String>>,
+    /// Attributs de la partie, de portée `match`.
+    attributes: HashMap<String, Attribute>,
+}
+
+#[derive(Debug)]
+enum Attribute {
+    Select(HashSet<String>),
+    Mvp,
+}
+
+impl StatSchema {
+    pub(crate) fn new(stats: &[Stat]) -> Self {
+        let mut schema = StatSchema::default();
+        for stat in stats {
+            let options = || stat.options.iter().map(|o| o.key.clone()).collect();
+            match (stat.kind, stat.scope) {
+                (StatType::Flat | StatType::Percent, _) => {
+                    schema.numeric.insert(stat.key.clone(), stat.kind);
+                }
+                (StatType::Select, StatScope::Participant) => {
+                    schema.selects.insert(stat.key.clone(), options());
+                }
+                (StatType::Select, StatScope::Match) => {
+                    schema
+                        .attributes
+                        .insert(stat.key.clone(), Attribute::Select(options()));
+                }
+                (StatType::Mvp, _) => {
+                    schema.attributes.insert(stat.key.clone(), Attribute::Mvp);
+                }
+            }
+        }
+        schema
+    }
+
+    fn knows(&self, key: &str) -> bool {
+        self.numeric.contains_key(key)
+            || self.selects.contains_key(key)
+            || self.attributes.contains_key(key)
+    }
+
+    /// Valide les statistiques d'un participant (voir [`parse_stats`]) et leurs choix : une
+    /// statistique `select` de participant porte la clé d'une option du jeu. Seules les valeurs
+    /// numériques sont renvoyées, donc seules elles peuvent entrer dans le barème.
+    pub(crate) fn parse(&self, value: &Value) -> Result<HashMap<String, f64>, String> {
+        let Some(object) = value.as_object() else {
+            return Err("`stats` doit être un objet.".to_string());
+        };
+        let detailed = object.contains_key("total") && !self.knows("total");
+        let mut numeric = object.clone();
+        if detailed {
+            if let Some(Value::Object(total)) = object.get("total") {
+                numeric.insert("total".into(), Value::Object(self.split(total)?));
+            }
+            if let Some(Value::Object(players)) = object.get("players") {
+                let mut cleaned = serde_json::Map::new();
+                for (player, stats) in players {
+                    let stats = match stats {
+                        Value::Object(stats) => Value::Object(
+                            self.split(stats)
+                                .map_err(|e| format!("players {player} : {e}"))?,
+                        ),
+                        other => other.clone(),
+                    };
+                    cleaned.insert(player.clone(), stats);
+                }
+                numeric.insert("players".into(), Value::Object(cleaned));
+            }
+        } else {
+            numeric = self.split(object)?;
+        }
+        parse_stats(&Value::Object(numeric), &self.numeric)
+    }
+
+    /// Retire les choix (après les avoir vérifiés) pour ne garder que le numérique.
+    fn split(
+        &self,
+        object: &serde_json::Map<String, Value>,
+    ) -> Result<serde_json::Map<String, Value>, String> {
+        let mut numeric = serde_json::Map::new();
+        for (key, value) in object {
+            if let Some(options) = self.selects.get(key) {
+                if !value.as_str().is_some_and(|v| options.contains(v)) {
+                    let allowed: BTreeSet<&String> = options.iter().collect();
+                    return Err(format!(
+                        "« {key} » doit être l'une des options du jeu : {}.",
+                        allowed
+                            .into_iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            } else if self.attributes.contains_key(key) {
+                return Err(format!(
+                    "« {key} » est un attribut de la partie, pas une statistique de participant."
+                ));
+            } else {
+                numeric.insert(key.clone(), value.clone());
+            }
+        }
+        Ok(numeric)
+    }
+
+    /// Valide les attributs d'une partie : un objet dont les clés sont des statistiques de
+    /// portée `match` du jeu. Un `select` porte la clé d'une option, un MVP l'identifiant d'un
+    /// participant du match ou d'un joueur d'un participant (`designated`).
+    pub(crate) fn check_attributes(
+        &self,
+        value: &Value,
+        designated: &HashSet<Uuid>,
+    ) -> Result<(), String> {
+        let Some(object) = value.as_object() else {
+            return Err("`attributes` doit être un objet.".to_string());
+        };
+        for (key, value) in object {
+            match self.attributes.get(key) {
+                None => {
+                    return Err(format!(
+                        "« {key} » n'est pas un attribut de partie de ce jeu."
+                    ));
+                }
+                Some(Attribute::Select(options)) => {
+                    if !value.as_str().is_some_and(|v| options.contains(v)) {
+                        let allowed: BTreeSet<&String> = options.iter().collect();
+                        return Err(format!(
+                            "« {key} » doit être l'une des options du jeu : {}.",
+                            allowed
+                                .into_iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+                Some(Attribute::Mvp) => {
+                    let valid = value
+                        .as_str()
+                        .and_then(|v| v.parse::<Uuid>().ok())
+                        .is_some_and(|id| designated.contains(&id));
+                    if !valid {
+                        return Err(format!(
+                            "« {key} » doit désigner un participant de ce match ou l'un de ses joueurs."
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Identifiants des joueurs détaillés dans `stats` (`{"players": {"<user_id>": ...}}`).
+pub(crate) fn players_of(stats: &Value) -> HashSet<Uuid> {
+    stats
+        .get("players")
+        .and_then(Value::as_object)
+        .map(|players| players.keys().filter_map(|k| k.parse().ok()).collect())
+        .unwrap_or_default()
+}
+
 /// Valide les statistiques d'un participant et renvoie la valeur de chacune par clé (le `total`
 /// d'une équipe détaillée par joueur).
 ///
@@ -1067,7 +1562,8 @@ pub(crate) fn points_of(
 
 /// Résultats définitifs d'un match qui se termine : chaque participant a des statistiques ou un
 /// rang ; sans aucun rang, ils sont déduits des points (les égalités le partagent) ; un résultat
-/// absent vaut `win` pour la première place, `draw` si elle est partagée, `loss` sinon.
+/// absent vaut `win` pour la première place, `draw` si elle est partagée, `loss` sinon. Un
+/// résultat fourni doit être celui-là : sinon, le match est refusé.
 pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, String> {
     let empty =
         |m: &MatchParticipant| m.rank.is_none() && m.stats.as_object().is_none_or(|o| o.is_empty());
@@ -1102,21 +1598,45 @@ pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, St
         return Err("Tous les participants ont un rang, ou aucun.".to_string());
     };
     let leaders = ranks.values().filter(|rank| **rank == 1).count();
+    let derived = |rank: Option<i32>| match rank {
+        Some(1) if leaders == 1 => MatchResult::Win,
+        Some(1) => MatchResult::Draw,
+        _ => MatchResult::Loss,
+    };
+    // Le résultat découle du rang : un résultat explicite qui le contredit (premier mais
+    // `loss`, deuxième mais `win`) ferait gagner le mauvais participant.
+    let contradictions: Vec<String> = members
+        .iter()
+        .filter_map(|m| {
+            let expected = derived(ranks.get(&m.participant_id).copied());
+            m.result.filter(|result| *result != expected).map(|result| {
+                format!(
+                    "{} : `{}` contredit son rang (`{}` attendu)",
+                    m.participant_id,
+                    result.as_str(),
+                    expected.as_str()
+                )
+            })
+        })
+        .collect();
+    if !contradictions.is_empty() {
+        return Err(format!(
+            "Résultats contradictoires : {}.",
+            contradictions.join(", ")
+        ));
+    }
     Ok(members
         .iter()
         .map(|m| {
             let rank = ranks.get(&m.participant_id).copied();
-            let derived = match rank {
-                Some(1) if leaders == 1 => MatchResult::Win,
-                Some(1) => MatchResult::Draw,
-                _ => MatchResult::Loss,
-            };
             MatchScore {
                 participant_id: m.participant_id,
                 stats: m.stats.clone(),
                 points: m.points,
                 rank,
-                result: Some(m.result.unwrap_or(derived)),
+                result: Some(derived(rank)),
+                games_won: m.games_won,
+                slot: m.slot,
             }
         })
         .collect())
@@ -1144,7 +1664,24 @@ mod tests {
             points,
             rank,
             result: None,
+            slot: None,
+            games_won: None,
         }
+    }
+
+    #[test]
+    fn a_result_that_contradicts_the_rank_is_refused() {
+        let mut first = member(json!({ "kills": 3 }), 0.0, Some(1));
+        let mut second = member(json!({ "kills": 1 }), 0.0, Some(2));
+        first.result = Some(MatchResult::Loss);
+        second.result = Some(MatchResult::Win);
+        let error = settle(&[first.clone(), second.clone()]).unwrap_err();
+        assert!(error.contains("contredit"), "{error}");
+        // Les mêmes résultats, cohérents avec les rangs, passent.
+        first.result = Some(MatchResult::Win);
+        second.result = Some(MatchResult::Loss);
+        let scores = settle(&[first, second]).unwrap();
+        assert_eq!(scores[0].result, Some(MatchResult::Win));
     }
 
     #[test]
@@ -1193,12 +1730,16 @@ mod tests {
                 name: "Placement".into(),
                 key: "placement".into(),
                 kind: StatType::Flat,
+                scope: StatScope::Participant,
+                options: Vec::new(),
             },
             Stat {
                 id: Uuid::new_v4(),
                 name: "Éliminations".into(),
                 key: "kills".into(),
                 kind: StatType::Flat,
+                scope: StatScope::Participant,
+                options: Vec::new(),
             },
         ];
         let rule = |stat: &Stat, mode, coefficient, table| ScoringRule {
@@ -1291,6 +1832,7 @@ mod tests {
             matches_per_group: 1,
             advance_per_group: 1,
             tiebreak: json!([]),
+            rules: crate::store::StepRules::default(),
             status: StepStatus::Ongoing,
             created_at: String::new(),
             updated_at: String::new(),
@@ -1310,6 +1852,10 @@ mod tests {
         assert!(participants_problem(&ffa, 9).is_some());
     }
 
+    fn pool() -> Step {
+        step(MatchType::Duel, 8)
+    }
+
     fn scheduled(group: Uuid, status: MatchStatus) -> Match {
         Match {
             id: Uuid::new_v4(),
@@ -1319,6 +1865,11 @@ mod tests {
             round: None,
             bracket: None,
             next_match_id: None,
+            number: None,
+            next_slot: None,
+            loser_next_match_id: None,
+            loser_next_slot: None,
+            best_of: 1,
             scheduled_at: None,
             started_at: None,
             ended_at: None,
@@ -1332,22 +1883,29 @@ mod tests {
     fn a_step_is_complete_when_every_group_has_finished_all_its_matches() {
         let (g1, g2) = (Uuid::new_v4(), Uuid::new_v4());
         let finished = |g| scheduled(g, MatchStatus::Finished);
-        assert!(is_complete(&[g1, g2], &[finished(g1), finished(g2)]));
+        assert!(is_complete(
+            &pool(),
+            &[g1, g2],
+            &[finished(g1), finished(g2)]
+        ));
         // Un match annulé ne bloque pas, un match à jouer si.
         assert!(is_complete(
+            &pool(),
             &[g1],
             &[finished(g1), scheduled(g1, MatchStatus::Cancelled)]
         ));
         assert!(!is_complete(
+            &pool(),
             &[g1],
             &[finished(g1), scheduled(g1, MatchStatus::Ongoing)]
         ));
         // Un groupe sans match terminé n'est pas joué.
-        assert!(!is_complete(&[g1, g2], &[finished(g1)]));
+        assert!(!is_complete(&pool(), &[g1, g2], &[finished(g1)]));
         assert!(!is_complete(
+            &pool(),
             &[g1],
             &[scheduled(g1, MatchStatus::Cancelled)]
         ));
-        assert!(!is_complete(&[], &[]));
+        assert!(!is_complete(&pool(), &[], &[]));
     }
 }

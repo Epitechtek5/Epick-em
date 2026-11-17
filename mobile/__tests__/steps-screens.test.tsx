@@ -21,6 +21,7 @@ jest.mock('../src/features/games/use-game-resource', () => ({
 }));
 jest.mock('../src/features/steps/api');
 jest.mock('expo-router', () => ({
+  useFocusEffect: jest.requireActual('react').useEffect,
   router: { push: jest.fn(), replace: jest.fn() },
   useLocalSearchParams: () => ({
     tournamentId: '22222222-2222-4222-8222-222222222222',
@@ -43,7 +44,18 @@ const tournament = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo' as const,
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 8,
   team_scoring_mode: 'none' as const,
   team_scoring_n: null,
@@ -120,7 +132,7 @@ it('renders stages in backend position order with natural labels', async () => {
   expect(screen.getByText('Single elimination · Free-for-all')).toBeTruthy();
   expect(screen.queryByText('Add stage')).toBeNull();
 
-  fireEvent.press(screen.getByLabelText('Open stage 1'));
+  await fireEvent.press(screen.getByLabelText('Open stage 1'));
   expect(router.push).toHaveBeenCalledWith({
     pathname: '/(authenticated)/tournaments/[tournamentId]/steps/[stepId]',
     params: { tournamentId, stepId },
@@ -193,9 +205,7 @@ it('shows server rankings and qualification status using resolved identities', a
   expect(screen.getByText('#1 alice')).toBeTruthy();
   expect(screen.getByText('7.5 pts')).toBeTruthy();
   expect(screen.getByText('Qualified')).toBeTruthy();
-  expect(
-    screen.getByText(/does not generate matches, Swiss pairings/),
-  ).toBeTruthy();
+  expect(screen.getByText('Default series')).toBeTruthy();
 });
 
 it('requires confirmation and calls the backend to start a stage for admins', async () => {
@@ -223,7 +233,7 @@ it('requires confirmation and calls the backend to start a stage for admins', as
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 
   await render(<StepDetailsScreen />);
-  fireEvent.press(screen.getByText('Start stage'));
+  await fireEvent.press(screen.getByText('Start stage'));
   const buttons = alert.mock.calls[0][2];
   await act(async () => buttons?.[1]?.onPress?.());
   await waitFor(() =>
@@ -231,10 +241,106 @@ it('requires confirmation and calls the backend to start a stage for admins', as
       'token',
       tournamentId,
       stepId,
+      undefined,
     ),
   );
   expect(reload).toHaveBeenCalled();
   await waitFor(() =>
     expect(screen.getByText('Stage started and groups assigned.')).toBeTruthy(),
+  );
+});
+
+it('previews backend pairings and confirms with their revision', async () => {
+  const reload = jest.fn().mockResolvedValue(undefined);
+  jest
+    .mocked(useAuth)
+    .mockReturnValue({ ...session, user: { ...session.user, role: 'admin' } });
+  jest.mocked(useGameResource).mockReturnValue(
+    resource(
+      {
+        tournament: { ...tournament, status: 'ongoing' },
+        step: { ...first, status: 'ongoing' },
+        steps: [first],
+        names: { alice: 'Alice', bob: 'Bob' },
+        ranking: [],
+        matches: [],
+        entrants: [],
+      },
+      reload,
+    ),
+  );
+  jest.mocked(stepApi.previewGeneration).mockResolvedValue({
+    revision: 'server-revision',
+    matches: [
+      {
+        group_id: 'group',
+        round: 1,
+        number: 1,
+        bracket: null,
+        best_of: 1,
+        participants: [
+          ['alice', 1],
+          ['bob', 2],
+        ],
+        next: null,
+        loser_next: null,
+        bye_points: null,
+      },
+    ],
+  });
+  jest.mocked(stepApi.generateMatches).mockResolvedValue({ matches: [] });
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  await render(<StepDetailsScreen />);
+  await fireEvent.press(screen.getByText('Preview match generation'));
+  await waitFor(() => expect(screen.getByText('Alice')).toBeTruthy());
+  expect(stepApi.generateMatches).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByText('Confirm and generate matches'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1]?.onPress?.());
+  expect(stepApi.generateMatches).toHaveBeenCalledWith(
+    'token',
+    tournamentId,
+    stepId,
+    'server-revision',
+  );
+  expect(reload).toHaveBeenCalled();
+});
+
+it('sends the chosen manual seed order when starting a stage', async () => {
+  jest
+    .mocked(useAuth)
+    .mockReturnValue({ ...session, user: { ...session.user, role: 'admin' } });
+  jest.mocked(useGameResource).mockReturnValue(
+    resource(
+      {
+        tournament: { ...tournament, status: 'ongoing' },
+        step: {
+          ...first,
+          rules: {
+            seeding: 'manual',
+            qualification: 'random',
+            best_of: 1,
+            best_of_by_round: {},
+            scoring: null,
+          },
+        },
+        steps: [first],
+        names: { alice: 'Alice', bob: 'Bob' },
+        ranking: [],
+        matches: [],
+        entrants: ['alice', 'bob'],
+      },
+      jest.fn().mockResolvedValue(undefined),
+    ),
+  );
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  await render(<StepDetailsScreen />);
+  await fireEvent.press(screen.getByLabelText('Move Bob up'));
+  await fireEvent.press(screen.getByText('Start stage'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1]?.onPress?.());
+  expect(stepApi.startStep).toHaveBeenCalledWith(
+    'token',
+    tournamentId,
+    stepId,
+    ['bob', 'alice'],
   );
 });

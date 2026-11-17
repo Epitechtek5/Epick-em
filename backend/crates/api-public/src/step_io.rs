@@ -24,7 +24,7 @@ use crate::match_io::StoreMatches;
 use crate::steps::{check, tiebreak_value};
 use crate::store::{
     AuthStore, MatchType, StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome,
-    StepParticipantStatus, StepStart, StepStatus, StoreError,
+    StepParticipantStatus, StepRules, StepStart, StepStatus, StoreError,
 };
 use crate::tournament_io::{FileScope, TournamentChild};
 use async_trait::async_trait;
@@ -83,6 +83,8 @@ pub struct StepScope {
     pub group_size: i32,
     /// Participants de chaque groupe, par rang de groupe.
     pub groups: HashMap<i32, HashSet<Who>>,
+    /// Comptes de chaque équipe du tournoi, par rang dans `teams` (voir [`FileScope`]).
+    pub team_players: HashMap<usize, HashSet<Uuid>>,
 }
 
 /// Import et export des matchs d'une étape.
@@ -186,6 +188,9 @@ pub(crate) struct StepItem {
     advance_per_group: i32,
     #[serde(default)]
     tiebreak: Vec<String>,
+    /// Têtes de série, qualification, séries et barème ; valeurs par défaut s'il est absent.
+    #[serde(default)]
+    rules: StepRules,
     /// `pending` s'il est absent.
     #[serde(default)]
     status: Option<StepStatus>,
@@ -224,6 +229,9 @@ pub(crate) struct StepParticipantItem {
     /// `in` s'il est absent.
     #[serde(default)]
     status: Option<StepParticipantStatus>,
+    /// Tête de série dans l'étape (1 = meilleure).
+    #[serde(default)]
+    seed: Option<i32>,
 }
 
 impl StepParticipantItem {
@@ -257,6 +265,7 @@ fn definition(step: &StepItem) -> StepDefinition {
         matches_per_group: step.matches_per_group.unwrap_or(1),
         advance_per_group: step.advance_per_group,
         tiebreak: tiebreak_value(step.tiebreak.clone()),
+        rules: step.rules.clone(),
     }
 }
 
@@ -464,6 +473,7 @@ impl TournamentChild for StoreSteps {
                         team,
                         points: Some(member.points),
                         final_rank: member.final_rank,
+                        seed: member.seed,
                         status: Some(member.status),
                     });
                 }
@@ -495,6 +505,7 @@ impl TournamentChild for StoreSteps {
                             .collect()
                     })
                     .unwrap_or_default(),
+                rules: step.rules.clone(),
                 status: Some(step.status),
                 groups: group_items,
                 matches,
@@ -581,6 +592,7 @@ impl TournamentChild for StoreSteps {
                         (group.index, members)
                     })
                     .collect(),
+                team_players: scope.team_players.clone(),
             };
             if let Some(problem) = self
                 .matches
@@ -650,6 +662,15 @@ impl TournamentChild for StoreSteps {
                             .iter()
                             .map(|group| group.iter().map(|(id, _)| *id).collect())
                             .collect(),
+                        seeds: {
+                            let mut seeded: Vec<(i32, Uuid)> = resolved
+                                .iter()
+                                .flatten()
+                                .filter_map(|(id, p)| p.seed.map(|seed| (seed, *id)))
+                                .collect();
+                            seeded.sort_unstable();
+                            seeded.into_iter().map(|(_, id)| id).collect()
+                        },
                     })
                     .await?;
                 let mut outcomes = Vec::new();
@@ -668,6 +689,7 @@ impl TournamentChild for StoreSteps {
                 if status == StepStatus::Finished {
                     self.store
                         .close_step(StepClosing {
+                            expected_competition_revision: None,
                             step_id: created.id,
                             outcomes,
                             next: None,

@@ -22,11 +22,25 @@ const base: Tournament = {
   registration_open_at: null,
   registration_close_at: '2026-11-10T18:00:00Z',
   participant_type: 'solo',
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 32,
   team_scoring_mode: 'none',
   team_scoring_n: null,
   status: 'registration',
+  owner_id: userId,
+  is_template: false,
+  check_in_settled_at: null,
   created_at: '',
   updated_at: '',
 };
@@ -59,7 +73,8 @@ it('finds solo and owned team registrations across complete participant pages', 
     id: '55555555-5555-4555-8555-555555555555',
     name: 'Team Open',
     participant_type: 'team' as const,
-    team_size: 2,
+    team_min_starters: 2,
+    team_max_starters: 2,
   };
   jest
     .mocked(tournamentApi.listTournaments)
@@ -75,6 +90,7 @@ it('finds solo and owned team registrations across complete participant pages', 
             tournament_team_id: null,
             status: 'registered',
             registered_at: '',
+            responses: {},
           }
         : {
             id: '77777777-7777-4777-8777-777777777777',
@@ -83,6 +99,7 @@ it('finds solo and owned team registrations across complete participant pages', 
             tournament_team_id: teamId,
             status: 'checked_in',
             registered_at: '',
+            responses: {},
           },
     ]);
   jest.mocked(teamApi.getTournamentTeam).mockResolvedValue({
@@ -125,6 +142,7 @@ it('does not count withdrawn registrations in My tournaments', async () => {
       tournament_team_id: null,
       status: 'withdrawn',
       registered_at: '',
+      responses: {},
     },
   ]);
   await expect(

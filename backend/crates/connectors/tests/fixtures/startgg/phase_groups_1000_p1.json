@@ -1,0 +1,18 @@
+{
+  "phase": {
+    "phaseGroups": {
+      "pageInfo": {
+        "totalPages": 2
+      },
+      "nodes": [
+        {
+          "id": 2000,
+          "displayIdentifier": "A1",
+          "bracketType": "ROUND_ROBIN",
+          "state": 3,
+          "bracketUrl": "https://www.start.gg/tournament/epick-open-2026/event/ultimate-singles/brackets/1000/2000"
+        }
+      ]
+    }
+  }
+}

@@ -18,6 +18,8 @@ use crate::teams::{
     AddMemberRequest, Pagination, UpdateMemberRequest, owner_is_fixed, require_assignable,
     require_owner, team_update_parts, validate,
 };
+use crate::tournament_access::require_visible;
+use crate::users::require_admin;
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -85,12 +87,14 @@ struct UpdateTournamentTeamRequest {
 #[get("/tournaments/{tournament_id}/teams")]
 async fn list_tournament_teams(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     tournament_id: web::Path<Uuid>,
     page: web::Query<Pagination>,
 ) -> Result<HttpResponse, ApiError> {
     let (limit, offset) = page.bounds();
     let tournament_id = tournament_id.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_visible(&state, &claims, &tournament).await?;
     let teams = state
         .store
         .list_tournament_teams(tournament_id, limit, offset)
@@ -129,6 +133,7 @@ async fn create_tournament_team(
     body: web::Json<CreateTournamentTeamRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let tournament = find_tournament(&state, tournament_id.into_inner()).await?;
+    require_visible(&state, &claims, &tournament).await?;
     if !matches!(
         tournament.status,
         TournamentStatus::Draft | TournamentStatus::Registration
@@ -206,9 +211,12 @@ async fn create_tournament_team(
 #[get("/tournament-teams/{id}")]
 async fn get_tournament_team(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(find(&state, id.into_inner()).await?))
+    let team = find(&state, id.into_inner()).await?;
+    require_team_visible(&state, &claims, &team).await?;
+    Ok(HttpResponse::Ok().json(team))
 }
 
 /// Modifie une équipe de tournoi (propriétaire). N'a aucun effet sur l'équipe globale d'origine.
@@ -302,18 +310,21 @@ async fn delete_tournament_team(
 #[get("/tournament-teams/{id}/members")]
 async fn list_members(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     id: web::Path<Uuid>,
 ) -> Result<HttpResponse, ApiError> {
+    let team = find(&state, id.into_inner()).await?;
+    require_team_visible(&state, &claims, &team).await?;
     let members = state
         .store
-        .list_tournament_team_members(id.into_inner())
+        .list_tournament_team_members(team.id)
         .await
         .map_err(ApiError::internal)?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(members))
 }
 
-/// Ajoute un compte à l'équipe de tournoi (propriétaire). Le rôle `owner` n'est pas attribuable.
+/// Ajoute directement un compte à l'équipe de tournoi (administrateur uniquement).
 #[utoipa::path(
     post,
     path = "/tournament-teams/{id}/members",
@@ -325,7 +336,7 @@ async fn list_members(
         (status = 201, description = "Membre ajouté", body = TournamentTeamMember),
         (status = 400, description = "Requête invalide ou compte introuvable", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
-        (status = 403, description = "Réservé au propriétaire", body = ErrorResponse),
+        (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
         (status = 404, description = "Équipe introuvable", body = ErrorResponse),
         (status = 409, description = "Joueur déjà dans une équipe de ce tournoi", body = ErrorResponse),
     ),
@@ -338,15 +349,25 @@ async fn add_member(
     body: web::Json<AddMemberRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let team = find(&state, id.into_inner()).await?;
-    require_owner(&claims, team.owner_id)?;
+    require_admin(&state, &claims).await?;
     let AddMemberRequest { user_id, role } = body.into_inner();
     require_assignable(role)?;
+    // L'effectif est vérifié par le store, sous le verrou de l'équipe, avec l'ajout.
     let member = state
         .store
         .add_tournament_team_member(team.id, user_id, role)
         .await
-        .map_err(store_error)?
+        .map_err(|err| roster_error(err, role))?
         .ok_or_else(|| ApiError::Validation(vec![("user_id", "Compte introuvable.".into())]))?;
+    crate::notifications::emit(
+        &state,
+        crate::notifications::team_member_added(
+            team.id,
+            &team.name,
+            user_id,
+            &crate::store::now_rfc3339(),
+        ),
+    );
     Ok(HttpResponse::Created().json(member))
 }
 
@@ -387,7 +408,7 @@ async fn update_member(
         .store
         .set_tournament_team_member_role(team.id, user_id, body.role)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(|err| roster_error(err, body.role))?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(member))
 }
@@ -429,9 +450,47 @@ async fn remove_member(
         .await
         .map_err(ApiError::internal)?
     {
+        crate::notifications::emit(
+            &state,
+            crate::notifications::team_member_removed(
+                team.id,
+                &team.name,
+                user_id,
+                &crate::store::now_rfc3339(),
+            ),
+        );
         Ok(HttpResponse::NoContent().finish())
     } else {
         Err(ApiError::NotFound)
+    }
+}
+
+/// L'équipe n'est lisible que si son tournoi l'est (un tournoi privé reste introuvable).
+async fn require_team_visible(
+    state: &AppState,
+    claims: &Claims,
+    team: &TournamentTeam,
+) -> Result<(), ApiError> {
+    let tournament = find_tournament(state, team.tournament_id).await?;
+    require_visible(state, claims, &tournament).await?;
+    Ok(())
+}
+
+/// Traduit une limite d'effectif atteinte en erreur de validation sur le rôle.
+fn roster_error(err: StoreError, role: TeamRole) -> ApiError {
+    match err {
+        StoreError::TeamRosterFull(limit) => {
+            let kind = if role == TeamRole::Substitute {
+                "remplaçants"
+            } else {
+                "titulaires"
+            };
+            ApiError::Validation(vec![(
+                "role",
+                format!("Ce tournoi limite les équipes à {limit} {kind}."),
+            )])
+        }
+        other => store_error(other),
     }
 }
 

@@ -193,6 +193,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "api-internal"
 version = "0.1.0"
 dependencies = [
+ "api-public",
  "connectors",
  "domain",
  "infra",
@@ -207,6 +208,7 @@ dependencies = [
  "actix-web",
  "argon2",
  "async-trait",
+ "connectors",
  "csv",
  "domain",
  "infra",
@@ -431,7 +433,18 @@ dependencies = [
 name = "connectors"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "domain",
+ "infra",
+ "redis",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -648,6 +661,11 @@ dependencies = [
 [[package]]
 name = "domain"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
 
 [[package]]
 name = "dotenvy"
@@ -1286,11 +1304,14 @@ name = "infra"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "domain",
+ "futures-util",
  "redis",
  "serde",
  "serde_json",
  "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1867,6 +1888,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "ryu",
+ "sha1_smol",
  "socket2",
  "tokio",
  "tokio-util",
@@ -2162,6 +2184,12 @@ dependencies = [
  "cpufeatures 0.2.17",
  "digest",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -2895,6 +2923,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

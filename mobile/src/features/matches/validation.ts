@@ -17,6 +17,8 @@ export function scheduleProblem(
   matches: Match[],
   current?: Match,
 ) {
+  if (input.best_of !== undefined && ![1, 3, 5].includes(input.best_of))
+    return 'bestOf';
   const group = groups.find((g) => g.group_id === input.group_id);
   if (!group && !(current && current.group_id === null)) return 'group';
   if (
@@ -67,9 +69,15 @@ export function numericStats(
   return Object.fromEntries(
     entries.map(([key, value]) => {
       const definition = definitions.find((stat) => stat.key === key);
+      if (definition?.type === 'select') {
+        if (!definition.options?.some((option) => option.key === value))
+          throw new Error('matches.invalidStats');
+        return [key, value];
+      }
       const number = Number(value.replace(',', '.'));
       if (
         !definition ||
+        !['flat', 'percent'].includes(definition.type) ||
         !Number.isFinite(number) ||
         Math.abs(number) > 1e9 ||
         (definition.type === 'percent' && (number < 0 || number > 100))

@@ -3,14 +3,20 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, Bracket, GameInput, GameUpdate, MatchFinish, MatchInput, MatchResult, MatchScore,
+    AuthStore, Bracket, GameFinish, GameImport, GameInput, GameScores, GameUpdate, GeneratedMatch,
+    Generation, InvitationAction, InvitationEventKind, InvitationFilter, InvitationInput,
+    InvitationStatus, InvitationType, MatchFinish, MatchInput, MatchResult, MatchScore,
     MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
-    ParticipantStatus, ParticipantType, PgStore, Role, ScoringMode, ScoringRuleDefinition,
-    ScoringRuleImport, ScoringRuleInput, StatInput, StatType, StatUpdate, StepClosing,
-    StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepStart,
-    StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode, TeamUpdate,
-    TournamentImport, TournamentInput, TournamentStatus, TournamentTeamInput, TournamentUpdate,
-    UserUpdate,
+    ParticipantStatus, ParticipantType, PgStore, Placement, Role, RoleAuditAction, ScoringMode,
+    ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, StatInput, StatOption, StatScope,
+    StatType, StatUpdate, StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome,
+    StepParticipantStatus, StepStart, StepStatus, StoreError, TeamImport, TeamInput, TeamRole,
+    TeamScoringMode, TeamUpdate, TournamentImport, TournamentInput, TournamentRole,
+    TournamentSettings, TournamentSettingsUpdate, TournamentStatus, TournamentTeamInput,
+    TournamentUpdate, UserUpdate, Visibility, no_responses,
+};
+use api_public::store::{
+    Category, Channel, Language, Platform, Theme, UserSettings, UserSettingsUpdate,
 };
 use api_public::tournament_io::{FileScope, TournamentChild};
 use infra::{CachedDb, MemoryCache};
@@ -389,6 +395,7 @@ async fn stats_have_unique_keys_and_are_linked_to_games() {
         name: "Kills".into(),
         key: key.into(),
         kind,
+        scope: StatScope::Participant,
     };
 
     let stat = store
@@ -485,6 +492,7 @@ async fn stats_are_upserted_by_key_and_links_are_replaced() {
         name: name.into(),
         key: key.into(),
         kind,
+        scope: StatScope::Participant,
     };
     let game = |name: String| GameInput {
         name,
@@ -513,6 +521,21 @@ async fn stats_are_upserted_by_key_and_links_are_replaced() {
     assert!(!again[0].1);
     assert_eq!((again[0].0.id, again[0].0.name.as_str()), (a.id, "A2"));
     assert_eq!(again[0].0.kind, StatType::Percent);
+    // Numérique vers `mvp` : refusé, et rien n'est écrit (pas même le renommage de B).
+    assert!(matches!(
+        store
+            .upsert_stats(vec![
+                input("B2", &key_b, StatType::Flat),
+                StatInput {
+                    scope: StatScope::Match,
+                    ..input("A3", &key_a, StatType::Mvp)
+                },
+            ])
+            .await,
+        Err(StoreError::StatKindChanged(key)) if key == key_a
+    ));
+    assert_eq!(store.find_stat(a.id).await.unwrap().unwrap().name, "A2");
+    assert_eq!(store.find_stat(b.id).await.unwrap().unwrap().name, "B");
 
     assert!(store.set_game_stats(g1.id, vec![a.id, b.id]).await.unwrap());
     assert!(store.set_game_stats(g1.id, vec![b.id]).await.unwrap());
@@ -593,8 +616,8 @@ async fn insert_tournament(game_id: Uuid) -> Uuid {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
     let pool = sqlx::PgPool::connect(&url).await.unwrap();
     sqlx::query_scalar(
-        "INSERT INTO tournaments (game_id, name, start_date, end_date, participant_type, team_size, max_participants) \
-         VALUES ($1, $2, now(), now() + interval '1 day', 'team', 5, 8) RETURNING id",
+        "INSERT INTO tournaments (game_id, name, start_date, end_date, participant_type, team_min_starters, team_max_starters, max_participants) \
+         VALUES ($1, $2, now(), now() + interval '1 day', 'team', 5, 5, 8) RETURNING id",
     )
     .bind(game_id)
     .bind(unique("Tournoi"))
@@ -1020,10 +1043,12 @@ fn tournament_input(game_id: Uuid) -> TournamentInput {
         registration_open_at: Some("2026-11-01T00:00:00.000000Z".into()),
         registration_close_at: None,
         participant_type: ParticipantType::Solo,
-        team_size: None,
         max_participants: 2,
         team_scoring_mode: TeamScoringMode::TopN,
         team_scoring_n: Some(2),
+        settings: TournamentSettings::solo(),
+        owner_id: None,
+        is_template: false,
     }
 }
 
@@ -1079,13 +1104,19 @@ async fn tournaments_round_trip_and_update_partially() {
         .unwrap();
     assert_eq!(started.status, TournamentStatus::Registration);
     let listed = store
-        .list_tournaments(Some(game_id), Some(TournamentStatus::Registration), 10, 0)
+        .list_tournaments(
+            Some(game_id),
+            Some(TournamentStatus::Registration),
+            false,
+            10,
+            0,
+        )
         .await
         .unwrap();
     assert_eq!(listed.len(), 1);
     assert!(
         store
-            .list_tournaments(Some(game_id), Some(TournamentStatus::Draft), 10, 0)
+            .list_tournaments(Some(game_id), Some(TournamentStatus::Draft), false, 10, 0)
             .await
             .unwrap()
             .is_empty()
@@ -1093,7 +1124,7 @@ async fn tournaments_round_trip_and_update_partially() {
 
     // Les contraintes de la base refusent un tournoi incohérent.
     let mut bad = tournament_input(game_id);
-    bad.team_size = Some(3);
+    bad.settings.team_max_starters = Some(3);
     assert!(store.create_tournament(bad).await.is_err());
 
     assert!(store.delete_tournament(created.id).await.unwrap());
@@ -1112,6 +1143,7 @@ async fn scoring_rules_need_a_stat_of_the_game_and_lock_it_when_ongoing() {
             name: "Kills".into(),
             key,
             kind: StatType::Flat,
+            scope: StatScope::Participant,
         })
         .await
         .unwrap();
@@ -1241,6 +1273,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
         tournament_id: tournament.id,
         user_id: Some(user_id),
         tournament_team_id: None,
+        responses: no_responses(),
     };
 
     let first = store.add_participant(solo(alice)).await.unwrap().unwrap();
@@ -1260,6 +1293,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
                 tournament_id: Uuid::new_v4(),
                 user_id: Some(carol),
                 tournament_team_id: None,
+                responses: no_responses(),
             })
             .await
             .unwrap()
@@ -1272,7 +1306,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(withdrawn.status, ParticipantStatus::Withdrawn);
+    assert_eq!(withdrawn.participant.status, ParticipantStatus::Withdrawn);
     store.add_participant(solo(carol)).await.unwrap().unwrap();
     let listed = store.list_participants(tournament.id, 10, 0).await.unwrap();
     assert_eq!(listed.len(), 3);
@@ -1289,8 +1323,8 @@ async fn participants_are_unique_and_capped_by_max_participants() {
             .is_empty()
     );
 
-    assert!(store.delete_participant(first.id).await.unwrap());
-    assert!(!store.delete_participant(first.id).await.unwrap());
+    assert!(store.delete_participant(first.id).await.unwrap().is_some());
+    assert!(store.delete_participant(first.id).await.unwrap().is_none());
     assert!(
         store
             .set_participant_status(first.id, ParticipantStatus::CheckedIn)
@@ -1322,6 +1356,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
                 tournament_id: team_tournament.id,
                 user_id: Some(user_id),
                 tournament_team_id: Some(team.id),
+                responses: no_responses(),
             })
             .await
             .unwrap()
@@ -1334,6 +1369,7 @@ async fn participants_are_unique_and_capped_by_max_participants() {
                 tournament_id: tournament.id,
                 user_id: Some(carol),
                 tournament_team_id: Some(team.id),
+                responses: no_responses(),
             })
             .await
             .is_err()
@@ -1361,6 +1397,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
             name: "Kills".into(),
             key: unique("kills").replace('-', "_").to_lowercase(),
             kind: StatType::Flat,
+            scope: StatScope::Participant,
         })
         .await
         .unwrap();
@@ -1449,7 +1486,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
 
     // Un lot en échec n'écrit rien : la statistique n'est pas liée à l'autre jeu.
     let before = store
-        .list_tournaments(Some(game_id), None, 100, 0)
+        .list_tournaments(Some(game_id), None, false, 100, 0)
         .await
         .unwrap()
         .len();
@@ -1470,7 +1507,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
     assert!(stray.is_err());
     assert_eq!(
         store
-            .list_tournaments(Some(game_id), None, 100, 0)
+            .list_tournaments(Some(game_id), None, false, 100, 0)
             .await
             .unwrap()
             .len(),
@@ -1481,6 +1518,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
     let participant = |user_id: Uuid, status: ParticipantStatus| ParticipantImport {
         user_id: Some(user_id),
         tournament_team_id: None,
+        responses: no_responses(),
         status,
         registered_at: Some("2026-11-02T08:00:00.000000Z".into()),
     };
@@ -1489,6 +1527,7 @@ async fn tournaments_are_unique_per_game_and_upserted_by_name() {
             tournament_id: first.id,
             user_id: Some(alice),
             tournament_team_id: None,
+            responses: no_responses(),
         })
         .await
         .unwrap();
@@ -1561,6 +1600,7 @@ async fn step_tables_enforce_their_constraints() {
             tournament_id: first.id,
             user_id: Some(alice),
             tournament_team_id: None,
+            responses: no_responses(),
         })
         .await
         .unwrap()
@@ -1671,6 +1711,7 @@ fn step_definition(
         matches_per_group: 3,
         advance_per_group: advance,
         tiebreak: serde_json::json!(["wins"]),
+        rules: Default::default(),
     }
 }
 
@@ -1694,6 +1735,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
                 tournament_id: tournament.id,
                 user_id: Some(user_id),
                 tournament_team_id: None,
+                responses: no_responses(),
             })
             .await
             .unwrap();
@@ -1747,6 +1789,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
         .start_step(StepStart {
             step_id: first.id,
             groups: vec![players.clone()],
+            seeds: Vec::new(),
         })
         .await
         .unwrap()
@@ -1757,6 +1800,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
             .start_step(StepStart {
                 step_id: first.id,
                 groups: vec![players.clone()],
+                seeds: Vec::new(),
             })
             .await,
         Err(StoreError::StepState)
@@ -1766,6 +1810,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
             .start_step(StepStart {
                 step_id: Uuid::new_v4(),
                 groups: vec![],
+                seeds: Vec::new(),
             })
             .await
             .unwrap()
@@ -1821,11 +1866,13 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     assert!(
         store
             .close_step(StepClosing {
+                expected_competition_revision: None,
                 step_id: first.id,
                 outcomes: outcomes.clone(),
                 next: Some(StepStart {
                     step_id: last.id,
                     groups: vec![vec![Uuid::new_v4()]],
+                    seeds: Vec::new(),
                 }),
             })
             .await
@@ -1839,11 +1886,13 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
 
     let finished = store
         .close_step(StepClosing {
+            expected_competition_revision: None,
             step_id: first.id,
             outcomes,
             next: Some(StepStart {
                 step_id: last.id,
                 groups: vec![vec![players[0], players[1]]],
+                seeds: Vec::new(),
             }),
         })
         .await
@@ -1870,6 +1919,7 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     assert!(matches!(
         store
             .close_step(StepClosing {
+                expected_competition_revision: None,
                 step_id: first.id,
                 outcomes: vec![],
                 next: None,
@@ -1879,7 +1929,13 @@ async fn steps_start_close_and_open_the_next_one_atomically() {
     ));
 
     // Retirer un inscrit retire sa participation aux étapes ; supprimer une étape, ses groupes.
-    assert!(store.delete_participant(players[3]).await.unwrap());
+    assert!(
+        store
+            .delete_participant(players[3])
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         store.list_step_participants(first.id).await.unwrap().len(),
         3
@@ -1924,6 +1980,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
                     tournament_id: tournament,
                     user_id: Some(user_id),
                     tournament_team_id: None,
+                    responses: no_responses(),
                 })
                 .await
                 .unwrap()
@@ -1948,6 +2005,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .start_step(StepStart {
             step_id: first.id,
             groups: vec![players.clone()],
+            seeds: Vec::new(),
         })
         .await
         .unwrap();
@@ -1972,11 +2030,13 @@ async fn steps_export_and_reimport_into_another_tournament() {
         .collect();
     store
         .close_step(StepClosing {
+            expected_competition_revision: None,
             step_id: first.id,
             outcomes,
             next: Some(StepStart {
                 step_id: last.id,
                 groups: vec![vec![players[0], players[1]]],
+                seeds: Vec::new(),
             }),
         })
         .await
@@ -1992,6 +2052,7 @@ async fn steps_export_and_reimport_into_another_tournament() {
             round: Some(round),
             bracket: None,
             next_match_id: None,
+            best_of: 1,
             scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
             participants,
         })
@@ -2008,6 +2069,8 @@ async fn steps_export_and_reimport_into_another_tournament() {
                     points: 2.5,
                     rank: Some(1),
                     result: Some(MatchResult::Win),
+                    games_won: None,
+                    slot: None,
                 },
                 MatchScore {
                     participant_id: players[1],
@@ -2015,10 +2078,14 @@ async fn steps_export_and_reimport_into_another_tournament() {
                     points: 1.0,
                     rank: Some(2),
                     result: Some(MatchResult::Loss),
+                    games_won: None,
+                    slot: None,
                 },
             ],
-            advance: None,
+            placements: Vec::new(),
+            cancel: Vec::new(),
             step_points: vec![(players[0], 2.5), (players[1], 1.0)],
+            game: None,
         })
         .await
         .unwrap();
@@ -2106,6 +2173,7 @@ async fn match_tables_enforce_their_constraints() {
             tournament_id: tournament.id,
             user_id: Some(alice),
             tournament_team_id: None,
+            responses: no_responses(),
         })
         .await
         .unwrap()
@@ -2253,6 +2321,67 @@ async fn match_tables_enforce_their_constraints() {
     .await
     .unwrap();
 
+    // Séries et parties : best_of vaut 1 par défaut, 1, 3 ou 5 ; une partie par numéro, de 1 à 5.
+    let best_of: i32 = sqlx::query_scalar("SELECT best_of FROM match WHERE id = $1")
+        .bind(match_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(best_of, 1);
+    for bad in [0, 2, 4, 7] {
+        let attempt = sqlx::query("UPDATE match SET best_of = $2 WHERE id = $1")
+            .bind(match_id)
+            .bind(bad)
+            .execute(&pool)
+            .await;
+        assert!(attempt.is_err(), "best_of {bad}");
+    }
+    let game = |number: i32, status: &str, attributes: &str| {
+        let pool = pool.clone();
+        let (status, attributes) = (status.to_string(), attributes.to_string());
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match_game (match_id, number, status, attributes) \
+                 VALUES ($1, $2, $3, $4::jsonb) RETURNING id",
+            )
+            .bind(match_id)
+            .bind(number)
+            .bind(status)
+            .bind(attributes)
+            .fetch_one(&pool)
+            .await
+        }
+    };
+    let game_id_row = game(1, "ongoing", "{}").await.unwrap();
+    assert!(game(1, "ongoing", "{}").await.is_err(), "numéro déjà pris");
+    assert!(game(0, "ongoing", "{}").await.is_err());
+    assert!(game(6, "ongoing", "{}").await.is_err());
+    assert!(game(2, "postponed", "{}").await.is_err());
+    assert!(game(2, "ongoing", "[1]").await.is_err());
+    game(2, "finished", "{\"map\": \"bind\"}").await.unwrap();
+    let in_game = |points: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(&format!(
+                "INSERT INTO match_game_participant (game_id, participant_id) VALUES ($1, $2); {points}"
+            ))
+            .bind(game_id_row)
+            .bind(participant.id)
+            .execute(&pool)
+            .await
+        }
+    };
+    in_game("").await.unwrap();
+    assert!(in_game("").await.is_err(), "un participant par partie");
+    for bad in [
+        "UPDATE match_game_participant SET stats = '[1]'::jsonb WHERE game_id = $1",
+        "UPDATE match_game_participant SET rank = 0 WHERE game_id = $1",
+        "UPDATE match_game_participant SET result = 'forfeit' WHERE game_id = $1",
+    ] {
+        let attempt = sqlx::query(bad).bind(game_id_row).execute(&pool).await;
+        assert!(attempt.is_err(), "{bad}");
+    }
+
     sqlx::query("DELETE FROM match WHERE id = $1")
         .bind(next)
         .execute(&pool)
@@ -2274,9 +2403,12 @@ async fn match_tables_enforce_their_constraints() {
         .unwrap();
     let left: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM match WHERE id = $1) \
-         + (SELECT count(*) FROM match_participant WHERE match_id = $1)",
+         + (SELECT count(*) FROM match_participant WHERE match_id = $1) \
+         + (SELECT count(*) FROM match_game WHERE match_id = $1) \
+         + (SELECT count(*) FROM match_game_participant WHERE game_id = $2)",
     )
     .bind(match_id)
+    .bind(game_id_row)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -2303,6 +2435,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
                 tournament_id: tournament.id,
                 user_id: Some(user_id),
                 tournament_team_id: None,
+                responses: no_responses(),
             })
             .await
             .unwrap();
@@ -2324,6 +2457,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         .start_step(StepStart {
             step_id: step.id,
             groups: vec![players.clone()],
+            seeds: Vec::new(),
         })
         .await
         .unwrap();
@@ -2335,6 +2469,7 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         round: Some(round),
         bracket: None,
         next_match_id: next,
+        best_of: 1,
         scheduled_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
         participants,
     };
@@ -2418,6 +2553,8 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         points,
         rank: Some(rank),
         result: Some(result),
+        games_won: None,
+        slot: None,
     };
     let scores = vec![
         score(players[0], 3, 4.5, 1, MatchResult::Win),
@@ -2464,8 +2601,14 @@ async fn matches_are_stored_scored_and_finished_atomically() {
         .finish_match(MatchFinish {
             match_id: semi.id,
             scores,
-            advance: Some((last.id, players[0])),
+            placements: vec![Placement {
+                match_id: last.id,
+                participant_id: players[0],
+                slot: None,
+            }],
+            cancel: Vec::new(),
             step_points: vec![(players[0], 4.5), (players[1], 1.5)],
+            game: None,
         })
         .await
         .unwrap()
@@ -2495,8 +2638,10 @@ async fn matches_are_stored_scored_and_finished_atomically() {
             .finish_match(MatchFinish {
                 match_id: semi.id,
                 scores: vec![],
-                advance: None,
+                placements: Vec::new(),
+                cancel: Vec::new(),
                 step_points: vec![],
+                game: None,
             })
             .await
             .map(|_| ()),
@@ -2529,7 +2674,13 @@ async fn matches_are_stored_scored_and_finished_atomically() {
     );
 
     // Retirer un inscrit retire sa participation aux matchs, pas les matchs.
-    assert!(store.delete_participant(players[0]).await.unwrap());
+    assert!(
+        store
+            .delete_participant(players[0])
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(store.find_match(semi.id).await.unwrap().is_some());
     let remaining = store.list_step_match_participants(step.id).await.unwrap();
     assert!(remaining.iter().all(|p| p.participant_id != players[0]));
@@ -2692,5 +2843,2099 @@ async fn expired_password_reset_tokens_are_refused() {
             .unwrap()
             .password_hash,
         "old"
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn generated_matches_persist_their_links_and_are_generated_once() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 4,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+                responses: no_responses(),
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: StepDefinition {
+                format: StepFormat::DoubleElim,
+                match_type: MatchType::Duel,
+                rules: api_public::store::StepRules {
+                    best_of: 3,
+                    ..Default::default()
+                },
+                ..step_definition(1, 1, 4, 1)
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(step.rules.best_of, 3, "les réglages sont conservés");
+    // Les têtes de série sont enregistrées au lancement, dans l'ordre donné.
+    let seeds = vec![players[2], players[0], players[3], players[1]];
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![seeds.clone()],
+            seeds: seeds.clone(),
+        })
+        .await
+        .unwrap();
+    let seeded = store.list_step_participants(step.id).await.unwrap();
+    for (index, id) in seeds.iter().enumerate() {
+        let member = seeded.iter().find(|m| m.participant_id == *id).unwrap();
+        assert_eq!(member.seed, Some(i32::try_from(index + 1).unwrap()));
+    }
+    let group = store.list_step_groups(step.id).await.unwrap()[0].id;
+
+    // Une mini-génération : une demi-finale, ses deux destinations (vainqueur et perdant) et un
+    // match exempt.
+    let planned = |round: i32,
+                   number: i32,
+                   bracket: Option<Bracket>,
+                   participants: Vec<(Uuid, Option<i32>)>,
+                   next: Option<(usize, i32)>,
+                   loser_next: Option<(usize, i32)>,
+                   bye: Option<f64>| GeneratedMatch {
+        group_id: group,
+        round,
+        number,
+        bracket,
+        best_of: 3,
+        participants,
+        next,
+        loser_next,
+        bye_points: bye,
+    };
+    let generation = |initial: bool, matches: Vec<GeneratedMatch>| Generation {
+        step_id: step.id,
+        game_id,
+        matches,
+        step_points: vec![(players[3], 3.0)],
+        initial,
+    };
+    let batch = vec![
+        planned(
+            1,
+            1,
+            Some(Bracket::Winners),
+            vec![(players[0], Some(1)), (players[1], Some(2))],
+            Some((1, 1)),
+            Some((2, 2)),
+            None,
+        ),
+        planned(2, 1, Some(Bracket::Winners), vec![], None, None, None),
+        planned(1, 1, Some(Bracket::Losers), vec![], None, None, None),
+        planned(
+            1,
+            2,
+            Some(Bracket::Winners),
+            vec![(players[3], Some(1))],
+            None,
+            None,
+            Some(3.0),
+        ),
+    ];
+    // Deux générations concurrentes : une seule réussit, sans doublon.
+    let (first, second) = tokio::join!(
+        store.generate_matches(generation(true, batch.clone())),
+        store.generate_matches(generation(true, batch.clone())),
+    );
+    let (created, refused) = match (first, second) {
+        (Ok(created), Err(error)) | (Err(error), Ok(created)) => (created, error),
+        other => panic!("une seule génération doit réussir : {other:?}"),
+    };
+    assert!(matches!(refused, StoreError::StepState), "{refused}");
+    assert_eq!(created.len(), 4);
+    assert_eq!(
+        store.list_matches(step.id, None, None).await.unwrap().len(),
+        4
+    );
+
+    let semi = &created[0];
+    assert_eq!(semi.number, Some(1));
+    assert_eq!(semi.best_of, 3);
+    assert_eq!(semi.next_match_id, Some(created[1].id));
+    assert_eq!(semi.next_slot, Some(1));
+    assert_eq!(semi.loser_next_match_id, Some(created[2].id));
+    assert_eq!(semi.loser_next_slot, Some(2));
+    let bye = &created[3];
+    assert_eq!(bye.status, MatchStatus::Finished);
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    let placed = members
+        .iter()
+        .find(|p| p.match_id == semi.id && p.participant_id == players[1]);
+    assert_eq!(placed.unwrap().slot, Some(2));
+    let exempt = members.iter().find(|p| p.match_id == bye.id).unwrap();
+    assert_eq!((exempt.points, exempt.rank), (3.0, Some(1)));
+    let totals = store.list_step_participants(step.id).await.unwrap();
+    assert_eq!(
+        totals
+            .iter()
+            .find(|m| m.participant_id == players[3])
+            .unwrap()
+            .points,
+        3.0
+    );
+
+    // Ronde suivante : refusée si elle existe déjà, acceptée sinon.
+    let again = vec![planned(
+        1,
+        1,
+        Some(Bracket::Winners),
+        vec![],
+        None,
+        None,
+        None,
+    )];
+    assert!(matches!(
+        store.generate_matches(generation(false, again)).await,
+        Err(StoreError::StepState)
+    ));
+    let fresh = vec![planned(
+        9,
+        1,
+        None,
+        vec![(players[0], Some(1)), (players[1], Some(2))],
+        None,
+        None,
+        None,
+    )];
+    assert_eq!(
+        store
+            .generate_matches(generation(false, fresh))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // La clôture place le vainqueur et le perdant, et annule un match devenu inutile.
+    store
+        .finish_match(MatchFinish {
+            match_id: semi.id,
+            scores: vec![
+                MatchScore {
+                    participant_id: players[0],
+                    stats: serde_json::json!({}),
+                    points: 3.0,
+                    rank: Some(1),
+                    result: Some(MatchResult::Win),
+                    games_won: Some(2),
+                    slot: None,
+                },
+                MatchScore {
+                    participant_id: players[1],
+                    stats: serde_json::json!({}),
+                    points: 0.0,
+                    rank: Some(2),
+                    result: Some(MatchResult::Loss),
+                    games_won: Some(1),
+                    slot: None,
+                },
+            ],
+            placements: vec![
+                Placement {
+                    match_id: created[1].id,
+                    participant_id: players[0],
+                    slot: Some(1),
+                },
+                Placement {
+                    match_id: created[2].id,
+                    participant_id: players[1],
+                    slot: Some(2),
+                },
+            ],
+            cancel: vec![created[1].id],
+            step_points: vec![(players[0], 3.0)],
+            game: None,
+        })
+        .await
+        .unwrap();
+    let after = store.list_matches(step.id, None, None).await.unwrap();
+    let cancelled = after.iter().find(|m| m.id == created[1].id).unwrap();
+    assert_eq!(cancelled.status, MatchStatus::Cancelled);
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    let dropped = members
+        .iter()
+        .find(|p| p.match_id == created[2].id && p.participant_id == players[1])
+        .unwrap();
+    assert_eq!(dropped.slot, Some(2));
+    let played = members
+        .iter()
+        .find(|p| p.match_id == semi.id && p.participant_id == players[0])
+        .unwrap();
+    assert_eq!(played.games_won, Some(2));
+
+    // Supprimer un match ne laisse pas de lien vers lui.
+    store.delete_match(created[2].id).await.unwrap();
+    let relinked = store.find_match(semi.id).await.unwrap().unwrap();
+    assert_eq!(relinked.loser_next_match_id, None);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn selection_stats_keep_their_options_per_game() {
+    let store = store().await;
+    let (first, second) = (game(&store).await, game(&store).await);
+    let key = unique("map").replace('-', "_");
+    let select = store
+        .create_stat(StatInput {
+            name: "Carte".into(),
+            key: key.clone(),
+            kind: StatType::Select,
+            scope: StatScope::Match,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (select.kind, select.scope),
+        (StatType::Select, StatScope::Match)
+    );
+    let flat = store
+        .create_stat(StatInput {
+            name: "Kills".into(),
+            key: unique("kills").replace('-', "_"),
+            kind: StatType::Flat,
+            scope: StatScope::Participant,
+        })
+        .await
+        .unwrap();
+    // La base refuse un MVP de portée participant et un numérique de portée match.
+    for (kind, scope) in [
+        (StatType::Mvp, StatScope::Participant),
+        (StatType::Flat, StatScope::Match),
+    ] {
+        let refused = store
+            .create_stat(StatInput {
+                name: "Incohérente".into(),
+                key: unique("bad").replace('-', "_"),
+                kind,
+                scope,
+            })
+            .await;
+        assert!(refused.is_err(), "{kind:?} {scope:?}");
+    }
+
+    for game_id in [first, second] {
+        assert!(store.link_stat(game_id, select.id).await.unwrap());
+        assert!(store.link_stat(game_id, flat.id).await.unwrap());
+    }
+    let option = |key: &str, label: &str| StatOption {
+        key: key.into(),
+        label: label.into(),
+    };
+    assert!(
+        store
+            .set_stat_options(
+                first,
+                select.id,
+                vec![option("ascent", "Ascent"), option("bind", "Bind")]
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .set_stat_options(second, select.id, vec![option("lotus", "Lotus")])
+            .await
+            .unwrap()
+    );
+    // Seule une statistique `select` liée au jeu a des options.
+    assert!(
+        !store
+            .set_stat_options(first, flat.id, vec![option("a", "A")])
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_stat_options(first, Uuid::new_v4(), vec![])
+            .await
+            .unwrap()
+    );
+    let of = |stats: Vec<api_public::store::Stat>, id: Uuid| {
+        stats.into_iter().find(|s| s.id == id).unwrap()
+    };
+    let stats = store.list_game_stats(first).await.unwrap().unwrap();
+    assert_eq!(
+        of(stats.clone(), select.id).options,
+        [option("ascent", "Ascent"), option("bind", "Bind")]
+    );
+    assert!(of(stats, flat.id).options.is_empty());
+    let other = store.list_game_stats(second).await.unwrap().unwrap();
+    assert_eq!(of(other, select.id).options, [option("lotus", "Lotus")]);
+
+    // Remplacer garde l'ordre donné ; une clé en double est refusée.
+    assert!(
+        store
+            .set_stat_options(
+                first,
+                select.id,
+                vec![option("bind", "Bind"), option("ascent", "A")]
+            )
+            .await
+            .unwrap()
+    );
+    let stats = store.list_game_stats(first).await.unwrap().unwrap();
+    assert_eq!(
+        of(stats, select.id).options,
+        [option("bind", "Bind"), option("ascent", "A")]
+    );
+    assert!(
+        store
+            .set_stat_options(first, select.id, vec![option("x", "X"), option("x", "Y")])
+            .await
+            .is_err()
+    );
+    // Délier la statistique du jeu retire ses options, pas celles de l'autre jeu.
+    assert!(store.unlink_stat(first, select.id).await.unwrap());
+    assert!(store.link_stat(first, select.id).await.unwrap());
+    let stats = store.list_game_stats(first).await.unwrap().unwrap();
+    assert!(of(stats, select.id).options.is_empty());
+    let other = store.list_game_stats(second).await.unwrap().unwrap();
+    assert_eq!(of(other, select.id).options.len(), 1);
+    // Mise à jour de la portée d'un choix, et upsert.
+    let updated = store
+        .update_stat(
+            select.id,
+            StatUpdate {
+                scope: Some(StatScope::Participant),
+                ..StatUpdate::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.scope, StatScope::Participant);
+    let upserted = store
+        .upsert_stats(vec![StatInput {
+            name: "Carte".into(),
+            key,
+            kind: StatType::Select,
+            scope: StatScope::Match,
+        }])
+        .await
+        .unwrap();
+    assert!(!upserted[0].1);
+    assert_eq!(upserted[0].0.scope, StatScope::Match);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn match_games_are_stored_finished_and_aggregated_atomically() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            max_participants: 2,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    let mut players = Vec::new();
+    for name in ["a", "b"] {
+        let user_id = user(&store, name).await;
+        let participant = store
+            .add_participant(ParticipantInput {
+                tournament_id: tournament.id,
+                user_id: Some(user_id),
+                tournament_team_id: None,
+                responses: no_responses(),
+            })
+            .await
+            .unwrap();
+        players.push(participant.unwrap().id);
+    }
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: StepDefinition {
+                format: StepFormat::Pool,
+                match_type: MatchType::Duel,
+                ..step_definition(1, 1, 2, 1)
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![players.clone()],
+            seeds: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let group = store.list_step_groups(step.id).await.unwrap()[0].id;
+    let created = store
+        .create_match(MatchInput {
+            game_id,
+            step_id: step.id,
+            group_id: group,
+            round: Some(1),
+            bracket: None,
+            next_match_id: None,
+            best_of: 3,
+            scheduled_at: None,
+            participants: players.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.best_of, 3);
+    let score = |id: Uuid, kills: f64, rank: i32, result: MatchResult| MatchScore {
+        participant_id: id,
+        stats: serde_json::json!({ "kills": kills, "character": "jett" }),
+        points: kills,
+        rank: Some(rank),
+        result: Some(result),
+        games_won: None,
+        slot: None,
+    };
+
+    // Partie 1 : numérotée, avec les participants du match ; le match démarre.
+    let first = store
+        .create_match_game(created.id, serde_json::json!({ "map": "ascent" }))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.number, first.status), (1, MatchStatus::Ongoing));
+    assert_eq!(first.participants.len(), 2);
+    assert!(first.started_at.is_some());
+    assert_eq!(
+        store.find_match(created.id).await.unwrap().unwrap().status,
+        MatchStatus::Ongoing
+    );
+    // Une seule partie ouverte à la fois.
+    assert!(matches!(
+        store
+            .create_match_game(created.id, serde_json::json!({}))
+            .await,
+        Err(StoreError::MatchState)
+    ));
+    assert!(
+        store
+            .create_match_game(Uuid::new_v4(), serde_json::json!({}))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let saved = store
+        .save_game_scores(GameScores {
+            game_id: first.id,
+            attributes: Some(serde_json::json!({ "map": "bind" })),
+            scores: vec![score(players[0], 5.0, 1, MatchResult::Win)],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.attributes, serde_json::json!({ "map": "bind" }));
+    let winner = saved
+        .participants
+        .iter()
+        .find(|p| p.participant_id == players[0])
+        .unwrap();
+    assert_eq!((winner.points, winner.rank), (5.0, Some(1)));
+    assert_eq!(winner.stats["character"], "jett");
+    let finished = store
+        .finish_game(GameFinish {
+            game_id: first.id,
+            scores: vec![
+                score(players[0], 5.0, 1, MatchResult::Win),
+                score(players[1], 2.0, 2, MatchResult::Loss),
+            ],
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(finished.status, MatchStatus::Finished);
+    assert!(finished.ended_at.is_some());
+    // Une partie terminée ne change plus et ne se supprime pas.
+    for result in [
+        store
+            .save_game_scores(GameScores {
+                game_id: first.id,
+                attributes: None,
+                scores: vec![],
+            })
+            .await
+            .map(|_| ()),
+        store.delete_match_game(first.id).await.map(|_| ()),
+        store
+            .finish_game(GameFinish {
+                game_id: first.id,
+                scores: vec![],
+            })
+            .await
+            .map(|_| ()),
+    ] {
+        assert!(matches!(result, Err(StoreError::MatchState)));
+    }
+
+    // Partie 2 supprimée avant d'être jouée, puis refaite : le numéro est repris.
+    let abandoned = store
+        .create_match_game(created.id, serde_json::json!({}))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(abandoned.number, 2);
+    assert!(store.delete_match_game(abandoned.id).await.unwrap());
+    assert!(!store.delete_match_game(abandoned.id).await.unwrap());
+    let second = store
+        .create_match_game(created.id, serde_json::json!({}))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.number, 2);
+
+    // La dernière partie et le match se terminent ensemble : tout ou rien.
+    let totals = vec![
+        score(players[0], 9.0, 1, MatchResult::Win),
+        score(players[1], 3.0, 2, MatchResult::Loss),
+    ];
+    let closed = store
+        .finish_match(MatchFinish {
+            match_id: created.id,
+            scores: totals.clone(),
+            placements: Vec::new(),
+            cancel: Vec::new(),
+            step_points: vec![(players[0], 9.0), (players[1], 3.0)],
+            game: Some(GameFinish {
+                game_id: second.id,
+                scores: totals.clone(),
+            }),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(closed.status, MatchStatus::Finished);
+    let games = store.list_match_games(created.id).await.unwrap();
+    assert_eq!(games.iter().map(|g| g.number).collect::<Vec<_>>(), [1, 2]);
+    assert!(games.iter().all(|g| g.status == MatchStatus::Finished));
+    assert_eq!(store.list_step_match_games(step.id).await.unwrap(), games);
+    let members = store.list_step_match_participants(step.id).await.unwrap();
+    assert_eq!(
+        members
+            .iter()
+            .find(|m| m.participant_id == players[0])
+            .unwrap()
+            .points,
+        9.0
+    );
+    // Terminé : plus de partie.
+    assert!(matches!(
+        store
+            .create_match_game(created.id, serde_json::json!({}))
+            .await,
+        Err(StoreError::MatchState)
+    ));
+
+    // Un match supprimé emporte ses parties ; le réimport les recrée avec leurs numéros.
+    let imported = store
+        .replace_step_matches(
+            step.id,
+            game_id,
+            vec![api_public::store::MatchImport {
+                schedule: None,
+                group_id: Some(group),
+                round: Some(1),
+                bracket: None,
+                next: None,
+                next_slot: None,
+                loser_next: None,
+                loser_next_slot: None,
+                number: None,
+                best_of: 3,
+                scheduled_at: None,
+                started_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+                ended_at: None,
+                status: MatchStatus::Ongoing,
+                participants: totals.clone(),
+                games: vec![
+                    GameImport {
+                        status: MatchStatus::Finished,
+                        attributes: serde_json::json!({ "map": "bind" }),
+                        started_at: Some("2026-11-14T18:00:00.000000Z".to_string()),
+                        ended_at: Some("2026-11-14T18:30:00.000000Z".to_string()),
+                        participants: totals.clone(),
+                    },
+                    GameImport {
+                        status: MatchStatus::Ongoing,
+                        attributes: serde_json::json!({}),
+                        started_at: None,
+                        ended_at: None,
+                        participants: vec![],
+                    },
+                ],
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(imported);
+    assert!(store.list_match_games(created.id).await.unwrap().is_empty());
+    let replaced = store.list_matches(step.id, None, None).await.unwrap();
+    assert_eq!((replaced.len(), replaced[0].best_of), (1, 3));
+    let games = store.list_match_games(replaced[0].id).await.unwrap();
+    assert_eq!(games.iter().map(|g| g.number).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(games[0].attributes, serde_json::json!({ "map": "bind" }));
+    assert_eq!(
+        games[0].ended_at.as_deref(),
+        Some("2026-11-14T18:30:00.000000Z")
+    );
+    assert_eq!(games[0].participants.len(), 2);
+    assert!(store.delete_match(replaced[0].id).await.unwrap());
+    assert!(
+        store
+            .list_step_match_games(step.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+async fn pool() -> sqlx::PgPool {
+    sqlx::PgPool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .await
+        .unwrap()
+}
+
+fn invitation_input(
+    kind: InvitationType,
+    resource_id: Uuid,
+    inviter_id: Uuid,
+    recipient_id: Option<Uuid>,
+) -> InvitationInput {
+    InvitationInput {
+        kind,
+        resource_id,
+        inviter_id,
+        recipient_id,
+        role: match kind {
+            InvitationType::Tournament => None,
+            _ => Some(TeamRole::Substitute),
+        },
+        token_hash: recipient_id
+            .is_none()
+            .then(|| Uuid::new_v4().simple().to_string().repeat(2)),
+        max_uses: recipient_id.is_none().then_some(1),
+        ttl: Duration::from_secs(3600),
+    }
+}
+
+async fn global_team(store: &PgStore, owner: Uuid) -> Uuid {
+    let game_id = game(store).await;
+    store
+        .create_team(TeamInput {
+            game_id,
+            name: unique("Team"),
+            tag: None,
+            picture_url: None,
+            owner_id: owner,
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+async fn registration_tournament(store: &PgStore, max: i32) -> Uuid {
+    let game_id = game(store).await;
+    let tournament = store
+        .create_tournament(TournamentInput {
+            registration_open_at: None,
+            max_participants: max,
+            ..tournament_input(game_id)
+        })
+        .await
+        .unwrap();
+    store
+        .set_tournament_status(tournament.id, TournamentStatus::Registration)
+        .await
+        .unwrap();
+    tournament.id
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn invitations_follow_their_lifecycle_and_keep_a_history() {
+    let store = store().await;
+    let (alice, bob, carol) = (
+        user(&store, "alice").await,
+        user(&store, "bob").await,
+        user(&store, "carol").await,
+    );
+    let team = global_team(&store, alice).await;
+    let input = || invitation_input(InvitationType::Team, team, alice, Some(bob));
+
+    let created = store.create_invitation(input()).await.unwrap();
+    assert_eq!(created.status, InvitationStatus::Pending);
+    assert_eq!(created.role, Some(TeamRole::Substitute));
+    assert!(!created.is_link);
+    // Pas de doublon actif, mais un lien n'est pas concerné.
+    assert!(matches!(
+        store.create_invitation(input()).await,
+        Err(StoreError::InvitationDuplicate)
+    ));
+    let link = invitation_input(InvitationType::Team, team, alice, None);
+    let link = store.create_invitation(link).await.unwrap();
+    assert!(link.is_link);
+
+    let (incoming, total) = store
+        .list_invitations(InvitationFilter {
+            recipient_id: Some(bob),
+            limit: 10,
+            ..InvitationFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!((incoming.len(), total), (1, 1));
+    let (outgoing, total) = store
+        .list_invitations(InvitationFilter {
+            inviter_id: Some(alice),
+            status: Some(InvitationStatus::Pending),
+            kind: Some(InvitationType::Team),
+            limit: 1,
+            offset: 1,
+            ..InvitationFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!((outgoing.len(), total), (1, 2));
+
+    // Seul l'invité accepte ; le compte tiers ne crée aucune adhésion.
+    assert!(matches!(
+        store
+            .respond_invitation(created.id, carol, InvitationAction::Accept)
+            .await,
+        Err(StoreError::InvitationUnavailable)
+    ));
+    let accepted = store
+        .respond_invitation(created.id, bob, InvitationAction::Accept)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.status, InvitationStatus::Accepted);
+    assert!(accepted.responded_at.is_some());
+    let members = store.list_team_members(team).await.unwrap().unwrap();
+    assert!(
+        members
+            .iter()
+            .any(|m| m.user_id == bob && m.role == TeamRole::Substitute)
+    );
+    for action in [
+        InvitationAction::Accept,
+        InvitationAction::Decline,
+        InvitationAction::Revoke,
+    ] {
+        assert!(matches!(
+            store.respond_invitation(created.id, bob, action).await,
+            Err(StoreError::InvitationNotPending)
+        ));
+    }
+    let kinds: Vec<_> = store
+        .list_invitation_events(created.id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        [InvitationEventKind::Created, InvitationEventKind::Accepted]
+    );
+
+    // Déjà membre : l'acceptation d'une autre invitation échoue sans effet de bord.
+    let again = store
+        .create_invitation(invitation_input(
+            InvitationType::Team,
+            team,
+            alice,
+            Some(carol),
+        ))
+        .await
+        .unwrap();
+    store
+        .add_team_member(team, carol, TeamRole::Member)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .respond_invitation(again.id, carol, InvitationAction::Accept)
+            .await,
+        Err(StoreError::AlreadyTeamMember)
+    ));
+    assert_eq!(
+        store
+            .find_invitation(again.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        InvitationStatus::Pending
+    );
+    let revoked = store
+        .respond_invitation(again.id, alice, InvitationAction::Revoke)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(revoked.status, InvitationStatus::Revoked);
+
+    assert!(
+        store
+            .respond_invitation(Uuid::new_v4(), bob, InvitationAction::Accept)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn invitations_expire_and_never_store_clear_tokens() {
+    let store = store().await;
+    let pool = pool().await;
+    let (alice, bob) = (user(&store, "alice").await, user(&store, "bob").await);
+    let team = global_team(&store, alice).await;
+    let direct = store
+        .create_invitation(invitation_input(
+            InvitationType::Team,
+            team,
+            alice,
+            Some(bob),
+        ))
+        .await
+        .unwrap();
+    let swept = store
+        .create_invitation(invitation_input(InvitationType::Team, team, alice, None))
+        .await
+        .unwrap();
+    for id in [direct.id, swept.id] {
+        sqlx::query(
+            "UPDATE invitations SET expires_at = now() - interval '1 second' WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    // L'acceptation tardive enregistre l'expiration et ne crée aucune adhésion.
+    assert!(matches!(
+        store
+            .respond_invitation(direct.id, bob, InvitationAction::Accept)
+            .await,
+        Err(StoreError::InvitationExpired)
+    ));
+    assert_eq!(
+        store
+            .find_invitation(direct.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        InvitationStatus::Expired
+    );
+    assert_eq!(
+        store.list_team_members(team).await.unwrap().unwrap().len(),
+        1
+    );
+    // La purge expire les autres et renvoie exactement celles-ci.
+    let expired = store.expire_invitations().await.unwrap();
+    assert!(expired.iter().any(|i| i.id == swept.id));
+    assert!(expired.iter().all(|i| i.id != direct.id));
+    assert!(
+        store
+            .expire_invitations()
+            .await
+            .unwrap()
+            .iter()
+            .all(|i| i.id != swept.id)
+    );
+    let kinds: Vec<_> = store
+        .list_invitation_events(swept.id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|e| (e.kind, e.actor_id))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (InvitationEventKind::Created, Some(alice)),
+            (InvitationEventKind::Expired, None)
+        ]
+    );
+
+    // Contraintes : une invitation sans invité ni lien, ou à soi-même, est refusée.
+    for (recipient, token) in [(None::<Uuid>, None::<&str>), (Some(alice), None)] {
+        let result = sqlx::query(
+            "INSERT INTO invitations (type, resource_id, inviter_id, recipient_id, token_hash, expires_at) \
+             VALUES ('team', $1, $2, $3, $4, now() + interval '1 hour')",
+        )
+        .bind(team)
+        .bind(alice)
+        .bind(recipient)
+        .bind(token)
+        .execute(&pool)
+        .await;
+        assert!(result.is_err());
+    }
+    let hash: String = sqlx::query_scalar("SELECT token_hash FROM invitations WHERE id = $1")
+        .bind(swept.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(hash.len(), 64);
+    assert!(
+        store
+            .find_invitation_by_token(&hash)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .find_invitation_by_token("inconnu")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_acceptances_are_atomic() {
+    let store = Arc::new(store().await);
+    let alice = user(&store, "alice").await;
+    let team = global_team(&store, alice).await;
+
+    // Lien à usage unique : un seul des huit comptes entre.
+    let link = store
+        .create_invitation(invitation_input(InvitationType::Team, team, alice, None))
+        .await
+        .unwrap();
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let (store, account) = (store.clone(), user(&store, "joiner").await);
+        tasks.push(tokio::spawn(async move {
+            store
+                .respond_invitation(link.id, account, InvitationAction::Accept)
+                .await
+        }));
+    }
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    assert_eq!(
+        results.iter().filter(|r| r.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|e| matches!(e, StoreError::InvitationNotPending))
+    );
+    assert_eq!(
+        store.list_team_members(team).await.unwrap().unwrap().len(),
+        2
+    );
+
+    // Tournoi de deux places : la capacité tient face à six acceptations simultanées.
+    store
+        .update_user(
+            alice,
+            UserUpdate {
+                role: Some(Role::Admin),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let tournament = registration_tournament(&store, 2).await;
+    let mut tasks = Vec::new();
+    for _ in 0..6 {
+        let account = user(&store, "player").await;
+        let invitation = store
+            .create_invitation(invitation_input(
+                InvitationType::Tournament,
+                tournament,
+                alice,
+                Some(account),
+            ))
+            .await
+            .unwrap();
+        let store = store.clone();
+        tasks.push(tokio::spawn(async move {
+            store
+                .respond_invitation(invitation.id, account, InvitationAction::Accept)
+                .await
+        }));
+    }
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    assert_eq!(
+        results.iter().filter(|r| r.is_ok()).count(),
+        2,
+        "{results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|e| matches!(e, StoreError::TournamentFull))
+    );
+    let participants = store.list_participants(tournament, 10, 0).await.unwrap();
+    assert_eq!(participants.len(), 2);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_registrations_never_exceed_the_capacity() {
+    let store = Arc::new(store().await);
+    let game = store
+        .create_game(GameInput {
+            name: unique("Cap"),
+            description: "d".into(),
+            images: vec![],
+        })
+        .await
+        .unwrap();
+    let mut input = tournament_input(game.id);
+    input.max_participants = 5;
+    input.settings.waiting_list_enabled = true;
+    let tournament = store.create_tournament(input).await.unwrap();
+    let mut tasks = Vec::new();
+    for n in 0..20 {
+        let store = store.clone();
+        tasks.push(tokio::spawn(async move {
+            let user = store
+                .create_user(&unique(&format!("race{n}")), None, "hash")
+                .await
+                .unwrap();
+            store
+                .add_participant(ParticipantInput {
+                    tournament_id: tournament.id,
+                    user_id: Some(user.id),
+                    tournament_team_id: None,
+                    responses: no_responses(),
+                })
+                .await
+                .unwrap();
+            store.promote_waitlist(tournament.id).await.unwrap();
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let all = store
+        .list_participants(tournament.id, i64::MAX, 0)
+        .await
+        .unwrap();
+    assert_eq!(all.iter().filter(|p| p.status.holds_a_seat()).count(), 5);
+    assert_eq!(
+        all.iter()
+            .filter(|p| p.status == ParticipantStatus::Waitlisted)
+            .count(),
+        15
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_ownership_transfers_leave_exactly_one_owner() {
+    let store = Arc::new(store().await);
+    let game = store
+        .create_game(GameInput {
+            name: unique("Own"),
+            description: "d".into(),
+            images: vec![],
+        })
+        .await
+        .unwrap();
+    let mut users = Vec::new();
+    for n in 0..5 {
+        users.push(
+            store
+                .create_user(&unique(&format!("own{n}")), None, "hash")
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    let mut input = tournament_input(game.id);
+    input.owner_id = Some(users[0]);
+    let tournament = store.create_tournament(input).await.unwrap();
+    let mut tasks = Vec::new();
+    for user in users.iter().skip(1).copied() {
+        let (store, from) = (store.clone(), users[0]);
+        tasks.push(tokio::spawn(async move {
+            store
+                .transfer_tournament_ownership(tournament.id, Some(from), user, from)
+                .await
+                .unwrap()
+        }));
+    }
+    let mut won = 0;
+    for task in tasks {
+        if task.await.unwrap() {
+            won += 1;
+        }
+    }
+    assert_eq!(won, 1);
+    let owner = store
+        .find_tournament(tournament.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .owner_id;
+    assert!(owner.is_some() && owner != Some(users[0]));
+    let audit = store.list_role_audit(tournament.id).await.unwrap();
+    assert_eq!(audit.len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Corrections de la revue de #182
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn settings_updates_only_write_the_fields_they_name() {
+    let store = store().await;
+    let tournament = store
+        .create_tournament(tournament_input(game(&store).await))
+        .await
+        .unwrap();
+    let hide = TournamentUpdate {
+        settings: TournamentSettingsUpdate {
+            visibility: Some(Visibility::InvitationOnly),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let rules = TournamentUpdate {
+        settings: TournamentSettingsUpdate {
+            rules: Some(Some("Règlement".into())),
+            location: Some(None),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    store.update_tournament(tournament.id, hide).await.unwrap();
+    // Préparé avant le passage en invitation : ne rétablit pas `public`.
+    let updated = store
+        .update_tournament(tournament.id, rules)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.settings.visibility, Visibility::InvitationOnly);
+    assert_eq!(updated.settings.rules.as_deref(), Some("Règlement"));
+    assert_eq!(updated.settings.mode, tournament.settings.mode);
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn status_changes_respect_the_capacity_and_promote_atomically() {
+    let store = store().await;
+    let mut input = tournament_input(game(&store).await);
+    input.max_participants = 1;
+    input.settings.waiting_list_enabled = true;
+    let tournament = store.create_tournament(input).await.unwrap();
+    let mut added = Vec::new();
+    for n in 0..3 {
+        let user = user(&store, &format!("seat{n}")).await;
+        added.push(
+            store
+                .add_participant(ParticipantInput {
+                    tournament_id: tournament.id,
+                    user_id: Some(user),
+                    tournament_team_id: None,
+                    responses: no_responses(),
+                })
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    assert_eq!(added[1].status, ParticipantStatus::Waitlisted);
+    // Complet : aucune transition ne donne de place.
+    for status in [
+        ParticipantStatus::Registered,
+        ParticipantStatus::CheckedIn,
+        ParticipantStatus::Disqualified,
+    ] {
+        assert!(matches!(
+            store.set_participant_status(added[1].id, status).await,
+            Err(StoreError::TournamentFull)
+        ));
+    }
+    let change = store
+        .set_participant_status(added[0].id, ParticipantStatus::Withdrawn)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        change.promoted.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [added[1].id]
+    );
+    let promoted = store
+        .delete_participant(added[1].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        promoted.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [added[2].id]
+    );
+    assert!(
+        store
+            .delete_participant(added[1].id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Liste publique : filtrée, paginée et nommée en base.
+    let page = store
+        .list_named_participants(tournament.id, 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].participant.id, added[2].id);
+    assert!(page[0].username.as_deref().unwrap().starts_with("seat2"));
+    assert!(page[0].team_name.is_none());
+    assert!(
+        store
+            .list_named_participants(tournament.id, 10, 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn concurrent_member_additions_respect_the_roster_limit() {
+    let store = Arc::new(store().await);
+    let mut input = tournament_input(game(&store).await);
+    input.participant_type = ParticipantType::Team;
+    input.settings = TournamentSettings::team(3);
+    input.settings.team_max_substitutes = Some(1);
+    let tournament = store.create_tournament(input).await.unwrap();
+    let owner = user(&store, "roster").await;
+    let team = store
+        .create_tournament_team(TournamentTeamInput {
+            tournament_id: tournament.id,
+            team_id: None,
+            name: unique("Roster"),
+            tag: None,
+            picture_url: None,
+            owner_id: owner,
+            members: vec![(owner, TeamRole::Owner)],
+        })
+        .await
+        .unwrap();
+    let mut tasks = Vec::new();
+    for n in 0..8 {
+        let store = store.clone();
+        let player = user(&store, &format!("rost{n}")).await;
+        tasks.push(tokio::spawn(async move {
+            store
+                .add_tournament_team_member(team.id, player, TeamRole::Member)
+                .await
+        }));
+    }
+    let mut full = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(Some(_)) => {}
+            Err(StoreError::TeamRosterFull(3)) => full += 1,
+            other => panic!("{other:?}"),
+        }
+    }
+    let members = store
+        .list_tournament_team_members(team.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(members.len(), 3);
+    assert_eq!(full, 6);
+    // Un changement de rôle est soumis à la même limite.
+    let starter = members
+        .iter()
+        .find(|m| m.role == TeamRole::Member)
+        .unwrap()
+        .user_id;
+    store
+        .set_tournament_team_member_role(team.id, starter, TeamRole::Substitute)
+        .await
+        .unwrap()
+        .unwrap();
+    let other = members
+        .iter()
+        .find(|m| m.role == TeamRole::Member && m.user_id != starter)
+        .unwrap()
+        .user_id;
+    assert!(matches!(
+        store
+            .set_tournament_team_member_role(team.id, other, TeamRole::Substitute)
+            .await,
+        Err(StoreError::TeamRosterFull(1))
+    ));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn deleting_an_owner_hands_their_tournaments_to_a_successor() {
+    let store = store().await;
+    let owner = user(&store, "owner").await;
+    let local = user(&store, "local").await;
+    let global = user(&store, "global").await;
+    store
+        .update_user(
+            global,
+            UserUpdate {
+                role: Some(Role::Admin),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let game_id = game(&store).await;
+    let mut with_admin = tournament_input(game_id);
+    with_admin.owner_id = Some(owner);
+    let with_admin = store.create_tournament(with_admin).await.unwrap();
+    let mut alone = tournament_input(game_id);
+    alone.owner_id = Some(owner);
+    let alone = store.create_tournament(alone).await.unwrap();
+    store
+        .assign_tournament_role(with_admin.id, local, TournamentRole::Admin, owner)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(store.delete_user(owner).await.unwrap());
+    let reloaded = store.find_tournament(with_admin.id).await.unwrap().unwrap();
+    assert_eq!(reloaded.owner_id, Some(local));
+    assert!(
+        store
+            .find_tournament_role(with_admin.id, local)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let audit = store.list_role_audit(with_admin.id).await.unwrap();
+    let last = audit.last().unwrap();
+    assert_eq!(last.action, RoleAuditAction::Transfer);
+    assert_eq!(last.target_user_id, Some(local));
+    assert_eq!(last.actor_id, None);
+    // Sans administrateur local, un administrateur global reprend le tournoi.
+    let reloaded = store.find_tournament(alone.id).await.unwrap().unwrap();
+    assert!(reloaded.owner_id.is_some_and(|id| id != owner));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn settings_default_merge_and_cascade() {
+    let store = store().await;
+    let user = store.create_user(&unique("set"), None, "h").await.unwrap();
+    assert_eq!(
+        store.user_settings(user.id).await.unwrap(),
+        Some(UserSettings::defaults())
+    );
+    assert_eq!(store.user_settings(Uuid::new_v4()).await.unwrap(), None);
+    assert_eq!(
+        store
+            .update_user_settings(Uuid::new_v4(), UserSettingsUpdate::default())
+            .await
+            .unwrap(),
+        None
+    );
+
+    let first = store
+        .update_user_settings(
+            user.id,
+            UserSettingsUpdate {
+                language: Some(Language::Es),
+                notifications: vec![(Category::Teams, Channel::Email, false)],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((first.language, first.theme), (Language::Es, Theme::System));
+    assert!(!first.allows(Category::Teams, Channel::Email));
+    assert!(first.allows(Category::Teams, Channel::Push));
+
+    let second = store
+        .update_user_settings(
+            user.id,
+            UserSettingsUpdate {
+                theme: Some(Theme::Dark),
+                notifications: vec![
+                    (Category::Matches, Channel::Push, false),
+                    (Category::Teams, Channel::Push, false),
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((second.language, second.theme), (Language::Es, Theme::Dark));
+    assert!(!second.allows(Category::Teams, Channel::Email));
+    assert!(!second.allows(Category::Teams, Channel::Push));
+    assert!(!second.allows(Category::Matches, Channel::Push));
+    assert!(second.allows(Category::Matches, Channel::Email));
+    assert_eq!(store.user_settings(user.id).await.unwrap(), Some(second));
+
+    let before = store.user_settings(user.id).await.unwrap();
+    store
+        .update_user_settings(user.id, UserSettingsUpdate::default())
+        .await
+        .unwrap();
+    assert_eq!(store.user_settings(user.id).await.unwrap(), before);
+
+    store
+        .register_push_token(
+            user.id,
+            &format!("ExponentPushToken[{}]", unique("c")),
+            Platform::Ios,
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_notification("k", user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+    assert!(store.delete_user(user.id).await.unwrap());
+    assert_eq!(store.user_settings(user.id).await.unwrap(), None);
+    assert!(store.list_push_tokens(user.id).await.unwrap().is_empty());
+    assert!(
+        !store
+            .claim_notification("k", user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn push_tokens_are_unique_owned_and_capped() {
+    let store = store().await;
+    let alice = store.create_user(&unique("pa"), None, "h").await.unwrap();
+    let bob = store.create_user(&unique("pb"), None, "h").await.unwrap();
+    let token = format!("ExponentPushToken[{}]", unique("t"));
+
+    let first = store
+        .register_push_token(alice.id, &token, Platform::Ios)
+        .await
+        .unwrap()
+        .unwrap();
+    let again = store
+        .register_push_token(alice.id, &token, Platform::Android)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.id, again.id);
+    assert_eq!(again.platform, Platform::Android);
+    assert!(
+        store
+            .register_push_token(Uuid::new_v4(), &token, Platform::Ios)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
+    let moved = store
+        .register_push_token(bob.id, &token, Platform::Ios)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.user_id, bob.id);
+    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
+    assert!(store.revoke_push_token(bob.id, &token).await.unwrap());
+    assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
+
+    store
+        .register_push_token(alice.id, &token, Platform::Ios)
+        .await
+        .unwrap();
+    store.remove_push_token(&token).await.unwrap();
+    assert!(store.list_push_tokens(alice.id).await.unwrap().is_empty());
+
+    for index in 0..12 {
+        store
+            .register_push_token(
+                alice.id,
+                &format!("ExponentPushToken[{}-{index}]", unique("cap")),
+                Platform::Android,
+            )
+            .await
+            .unwrap();
+    }
+    let kept = store.list_push_tokens(alice.id).await.unwrap();
+    assert_eq!(kept.len(), 10);
+    assert!(kept[0].token.ends_with("-11]"), "le plus récent d'abord");
+    assert!(!kept.iter().any(|token| token.token.ends_with("-0]")));
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn notification_claims_are_exclusive_and_releasable() {
+    let store = store().await;
+    let user = store.create_user(&unique("nl"), None, "h").await.unwrap();
+    let key = unique("evt");
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Push)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_notification(&unique("evt"), user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+    store
+        .release_notification(&key, user.id, Channel::Email)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_notification(&key, user.id, Channel::Email)
+            .await
+            .unwrap()
+    );
+
+    let key = unique("race");
+    let (first, second) = tokio::join!(
+        store.claim_notification(&key, user.id, Channel::Push),
+        store.claim_notification(&key, user.id, Channel::Push)
+    );
+    assert_eq!(
+        [first.unwrap(), second.unwrap()]
+            .iter()
+            .filter(|won| **won)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn profile_pictures_are_set_cleared_and_kept_by_other_updates() {
+    let store = store().await;
+    let user = store.create_user(&unique("pic"), None, "h").await.unwrap();
+    assert_eq!(user.picture_url, None);
+    let url = "https://cdn.example.com/a.png".to_string();
+    let profile = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                picture_url: Some(Some(url.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(profile.picture_url.as_deref(), Some(url.as_str()));
+    assert_eq!(
+        store
+            .find_profile(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .picture_url
+            .as_deref(),
+        Some(url.as_str())
+    );
+    let renamed = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                username: Some(unique("pic2")),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.picture_url.as_deref(), Some(url.as_str()));
+    let cleared = store
+        .update_user(
+            user.id,
+            UserUpdate {
+                picture_url: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cleared.picture_url, None);
+    assert_eq!(
+        store
+            .find_user_by_id(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .picture_url,
+        None
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL (DATABASE_URL)"]
+async fn workflow_compare_and_swap_preserves_audit_and_rejects_concurrent_updates() {
+    use api_public::store::{MatchAuditEntry, MatchWorkflow, WorkflowCommit};
+    let store = store().await;
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let participant = store
+        .add_participant(ParticipantInput {
+            tournament_id: tournament.id,
+            user_id: Some(user(&store, "reporter").await),
+            tournament_team_id: None,
+            responses: no_responses(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: step_definition(1, 1, 2, 1),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .start_step(StepStart {
+            step_id: step.id,
+            groups: vec![vec![participant.id]],
+            seeds: vec![],
+        })
+        .await
+        .unwrap();
+    let group_id = store.list_step_groups(step.id).await.unwrap()[0].id;
+    let found = store
+        .create_match(MatchInput {
+            game_id,
+            step_id: step.id,
+            group_id,
+            round: Some(1),
+            bracket: None,
+            next_match_id: None,
+            best_of: 1,
+            scheduled_at: None,
+            participants: vec![participant.id],
+        })
+        .await
+        .unwrap();
+    let mut workflow = MatchWorkflow {
+        revision: 1,
+        ..MatchWorkflow::default()
+    };
+    workflow.history.push(MatchAuditEntry {
+        id: Uuid::new_v4(),
+        actor_id: participant.user_id.unwrap(),
+        action: "match.called".to_string(),
+        reason: None,
+        created_at: found.created_at.clone(),
+        before: serde_json::json!({}),
+        after: serde_json::json!({}),
+    });
+    let update = WorkflowCommit {
+        archive_games: None,
+        match_id: found.id,
+        expected_revision: 0,
+        expected_updated_at: found.updated_at.clone(),
+        workflow: workflow.clone(),
+        finish: None,
+        games: None,
+    };
+    let (left, right) = tokio::join!(
+        store.commit_match_workflow(update.clone()),
+        store.commit_match_workflow(update)
+    );
+    assert_ne!(left.is_ok(), right.is_ok());
+    assert_eq!(store.match_workflow(found.id).await.unwrap(), workflow);
+    assert!(
+        store
+            .replace_step_matches(found.step_id, found.game_id, Vec::new())
+            .await
+            .is_err()
+    );
+    assert!(store.find_match(found.id).await.unwrap().is_some());
+    let current = store.find_match(found.id).await.unwrap().unwrap();
+    let mut invalid = workflow.clone();
+    invalid.revision = 2;
+    invalid.history.clear();
+    assert!(
+        store
+            .commit_match_workflow(WorkflowCommit {
+                archive_games: None,
+                match_id: found.id,
+                expected_revision: 1,
+                expected_updated_at: current.updated_at,
+                workflow: invalid,
+                finish: None,
+                games: None
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(store.match_workflow(found.id).await.unwrap(), workflow);
+    let prediction = store
+        .pickem()
+        .upsert_prediction(api_public::store::PredictionInput {
+            user_id: participant.user_id.unwrap(),
+            tournament_id: tournament.id,
+            match_id: found.id,
+            winner_id: Some(participant.id),
+            ranking: None,
+        })
+        .await
+        .unwrap();
+    let question = store
+        .pickem()
+        .create_question(api_public::store::QuestionInput {
+            tournament_id: tournament.id,
+            kind: api_public::store::QuestionKind::TournamentWinner,
+            params: serde_json::json!({}),
+            points: 20,
+            opens_at: "2000-01-01T00:00:00Z".into(),
+            locks_at: "2099-01-01T00:00:00Z".into(),
+        })
+        .await
+        .unwrap();
+    let answer = api_public::store::AnswerInput {
+        tournament_id: tournament.id,
+        question_id: question.id,
+        user_id: participant.user_id.unwrap(),
+        answer: serde_json::json!({"participant_id":participant.id}),
+    };
+    store.pickem().upsert_answer(answer.clone()).await.unwrap();
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE tournaments SET status = 'finished' WHERE id = $1")
+        .bind(tournament.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let snapshot = store.competition_snapshot(tournament.id).await.unwrap();
+    let mut next = snapshot.clone();
+    next.tournament.status = TournamentStatus::Ongoing;
+
+    next.matches
+        .iter_mut()
+        .find(|m| m.id == found.id)
+        .unwrap()
+        .status = MatchStatus::Finished;
+    next.members[0].rank = Some(1);
+    let mut audit = workflow.clone();
+    audit.revision += 1;
+    audit.history.push(MatchAuditEntry {
+        id: Uuid::new_v4(),
+        actor_id: participant.user_id.unwrap(),
+        action: "match.corrected".into(),
+        reason: Some("Verified correction".into()),
+        created_at: found.created_at.clone(),
+        before: serde_json::json!({}),
+        after: serde_json::json!({}),
+    });
+    let correction = api_public::store::CompetitionCorrection {
+        expected_revision: snapshot.revision().unwrap(),
+        next,
+        match_id: found.id,
+        expected_workflow_revision: 1,
+        workflow: audit.clone(),
+    };
+    store
+        .commit_competition_correction(correction.clone())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .commit_competition_correction(correction)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.find_match(found.id).await.unwrap().unwrap().status,
+        MatchStatus::Finished
+    );
+    assert_eq!(store.match_workflow(found.id).await.unwrap(), audit);
+    let latest = store.competition_snapshot(tournament.id).await.unwrap();
+    store
+        .commit_competition_resolution(
+            tournament.id,
+            latest.revision().unwrap(),
+            vec![api_public::store::Resolved {
+                id: prediction.id,
+                outcome: api_public::store::PickOutcome::Correct,
+                points: 10.0,
+            }],
+            vec![],
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .commit_competition_resolution(
+                tournament.id,
+                snapshot.revision().unwrap(),
+                vec![api_public::store::Resolved {
+                    id: prediction.id,
+                    outcome: api_public::store::PickOutcome::Incorrect,
+                    points: 0.0
+                }],
+                vec![],
+                false
+            )
+            .await,
+        Err(StoreError::MatchState)
+    ));
+    let kept = store
+        .pickem()
+        .find_prediction(participant.user_id.unwrap(), found.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        kept.points, 10.0,
+        "a pre-correction resolver cannot overwrite newer points"
+    );
+    assert!(store.match_prediction_locked(found.id).await.unwrap());
+    assert!(store.tournament_pickem_locked(tournament.id).await.unwrap());
+    sqlx::query("UPDATE match SET status = 'scheduled', started_at = NULL, scheduled_at = NULL WHERE id = $1")
+        .bind(found.id).execute(&pool).await.unwrap();
+    assert!(matches!(
+        store
+            .pickem()
+            .upsert_prediction(api_public::store::PredictionInput {
+                user_id: participant.user_id.unwrap(),
+                tournament_id: tournament.id,
+                match_id: found.id,
+                winner_id: Some(participant.id),
+                ranking: None,
+            })
+            .await,
+        Err(StoreError::PredictionLocked)
+    ));
+    assert!(matches!(
+        store
+            .pickem()
+            .delete_prediction(participant.user_id.unwrap(), found.id)
+            .await,
+        Err(StoreError::PredictionLocked)
+    ));
+    assert!(matches!(
+        store.pickem().upsert_answer(answer).await,
+        Err(StoreError::PickemLocked)
+    ));
+}
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL"]
+async fn prediction_writes_recheck_status_and_clock_after_waiting() {
+    use api_public::store::PredictionInput;
+    let store = Arc::new(store().await);
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: step_definition(1, 1, 4, 1),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let match_id: Uuid =
+        sqlx::query_scalar("INSERT INTO match (game_id, step_id) VALUES ($1, $2) RETURNING id")
+            .bind(game_id)
+            .bind(step.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let user_id = user(&store, "predictor").await;
+    let winner = Uuid::new_v4();
+    let input = PredictionInput {
+        user_id,
+        tournament_id: tournament.id,
+        match_id,
+        winner_id: Some(winner),
+        ranking: None,
+    };
+    store
+        .pickem()
+        .upsert_prediction(input.clone())
+        .await
+        .unwrap();
+    for by_clock in [false, true] {
+        sqlx::query("UPDATE match SET status = 'scheduled', started_at = NULL, scheduled_at = NULL WHERE id = $1")
+            .bind(match_id).execute(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let sql = if by_clock {
+            "UPDATE match SET scheduled_at = clock_timestamp() + interval '300 milliseconds' WHERE id = $1"
+        } else {
+            "UPDATE match SET status = 'ongoing', started_at = clock_timestamp() WHERE id = $1"
+        };
+        sqlx::query(sql)
+            .bind(match_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let write = {
+            let store = store.clone();
+            let mut input = input.clone();
+            input.winner_id = Some(Uuid::new_v4());
+            tokio::spawn(async move { store.pickem().upsert_prediction(input).await })
+        };
+        let delete = {
+            let store = store.clone();
+            tokio::spawn(async move { store.pickem().delete_prediction(user_id, match_id).await })
+        };
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!write.is_finished());
+        assert!(!delete.is_finished());
+        tx.commit().await.unwrap();
+        assert!(matches!(
+            write.await.unwrap(),
+            Err(StoreError::PredictionLocked)
+        ));
+        assert!(matches!(
+            delete.await.unwrap(),
+            Err(StoreError::PredictionLocked)
+        ));
+        assert_eq!(
+            store
+                .pickem()
+                .find_prediction(user_id, match_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .winner_id,
+            Some(winner)
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL"]
+async fn question_edits_recheck_opening_after_row_lock_wait() {
+    use api_public::store::{QuestionInput, QuestionKind, QuestionUpdate};
+    let store = Arc::new(store().await);
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let tournament = store
+        .create_tournament(tournament_input(game(&store).await))
+        .await
+        .unwrap();
+    let opens: String = sqlx::query_scalar("SELECT to_char(clock_timestamp() + interval '400 milliseconds', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')").fetch_one(&pool).await.unwrap();
+    let question = store
+        .pickem()
+        .create_question(QuestionInput {
+            tournament_id: tournament.id,
+            kind: QuestionKind::TournamentWinner,
+            params: serde_json::json!({}),
+            points: 20,
+            opens_at: opens,
+            locks_at: "2099-01-01T00:00:00Z".into(),
+        })
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM pickem_question WHERE id = $1 FOR UPDATE")
+        .bind(question.id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let write = {
+        let store = store.clone();
+        tokio::spawn(async move {
+            store
+                .pickem()
+                .update_question(
+                    question.id,
+                    QuestionUpdate {
+                        points: Some(50),
+                        ..Default::default()
+                    },
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(!write.is_finished());
+    tx.commit().await.unwrap();
+    assert!(matches!(
+        write.await.unwrap(),
+        Err(StoreError::PickemLocked)
+    ));
+    assert!(matches!(
+        store.pickem().delete_question(question.id).await,
+        Err(StoreError::PickemLocked)
+    ));
+    assert_eq!(
+        store
+            .pickem()
+            .find_question(question.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .points,
+        20
     );
 }

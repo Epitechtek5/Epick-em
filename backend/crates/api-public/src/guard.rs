@@ -36,6 +36,8 @@ pub fn route_policy(path: &str) -> RoutePolicy {
         | "/openapi.json" => RoutePolicy::Public,
         "/docs" => RoutePolicy::Public,
         _ if path.starts_with("/docs/") => RoutePolicy::Public,
+        // Consultation en lecture seule des tournois publics (voir `public_api`).
+        _ if path.starts_with("/public/") => RoutePolicy::Public,
         "/refresh" => RoutePolicy::SignatureOnly,
         _ => RoutePolicy::Authenticated,
     }
@@ -91,6 +93,8 @@ mod tests {
             "/docs",
             "/docs/",
             "/docs/swagger-ui.css",
+            "/public/tournaments",
+            "/public/tournaments/abc/ranking",
         ] {
             assert_eq!(route_policy(path), RoutePolicy::Public, "{path}");
         }
@@ -99,6 +103,11 @@ mod tests {
         assert_eq!(route_policy("/users"), RoutePolicy::Authenticated);
         assert_eq!(route_policy("/autre"), RoutePolicy::Authenticated);
         assert_eq!(route_policy("/documents"), RoutePolicy::Authenticated);
+        assert_eq!(route_policy("/publication"), RoutePolicy::Authenticated);
+        assert_eq!(
+            route_policy("/tournaments/public"),
+            RoutePolicy::Authenticated
+        );
     }
 
     #[test]
