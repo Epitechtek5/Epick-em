@@ -1,6 +1,14 @@
 import type { Messages } from './fr'
 
 export const en: Messages = {
+  invitation: {
+    title: 'Invitation', login: 'Sign in to view and respond to this invitation.',
+    unavailable: 'This invitation is unavailable, expired or already processed.',
+    error: 'Unable to load this invitation. Try again.', expires: 'Expires on',
+    accept: 'Accept invitation', decline: 'Decline', confirmDecline: 'Decline this invitation?',
+    accepted: 'Invitation accepted. Open the resource to see your participation status.',
+    declined: 'Invitation declined.', openResource: 'Open resource', openApp: 'Open in the app',
+  },
   common: {
     language: 'Language',
     french: 'Français',

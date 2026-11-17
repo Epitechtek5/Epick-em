@@ -12,14 +12,20 @@ import { useAuth } from '@/features/auth/session';
 import {
   createTournament,
   getTournament,
+  listTournamentRoles,
   updateTournament,
 } from '@/features/tournaments/api';
 import { tournamentErrorKey } from '@/features/tournaments/errors';
 import type {
   ParticipantType,
+  RegistrationFieldType,
+  RegistrationPolicy,
   TeamScoringMode,
   Tournament,
   TournamentInput,
+  TournamentRoles,
+  TournamentMode,
+  TournamentVisibility,
 } from '@/features/tournaments/types';
 import {
   buildTournamentInput,
@@ -40,13 +46,30 @@ const EMPTY: TournamentInput = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo',
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 2,
   team_scoring_mode: 'none',
   team_scoring_n: null,
 };
 
-function Editor({ tournament }: { tournament?: Tournament }) {
+function Editor({
+  tournament,
+  roles,
+}: {
+  tournament?: Tournament;
+  roles?: TournamentRoles;
+}) {
   const { t } = useTranslation();
   const { token, user } = useAuth();
   const insets = useSafeAreaInsets();
@@ -56,6 +79,15 @@ function Editor({ tournament }: { tournament?: Tournament }) {
   const [busy, setBusy] = useState(false);
   const locked =
     tournament?.status === 'ongoing' || tournament?.status === 'finished';
+  const canEdit =
+    user?.role === 'admin' ||
+    (!tournament
+      ? false
+      : roles?.owner_id === user?.id ||
+        roles?.roles.some(
+          (assignment) =>
+            assignment.user_id === user?.id && assignment.role === 'admin',
+        ));
 
   const loadGame = useCallback(
     async (accessToken: string) => {
@@ -75,7 +107,13 @@ function Editor({ tournament }: { tournament?: Tournament }) {
   }
 
   async function save() {
-    if (!token || user?.role !== 'admin' || busy) return;
+    if (
+      !token ||
+      (!tournament && user?.role !== 'admin') ||
+      (tournament && !canEdit) ||
+      busy
+    )
+      return;
     const input = buildTournamentInput(values);
     const validation = validateTournament(input);
     if (validation) {
@@ -106,7 +144,7 @@ function Editor({ tournament }: { tournament?: Tournament }) {
     }
   }
 
-  if (user?.role !== 'admin')
+  if ((!tournament && user?.role !== 'admin') || (tournament && !canEdit))
     return <ScreenState error message={t('errors.forbidden')} />;
 
   return (
@@ -158,6 +196,35 @@ function Editor({ tournament }: { tournament?: Tournament }) {
           onChangeText={(value) => change('description', value)}
           multiline
         />
+        <Choice
+          label={t('tournaments.fields.mode')}
+          values={['online', 'in_person', 'hybrid'] as const}
+          selected={values.mode}
+          labelFor={(value) => t(`tournaments.mode.${value}`)}
+          onSelect={(value: TournamentMode) => change('mode', value)}
+        />
+        {values.mode !== 'online' ? (
+          <Field
+            label={t('tournaments.fields.location')}
+            value={values.location ?? ''}
+            onChangeText={(value) => change('location', value || null)}
+          />
+        ) : null}
+        <Choice
+          label={t('tournaments.fields.visibility')}
+          values={['public', 'invitation_only'] as const}
+          selected={values.visibility}
+          labelFor={(value) => t(`tournaments.visibility.${value}`)}
+          onSelect={(value: TournamentVisibility) =>
+            change('visibility', value)
+          }
+        />
+        <Field
+          label={t('tournaments.fields.rules')}
+          value={values.rules ?? ''}
+          onChangeText={(value) => change('rules', value || null)}
+          multiline
+        />
         <SectionTitle
           title={t('tournaments.editor.dates')}
           description={t('tournaments.editor.datesHelp')}
@@ -190,6 +257,18 @@ function Editor({ tournament }: { tournament?: Tournament }) {
           onChange={(value) => change('registration_close_at', value)}
           optional
         />
+        <TournamentDateField
+          label={t('tournaments.fields.checkInOpen')}
+          value={values.check_in_open_at}
+          onChange={(value) => change('check_in_open_at', value)}
+          optional
+        />
+        <TournamentDateField
+          label={t('tournaments.fields.checkInClose')}
+          value={values.check_in_close_at}
+          onChange={(value) => change('check_in_close_at', value)}
+          optional
+        />
         {!tournament ? (
           <Choice
             label={t('tournaments.fields.participantType')}
@@ -202,16 +281,35 @@ function Editor({ tournament }: { tournament?: Tournament }) {
           />
         ) : null}
         {values.participant_type === 'team' ? (
-          <Field
-            label={t('tournaments.fields.teamSize')}
-            hint={t('tournaments.editor.teamSizeHelp')}
-            value={String(values.team_size ?? '')}
-            onChangeText={(value) =>
-              change('team_size', value ? Number(value) : null)
-            }
-            keyboardType="number-pad"
-            editable={!locked}
-          />
+          <View className="gap-3">
+            <Field
+              label={t('tournaments.fields.teamMinStarters')}
+              value={String(values.team_min_starters ?? '')}
+              onChangeText={(value) =>
+                change('team_min_starters', value ? Number(value) : null)
+              }
+              keyboardType="number-pad"
+              editable={!locked}
+            />
+            <Field
+              label={t('tournaments.fields.teamMaxStarters')}
+              value={String(values.team_max_starters ?? '')}
+              onChangeText={(value) =>
+                change('team_max_starters', value ? Number(value) : null)
+              }
+              keyboardType="number-pad"
+              editable={!locked}
+            />
+            <Field
+              label={t('tournaments.fields.teamMaxSubstitutes')}
+              value={String(values.team_max_substitutes ?? '')}
+              onChangeText={(value) =>
+                change('team_max_substitutes', value ? Number(value) : null)
+              }
+              keyboardType="number-pad"
+              editable={!locked}
+            />
+          </View>
         ) : null}
         <Field
           label={t('tournaments.fields.maxParticipants')}
@@ -224,6 +322,28 @@ function Editor({ tournament }: { tournament?: Tournament }) {
           onChangeText={(value) => change('max_participants', Number(value))}
           keyboardType="number-pad"
           editable={!locked}
+        />
+        <Choice
+          label={t('tournaments.fields.registrationPolicy')}
+          values={['open', 'approval_required'] as const}
+          selected={values.registration_policy}
+          labelFor={(value) => t(`tournaments.registrationPolicy.${value}`)}
+          onSelect={(value: RegistrationPolicy) =>
+            change('registration_policy', value)
+          }
+        />
+        <Choice
+          label={t('tournaments.fields.waitingList')}
+          values={['enabled', 'disabled'] as const}
+          selected={values.waiting_list_enabled ? 'enabled' : 'disabled'}
+          labelFor={(value) => t(`common.${value}`)}
+          onSelect={(value) =>
+            change('waiting_list_enabled', value === 'enabled')
+          }
+        />
+        <RegistrationFieldsEditor
+          fields={values.registration_fields}
+          onChange={(fields) => change('registration_fields', fields)}
         />
         {values.participant_type === 'solo' ? (
           <>
@@ -320,6 +440,109 @@ function Choice<T extends string>({
   );
 }
 
+function RegistrationFieldsEditor({
+  fields,
+  onChange,
+}: {
+  fields: TournamentInput['registration_fields'];
+  onChange: (fields: TournamentInput['registration_fields']) => void;
+}) {
+  const { t } = useTranslation();
+  const update = (index: number, changes: Partial<(typeof fields)[number]>) =>
+    onChange(
+      fields.map((field, itemIndex) =>
+        itemIndex === index ? { ...field, ...changes } : field,
+      ),
+    );
+
+  return (
+    <View className="gap-3">
+      <SectionTitle
+        title={t('tournaments.editor.registrationFields')}
+        description={t('tournaments.editor.registrationFieldsHelp')}
+      />
+      {fields.map((field, index) => (
+        <View
+          key={`${field.key}-${index}`}
+          className="gap-2 rounded-md border border-border p-3"
+        >
+          <Field
+            label={t('tournaments.fields.fieldKey')}
+            value={field.key}
+            onChangeText={(value) =>
+              update(index, { key: value.replace(/[^a-zA-Z0-9_]/g, '') })
+            }
+            autoCapitalize="none"
+          />
+          <Field
+            label={t('tournaments.fields.fieldLabel')}
+            value={field.label}
+            onChangeText={(value) => update(index, { label: value })}
+          />
+          <Choice
+            label={t('tournaments.fields.fieldType')}
+            values={['text', 'number', 'select', 'boolean'] as const}
+            selected={field.field_type}
+            labelFor={(value) => t(`tournaments.fieldType.${value}`)}
+            onSelect={(value: RegistrationFieldType) =>
+              update(index, {
+                field_type: value,
+                options: value === 'select' ? field.options : [],
+              })
+            }
+          />
+          {field.field_type === 'select' ? (
+            <Field
+              label={t('tournaments.fields.fieldOptions')}
+              value={field.options.join(', ')}
+              onChangeText={(value) =>
+                update(index, {
+                  options: value
+                    .split(',')
+                    .map((option) => option.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          ) : null}
+          <Choice
+            label={t('tournaments.fields.required')}
+            values={['true', 'false'] as const}
+            selected={String(field.required) as 'true' | 'false'}
+            labelFor={(value) => t(`common.${value}`)}
+            onSelect={(value) => update(index, { required: value === 'true' })}
+          />
+          <Button
+            variant="destructive"
+            onPress={() =>
+              onChange(fields.filter((_, itemIndex) => itemIndex !== index))
+            }
+          >
+            <Text>{t('common.delete')}</Text>
+          </Button>
+        </View>
+      ))}
+      <Button
+        variant="outline"
+        onPress={() =>
+          onChange([
+            ...fields,
+            {
+              key: `field_${fields.length + 1}`,
+              label: '',
+              field_type: 'text',
+              required: false,
+              options: [],
+            },
+          ])
+        }
+      >
+        <Text>{t('tournaments.editor.addRegistrationField')}</Text>
+      </Button>
+    </View>
+  );
+}
+
 function SectionTitle({
   title,
   description,
@@ -343,7 +566,11 @@ export function EditTournamentScreen() {
   const { t } = useTranslation();
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
   const load = useCallback(
-    (token: string) => getTournament(token, tournamentId),
+    async (token: string) => {
+      const tournament = await getTournament(token, tournamentId);
+      const roles = await listTournamentRoles(token, tournamentId);
+      return { tournament, roles };
+    },
     [tournamentId],
   );
   const { data, loading, error, reload } = useGameResource(
@@ -359,5 +586,11 @@ export function EditTournamentScreen() {
         onRetry={error ? () => void reload() : undefined}
       />
     );
-  return <Editor key={data.id} tournament={data} />;
+  return (
+    <Editor
+      key={data.tournament.id}
+      tournament={data.tournament}
+      roles={data.roles}
+    />
+  );
 }

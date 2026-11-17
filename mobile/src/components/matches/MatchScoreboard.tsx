@@ -88,7 +88,11 @@ export function MatchScoreboard({
               >
                 {hasResult
                   ? t('steps.points', { points: participant.points })
-                  : t('matches.noResults')}
+                  : t(
+                      (match.games?.length ?? 0) > 0
+                        ? 'matchGames.aggregatePending'
+                        : 'matches.noResults',
+                    )}
               </Text>
             </View>
           );
@@ -123,7 +127,8 @@ function StatLine({ values, data }: { values: FlatStats; data: MatchContext }) {
               {definition?.name ?? key.replaceAll('_', ' ')}
             </Text>
             <Text className="text-base font-semibold">
-              {value}
+              {definition?.options?.find((option) => option.key === value)
+                ?.label ?? value}
               {definition?.type === 'percent' ? ' %' : ''}
             </Text>
           </View>
@@ -137,7 +142,10 @@ export function ParticipantStats({
   score,
   data,
 }: {
-  score: Match['participants'][number];
+  score: Pick<
+    Match['participants'][number],
+    'participant_id' | 'stats' | 'result'
+  >;
   data: MatchContext;
 }) {
   const { t } = useTranslation();

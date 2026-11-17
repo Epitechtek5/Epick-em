@@ -4,6 +4,7 @@ import { gameId, MAX_IMPORT_BYTES } from '@/features/games/validation';
 import { statId } from './validation';
 import type {
   Stat,
+  StatOption,
   StatChanges,
   StatFormat,
   StatImportReport,
@@ -111,6 +112,22 @@ export function importStats(
         'Content-Type': statMimeType(format),
       },
       body: new Uint8Array(bytes).buffer,
+    },
+  );
+}
+
+export function setStatOptions(
+  token: string,
+  game: string,
+  stat: string,
+  options: StatOption[],
+) {
+  return authenticatedRequest<StatOption[]>(
+    `/games/${gameId(game)}/stats/${statId(stat)}/options`,
+    {
+      method: 'PUT',
+      headers: authenticatedHeaders(token),
+      body: JSON.stringify({ options }),
     },
   );
 }

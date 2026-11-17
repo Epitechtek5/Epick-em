@@ -27,15 +27,20 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::password_reset::routes)
         .configure(crate::verification::routes)
         .configure(crate::users::routes)
+        .configure(crate::settings::routes)
         .configure(crate::games::routes)
         .configure(crate::stats::routes)
         .configure(crate::teams::routes)
         .configure(crate::tournament_teams::routes)
+        .configure(crate::public_api::routes)
         .configure(crate::tournaments::routes)
+        .configure(crate::tournament_roles::routes)
+        .configure(crate::tournament_templates::routes)
         .configure(crate::steps::routes)
         .configure(crate::generation::routes)
         .configure(crate::matches::routes)
-        .configure(crate::match_games::routes);
+        .configure(crate::match_games::routes)
+        .configure(crate::invitations::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).

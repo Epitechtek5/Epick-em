@@ -1,5 +1,4 @@
 import { View } from 'react-native';
-import UserCircleIcon from '@hugeicons/core-free-icons/UserCircleIcon';
 import ArrowRight01Icon from '@hugeicons/core-free-icons/ArrowRight01Icon';
 import type { User } from '@/features/auth/types';
 import { useTranslation } from '@/i18n';
@@ -7,6 +6,7 @@ import { RoleBadge } from '@/components/account-summary';
 import { Icon } from '@/components/ui/icon';
 import { MotionPressable } from '@/components/ui/motion-pressable';
 import { Text } from '@/components/ui/text';
+import { UserAvatar } from './user-avatar';
 
 export function UserListItem({
   user,
@@ -27,9 +27,7 @@ export function UserListItem({
       disabled={disabled}
       onPress={onPress}
     >
-      <View className="h-11 w-11 items-center justify-center rounded-lg bg-muted">
-        <Icon icon={UserCircleIcon} size={25} />
-      </View>
+      <UserAvatar uri={user.picture_url} name={user.username} size="sm" />
       <View className="flex-1 gap-2">
         <View className="flex-row flex-wrap items-center gap-2">
           <Text className="max-w-full shrink font-semibold">

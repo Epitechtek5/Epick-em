@@ -3,6 +3,9 @@ import { authenticatedHeaders } from '@/features/users/api';
 import { teamId } from '@/features/teams/validation';
 import type {
   Match,
+  MatchGame,
+  GameResults,
+  GameOutcome,
   MatchInput,
   MatchChanges,
   MatchStatus,
@@ -20,7 +23,22 @@ export function matchApi(token: string, tournamentId: string, stepId: string) {
     });
   }
   const item = (id: string) => '/' + teamId(id);
+  const game = (id: string, number: number) => {
+    if (!Number.isInteger(number) || number < 1)
+      throw new Error('Invalid game number');
+    return item(id) + '/games/' + number;
+  };
   return {
+    createGame: (id: string) =>
+      request<MatchGame>(item(id) + '/games', 'POST', {}),
+    getGame: (id: string, number: number) =>
+      request<MatchGame>(game(id, number)),
+    saveGameResults: (id: string, number: number, input: GameResults) =>
+      request<MatchGame>(game(id, number) + '/results', 'PUT', input),
+    finishGame: (id: string, number: number) =>
+      request<GameOutcome>(game(id, number) + '/finish', 'POST'),
+    removeGame: (id: string, number: number) =>
+      request<void>(game(id, number), 'DELETE'),
     list(filters: { group_id?: string; status?: MatchStatus } = {}) {
       const query = new URLSearchParams();
       if (filters.group_id) query.set('group_id', teamId(filters.group_id));

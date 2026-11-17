@@ -34,3 +34,9 @@ databaseChangeLog:
       file: changelog/0018-match-games.yaml
   - include:
       file: changelog/0016-bracket-generation.yaml
+  - include:
+      file: changelog/0016-user-settings.yaml
+  - include:
+      file: changelog/0016-extend-tournaments.yaml
+  - include:
+      file: changelog/0017-create-invitations.yaml

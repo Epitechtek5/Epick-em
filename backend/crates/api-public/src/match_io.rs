@@ -11,6 +11,13 @@
 //!
 //! `best_of` (1, 3 ou 5, 1 s'il est absent) et `games` (les parties de la série, dans l'ordre :
 //! la n-ième est la partie n° n) sont facultatifs : un fichier antérieur aux parties s'importe
+//! tel quel. Les participants d'une partie se désignent comme ceux du match ; dans
+//! `attributes`, un MVP désigné par un participant du match s'écrit `{ "user": "<nom>" }` ou
+//! `{ "team": <rang> }` plutôt que par identifiant, pour survivre à la copie d'un environnement
+//! à l'autre.
+//!
+//! `best_of` (1, 3 ou 5, 1 s'il est absent) et `games` (les parties de la série, dans l'ordre :
+//! la n-ième est la partie n° n) sont facultatifs : un fichier antérieur aux parties s'importe
 //! tel quel, et une série terminée sans ses parties donne les manches gagnées (`games_won`) de
 //! chaque participant. Les participants d'une partie se désignent comme ceux du match ; dans
 //! `attributes`, un MVP désigné par un participant du match s'écrit `{ "user": "<nom>" }` ou
