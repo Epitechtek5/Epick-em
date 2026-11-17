@@ -514,6 +514,7 @@ async fn predictions_and_pickem_are_resolved_into_leaderboards() {
             .unwrap(),
         1
     );
+    assert_eq!(heard.recv().await.unwrap().event, "predictions.updated");
     let topics_heard = [heard.recv().await.unwrap(), heard.recv().await.unwrap()];
     assert!(
         topics_heard
@@ -558,12 +559,13 @@ async fn predictions_and_pickem_are_resolved_into_leaderboards() {
         .unwrap();
     assert_eq!(reports.len(), 1);
     assert!(reports[0].as_ref().unwrap().settled);
-    // Un tournoi réglé n'est plus relu.
-    assert!(
+    // Finished tournaments remain eligible for corrected results.
+    assert_eq!(
         resolve_pending(a.store.as_ref() as &dyn AuthStore, 10)
             .await
             .unwrap()
-            .is_empty()
+            .len(),
+        1
     );
 
     // fan : classement exact (2 × 5) + vainqueur (30) + meilleur marqueur (15) + qualifié (20).
@@ -600,6 +602,20 @@ async fn predictions_and_pickem_are_resolved_into_leaderboards() {
     let (_, mine) = get(&app, &format!("/predictions?tournament_id={tid}"), fan).await;
     assert_eq!(mine.as_array().unwrap().len(), 1);
 
+    // A correction after settlement is consumed by the periodic worker and replaces points.
+    a.store
+        .set_participant_points(ids[1].parse().unwrap(), 1000.0);
+    resolve_pending(a.store.as_ref() as &dyn AuthStore, 10)
+        .await
+        .unwrap();
+    let (_, corrected) = get(&app, &format!("/tournaments/{tid}/leaderboard"), fan).await;
+    assert_eq!(corrected[0]["points"], 60.0);
+    resolve_pending(a.store.as_ref() as &dyn AuthStore, 10)
+        .await
+        .unwrap();
+    let (_, replayed) = get(&app, &format!("/tournaments/{tid}/leaderboard"), fan).await;
+    assert_eq!(corrected, replayed);
+
     // Tournoi terminé : le Pick'em est fermé.
     let (status, error) = put(
         &app,
@@ -626,7 +642,7 @@ async fn predictions_and_pickem_are_resolved_into_leaderboards() {
 }
 
 #[actix_web::test]
-async fn questions_are_edited_until_they_lock() {
+async fn questions_are_editable_only_before_answers_open() {
     let store = Arc::new(MemoryStore::new());
     let app = app_with(store.clone(), Duration::from_secs(3600)).await;
     let a = arena(&app, store).await;
@@ -635,7 +651,7 @@ async fn questions_are_edited_until_they_lock() {
         &app,
         &questions,
         &a.admin,
-        json!({ "kind": "tournament_winner", "locks_at": FUTURE }),
+        json!({ "kind": "tournament_winner", "opens_at": "2090-01-01T00:00:00Z", "locks_at": FUTURE }),
     )
     .await;
     let one = format!("{questions}/{}", id(&question));
@@ -658,4 +674,30 @@ async fn questions_are_edited_until_they_lock() {
     assert_eq!(updated["points"], 50);
     assert_eq!(delete(&app, &one, &a.admin).await, StatusCode::NO_CONTENT);
     assert_eq!(delete(&app, &one, &a.admin).await, StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+async fn an_open_question_is_immutable_even_before_the_first_answer() {
+    let store = Arc::new(MemoryStore::new());
+    let app = app_with(store.clone(), Duration::from_secs(3600)).await;
+    let a = arena(&app, store).await;
+    let questions = format!("/tournaments/{}/pickem/questions", a.tournament);
+    let (_, question) = post(
+        &app,
+        &questions,
+        &a.admin,
+        json!({"kind":"tournament_winner", "locks_at":FUTURE}),
+    )
+    .await;
+    let one = format!("{questions}/{}", id(&question));
+    let (status, _) = send(
+        &app,
+        TestRequest::patch(),
+        &one,
+        &a.admin,
+        Some(json!({"points":50})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(delete(&app, &one, &a.admin).await, StatusCode::CONFLICT);
 }

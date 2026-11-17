@@ -10,6 +10,14 @@
 //! api-internal, puis additionnés dans les classements (`/tournaments/{id}/leaderboard` et
 //! `/leaderboard`).
 
+fn write_error(err: crate::store::StoreError) -> ApiError {
+    match err {
+        crate::store::StoreError::PredictionLocked => ApiError::PredictionLocked,
+        crate::store::StoreError::PickemLocked => ApiError::PickemLocked,
+        other => ApiError::internal(other),
+    }
+}
+
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
 use crate::store::{
@@ -129,20 +137,20 @@ pub(crate) async fn tournament_match(
         .store
         .find_match(match_id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .ok_or(ApiError::NotFound)?;
     let step = state
         .store
         .find_step(found.step_id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .filter(|step| step.tournament_id == tournament_id)
         .ok_or(ApiError::NotFound)?;
     let participants = state
         .store
         .list_step_match_participants(step.id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .into_iter()
         .filter(|p| p.match_id == match_id)
         .collect();
@@ -238,7 +246,7 @@ async fn get_prediction(
         .pickem()
         .find_prediction(claims.sub, match_id)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(write_error)?
         .ok_or(ApiError::NotFound)?;
     Ok(HttpResponse::Ok().json(PredictionView {
         prediction,
@@ -290,7 +298,7 @@ async fn put_prediction(
             ranking,
         })
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     Ok(HttpResponse::Ok().json(PredictionView {
         prediction,
         locked: false,
@@ -331,7 +339,7 @@ async fn delete_prediction(
         .pickem()
         .delete_prediction(claims.sub, match_id)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     if deleted {
         Ok(HttpResponse::NoContent().finish())
     } else {
@@ -369,7 +377,7 @@ async fn match_predictions(
         .pickem()
         .list_match_predictions(match_id)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     let locked = is_locked(&found, &tournament, &now_rfc3339());
     let count = all.len();
     if !locked {
@@ -429,7 +437,7 @@ async fn my_predictions(
         .pickem()
         .list_user_predictions(claims.sub, query.tournament_id)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     Ok(HttpResponse::Ok().json(predictions))
 }
 
@@ -493,7 +501,7 @@ async fn leaderboard(
         .pickem()
         .leaderboard(tournament_id, limit, offset)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(write_error)?;
     let names = usernames(state, entries.iter().map(|e| e.user_id)).await?;
     let rows: Vec<LeaderboardRow> = entries
         .into_iter()
@@ -516,12 +524,7 @@ async fn usernames(
 ) -> Result<HashMap<Uuid, String>, ApiError> {
     let mut names = HashMap::new();
     for id in ids.collect::<HashSet<_>>() {
-        if let Some(profile) = state
-            .store
-            .find_profile(id)
-            .await
-            .map_err(ApiError::internal)?
-        {
+        if let Some(profile) = state.store.find_profile(id).await.map_err(write_error)? {
             names.insert(id, profile.username);
         }
     }

@@ -105,4 +105,36 @@ async fn live_messages_reach_every_instance() {
     .await
     .unwrap();
     assert_eq!(got, message);
+    // This integration suite requires an isolated Redis. Drop Pub/Sub connections only;
+    // the existing local receiver must be invalidated after the relay reconnects.
+    redis::cmd("CLIENT")
+        .arg("KILL")
+        .arg("TYPE")
+        .arg("pubsub")
+        .query_async::<u64>(&mut cache.connection())
+        .await
+        .unwrap();
+    let restored = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let message = heard.recv().await.unwrap();
+            if message.is_resync() {
+                return message;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(restored.is_resync());
+    one.broadcast(&message).await.unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let received = heard.recv().await.unwrap();
+            if received == message {
+                return received;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(got, message);
 }

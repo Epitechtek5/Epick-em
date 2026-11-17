@@ -117,12 +117,19 @@ fn expiry(claims: &Claims) -> tokio::time::Instant {
 
 /// Ajoute le message à envoyer, sauf s'il y est déjà.
 fn queue(pending: &mut Vec<LiveMessage>, message: LiveMessage) {
-    if let Some(previous) = pending.iter_mut().find(|m| m.topic == message.topic && m.event == message.event) {
+    if let Some(previous) = pending
+        .iter_mut()
+        .find(|m| m.topic == message.topic && m.event == message.event)
+    {
         // Keep only common identifiers: differing match IDs broaden the invalidation to the topic.
         if previous.data != message.data {
-            if let (Some(old), Some(new)) = (previous.data.as_object_mut(), message.data.as_object()) {
+            if let (Some(old), Some(new)) =
+                (previous.data.as_object_mut(), message.data.as_object())
+            {
                 old.retain(|key, value| new.get(key) == Some(value));
-            } else { previous.data = json!({}); }
+            } else {
+                previous.data = json!({});
+            }
         }
     } else {
         pending.push(message);
@@ -261,10 +268,38 @@ mod tests {
     #[test]
     fn batches_by_topic_and_event_without_losing_scope() {
         let mut pending = vec![];
-        queue(&mut pending, LiveMessage::new("tournament:a", "tournament.updated", json!({"tournament_id":"a", "match_id":"one"})));
-        queue(&mut pending, LiveMessage::new("tournament:a", "tournament.updated", json!({"tournament_id":"a", "match_id":"two"})));
-        queue(&mut pending, LiveMessage::new("tournament:a", "predictions.updated", json!({"tournament_id":"a"})));
-        queue(&mut pending, LiveMessage::new("tournament:b", "tournament.updated", json!({"tournament_id":"b"})));
+        queue(
+            &mut pending,
+            LiveMessage::new(
+                "tournament:a",
+                "tournament.updated",
+                json!({"tournament_id":"a", "match_id":"one"}),
+            ),
+        );
+        queue(
+            &mut pending,
+            LiveMessage::new(
+                "tournament:a",
+                "tournament.updated",
+                json!({"tournament_id":"a", "match_id":"two"}),
+            ),
+        );
+        queue(
+            &mut pending,
+            LiveMessage::new(
+                "tournament:a",
+                "predictions.updated",
+                json!({"tournament_id":"a"}),
+            ),
+        );
+        queue(
+            &mut pending,
+            LiveMessage::new(
+                "tournament:b",
+                "tournament.updated",
+                json!({"tournament_id":"b"}),
+            ),
+        );
         assert_eq!(pending.len(), 3);
         assert_eq!(pending[0].data, json!({"tournament_id":"a"}));
     }

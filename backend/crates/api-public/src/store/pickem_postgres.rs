@@ -66,22 +66,24 @@ fn prediction(row: PredictionRow) -> Result<Prediction, StoreError> {
 
 fn question_columns() -> String {
     format!(
-        "id, tournament_id, kind, params::text, points, {} AS locks_at, {} AS created_at",
+        "id, tournament_id, kind, params::text, points, {} AS opens_at, {} AS locks_at, {} AS created_at",
+        ts("opens_at"),
         ts("locks_at"),
         ts("created_at")
     )
 }
 
-type QuestionRow = (Uuid, Uuid, String, String, i32, String, String);
+type QuestionRow = (Uuid, Uuid, String, String, i32, String, String, String);
 
 fn question(row: QuestionRow) -> Result<Question, StoreError> {
-    let (id, tournament_id, kind, params, points, locks_at, created_at) = row;
+    let (id, tournament_id, kind, params, points, opens_at, locks_at, created_at) = row;
     Ok(Question {
         id,
         tournament_id,
         kind: kind.parse()?,
         params: json(&params)?,
         points,
+        opens_at,
         locks_at,
         created_at,
     })
@@ -220,8 +222,8 @@ impl PickemStore for PgStore {
 
     async fn create_question(&self, input: QuestionInput) -> Result<Question, StoreError> {
         let row = sqlx::query_as::<_, QuestionRow>(&format!(
-            "INSERT INTO pickem_question (tournament_id, kind, params, points, locks_at) \
-             VALUES ($1, $2, $3::jsonb, $4, $5::timestamptz) RETURNING {}",
+            "INSERT INTO pickem_question (tournament_id, kind, params, points, locks_at, opens_at) \
+             VALUES ($1, $2, $3::jsonb, $4, $5::timestamptz, $6::timestamptz) RETURNING {}",
             question_columns()
         ))
         .bind(input.tournament_id)
@@ -229,6 +231,7 @@ impl PickemStore for PgStore {
         .bind(input.params.to_string())
         .bind(input.points)
         .bind(input.locks_at)
+        .bind(input.opens_at)
         .fetch_one(&self.pool)
         .await?;
         question(row)
@@ -280,10 +283,30 @@ impl PickemStore for PgStore {
     }
 
     async fn delete_question(&self, id: Uuid) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT opens_at::text FROM pickem_question WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if row.is_none() {
+            return Ok(false);
+        }
+        let open: bool = sqlx::query_scalar(
+            "SELECT opens_at <= clock_timestamp() FROM pickem_question WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if open {
+            return Err(StoreError::PickemLocked);
+        }
         let done = sqlx::query("DELETE FROM pickem_question WHERE id = $1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(done.rows_affected() > 0)
     }
 
@@ -398,7 +421,6 @@ impl PickemStore for PgStore {
                SELECT DISTINCT tournament_id AS id FROM prediction \
                UNION SELECT DISTINCT tournament_id FROM pickem_question \
              ) AS t LEFT JOIN pickem_resolution r ON r.tournament_id = t.id \
-             WHERE r.settled IS NOT TRUE \
              ORDER BY r.resolved_at NULLS FIRST, t.id LIMIT $1",
         )
         .bind(limit)

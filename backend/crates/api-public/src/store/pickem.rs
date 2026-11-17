@@ -91,6 +91,7 @@ pub struct Question {
     /// Points d'une réponse entièrement juste.
     pub points: i32,
     /// Fin des réponses, RFC 3339 en UTC.
+    pub opens_at: String,
     pub locks_at: String,
     pub created_at: String,
 }
@@ -101,6 +102,7 @@ pub struct QuestionInput {
     pub kind: QuestionKind,
     pub params: Value,
     pub points: i32,
+    pub opens_at: String,
     pub locks_at: String,
 }
 
@@ -220,8 +222,7 @@ pub trait PickemStore: Send + Sync {
     -> Result<Vec<Answer>, StoreError>;
 
     /// Enregistre les issues calculées (seules celles qui changent sont écrites) et la date de
-    /// résolution du tournoi, en une seule opération. `settled` : plus rien ne changera. Renvoie
-    /// le nombre de pronostics et de réponses modifiés.
+    /// résolution du tournoi, en une seule opération. `settled` records current completeness; corrections remain eligible for resolution.
     async fn save_resolution(
         &self,
         tournament_id: Uuid,

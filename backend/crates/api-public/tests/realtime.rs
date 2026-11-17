@@ -279,6 +279,13 @@ async fn websocket_relays_subscribed_topics_once() {
             .is_none()
     );
 
+    // Pub/Sub reconnection control bypasses topic filters and tells the same socket to reload.
+    live.broadcast(&LiveMessage::resync()).await.unwrap();
+    assert_eq!(
+        next_text(&mut conn, Duration::from_secs(2)).await.unwrap()["type"],
+        "resync"
+    );
+
     // Désabonné : plus rien.
     say(
         &mut conn,
@@ -295,4 +302,44 @@ async fn websocket_relays_subscribed_topics_once() {
             .await
             .is_none()
     );
+}
+
+#[actix_web::test]
+async fn deletion_invalidates_global_scores_even_after_an_update_in_the_same_batch() {
+    let store = MemoryStore::new();
+    let events = MemoryBus::new();
+    let live = MemoryLive::new();
+    let mut messages = live.subscribe();
+    let tournament_id = Uuid::new_v4();
+    events
+        .publish(&api_public::realtime::event(EventKind::TournamentChanged {
+            tournament_id,
+            match_id: None,
+            cause: ChangeCause::Api,
+        }))
+        .await
+        .unwrap();
+    events
+        .publish(&api_public::realtime::event(EventKind::TournamentDeleted {
+            tournament_id,
+        }))
+        .await
+        .unwrap();
+    events
+        .publish(&api_public::realtime::event(EventKind::TournamentDeleted {
+            tournament_id,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        consume_once(&store, &events, &live, Duration::ZERO)
+            .await
+            .unwrap(),
+        3
+    );
+    let message = messages.recv().await.unwrap();
+    assert_eq!(message.topic, topics::LEADERBOARD);
+    assert_eq!(message.event, "leaderboard.updated");
+    assert!(messages.try_recv().is_err());
+    assert_eq!(events.in_flight(), 0);
 }

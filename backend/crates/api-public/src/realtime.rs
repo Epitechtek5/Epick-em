@@ -196,24 +196,7 @@ pub async fn publish_changes(
 
 /// Prévient les abonnés quand une résolution a changé des points.
 pub async fn announce(live: &dyn LiveBus, report: &ResolutionReport) {
-    if report.changed == 0 {
-        return;
-    }
-    let data = json!({ "tournament_id": report.tournament_id });
-    broadcast(
-        live,
-        LiveMessage::new(
-            topics::tournament(report.tournament_id),
-            live::LEADERBOARD_UPDATED,
-            data.clone(),
-        ),
-    )
-    .await;
-    broadcast(
-        live,
-        LiveMessage::new(topics::LEADERBOARD, live::LEADERBOARD_UPDATED, data),
-    )
-    .await;
+    crate::pickem_live::announce(live, report).await;
 }
 
 /// Traite un événement : résout les pronostics du tournoi modifié et prévient les abonnés si
@@ -233,10 +216,17 @@ pub async fn handle_event(
         }
         // Pronostics et réponses partent avec le tournoi (clés étrangères).
         EventKind::TournamentDeleted { tournament_id } => {
-            broadcast(live, LiveMessage::new(topics::LEADERBOARD, live::LEADERBOARD_UPDATED,
-                json!({"tournament_id": tournament_id}))).await;
+            broadcast(
+                live,
+                LiveMessage::new(
+                    topics::LEADERBOARD,
+                    live::LEADERBOARD_UPDATED,
+                    json!({"tournament_id": tournament_id}),
+                ),
+            )
+            .await;
             Ok(None)
-        },
+        }
     }
 }
 
@@ -259,7 +249,10 @@ pub async fn consume_once(
             continue;
         };
         let tournament_id = event.tournament_id();
-        let key = (tournament_id, matches!(event.kind, EventKind::TournamentDeleted { .. }));
+        let key = (
+            tournament_id,
+            matches!(event.kind, EventKind::TournamentDeleted { .. }),
+        );
         if resolved.contains(&key) {
             done.push(delivery.id);
             continue;

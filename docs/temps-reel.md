@@ -78,3 +78,13 @@ navigateur, et un jeton dans l'URL finirait dans les journaux).
 
 - Mémoire : `cargo test -p api-public --test realtime` (publication, consommation, WebSocket).
 - Redis : `REDIS_URL=redis://localhost:6379 cargo test -p infra --test bus -- --ignored`.
+
+## Recovery and invalidation guarantees
+
+- Lock transitions are detected by the periodic Pick'em worker independently of point changes. A new worker emits a conservative initial invalidation.
+- Tournament deletion invalidates the global leaderboard. A preceding update for the same tournament in one stream batch does not suppress the deletion.
+- After Redis Pub/Sub resubscribes, existing WebSockets receive `{"type":"resync"}` before new events. Clients must refetch their subscribed data; Pub/Sub does not replay the gap.
+- During the 250 ms batching window, messages are grouped by `(topic, event)`. Different match IDs broaden the invalidation to the tournament; only identifiers common to all grouped messages are retained.
+- External projections remain committed atomically under the sync lease. Notifications run only after an accepted save, and never write the projection themselves.
+
+Regression tests cover clock-only invalidations, deletion after an update in the same batch, coalescing different matches, a resync on the same WebSocket, and a real Redis Pub/Sub disconnect/reconnect. The ignored Redis tests require an isolated test Redis: the reconnect test terminates its Pub/Sub connections.

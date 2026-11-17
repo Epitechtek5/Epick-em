@@ -26,8 +26,7 @@ reconstruction de Redis.
 finaux des étapes, points du tournoi), recalcule l'issue et les points de **chaque** pronostic
 et de **chaque** réponse, puis n'écrit que ce qui change. C'est ce qui la rend idempotente
 (ADR-002, règle 2) et qui reprend toute correction de résultat au passage suivant, sans
-événement dédié. api-internal la lance sur les tournois non réglés, les moins récemment résolus
-d'abord ; un tournoi local terminé dont tout est tranché est marqué réglé et n'est plus relu.
+an explicit event. The worker revisits all tournaments with predictions or questions, least recently resolved first, including completed tournaments. `settled` describes current results and never excludes later corrections.
 
 ## Ajouter un modèle de question
 
@@ -58,3 +57,11 @@ d'abord ; un tournoi local terminé dont tout est tranché est marqué réglé e
 - Pas de score exact pronostiqué : les matchs n'ont pas de score de manches dans ce modèle (les
   manches arrivent avec #185).
 - Le classement général additionne tous les tournois, sans saison ni groupe privé.
+
+## Write guards and live updates
+
+Migration `0020-pickem-write-guards.yaml` serializes local prediction writes with match and tournament status changes and checks `clock_timestamp()` after waiting for row locks. The memory store holds its match-state mutex through prediction mutations. External match state remains the last synchronized provider snapshot.
+
+Questions accept an optional `opens_at` (default: server time). Answers are accepted only during `[opens_at, locks_at)`. Points and closing time may be edited, and a question deleted, only before `opens_at`, even if nobody has answered yet. Existing questions retain their original creation time as opening time. PostgreSQL enforces the opening/closing checks at write time; resolution can still update outcomes after closing.
+
+api-internal publishes `predictions.updated` when lock states change and `leaderboard.updated` on tournament and global topics when outcomes or points change. A fresh worker sends one conservative lock invalidation. Pure clock transitions are detected at the next periodic pass (`RESOLVE_INTERVAL_SECS`, default 30 seconds), even with no result change. The bus schema and transport are shared with the WebSocket PR; messages contain no spectator choices.

@@ -6,8 +6,8 @@
 //! saisie locale ou changement venu de start.gg — se répercute à la résolution suivante.
 //!
 //! api-internal appelle [`resolve_pending`] à intervalle régulier (`RESOLVE_INTERVAL_SECS`). Un
-//! tournoi local terminé et entièrement résolu est marqué réglé et n'est plus relu ; un tournoi
-//! importé ne l'est jamais, sa source pouvant encore corriger un résultat.
+//! finished tournament remains eligible for recalculation: local and external results can
+//! still be corrected after completion.
 
 use crate::store::{
     Answer, AuthStore, Match, MatchParticipant, MatchResult, MatchStatus, PickOutcome, Prediction,
@@ -25,10 +25,11 @@ pub struct ResolutionReport {
     pub tournament_id: Uuid,
     pub predictions: usize,
     pub answers: usize,
-    /// Pronostics et réponses dont l'issue ou les points ont changé.
-    pub changed: u64,
-    /// Plus rien ne changera : le tournoi ne sera plus relu.
+    /// All current results are final; later corrections are still recalculated.
     pub settled: bool,
+    pub changed: u64,
+    /// IDs whose prediction/answer windows are currently closed.
+    pub locked: Vec<Uuid>,
 }
 
 /// État d'un match, vu par les pronostics : annulé (ou supprimé) → sans objet, terminé → rangs
@@ -298,8 +299,29 @@ pub async fn resolve_tournament(
     );
     let imported = store.imports().summary(tournament_id).await.is_some();
     let settled = over && all_final && !imported;
-    let (predictions, answers) = (resolved_predictions.len(), resolved_answers.len());
-    let changed = pickem
+    let changed = 0;
+    let now = crate::store::now_rfc3339();
+    let mut locked: Vec<Uuid> = matches
+        .values()
+        .filter(|m| crate::predictions::is_locked(m, &facts.tournament, &now))
+        .map(|m| m.id)
+        .chain(
+            questions
+                .values()
+                .filter(|q| q.locks_at <= now || over)
+                .map(|q| q.id),
+        )
+        .collect();
+    locked.sort_unstable();
+    let mut report = ResolutionReport {
+        tournament_id,
+        predictions: resolved_predictions.len(),
+        answers: resolved_answers.len(),
+        settled,
+        changed,
+        locked,
+    };
+    report.changed = pickem
         .save_resolution(
             tournament_id,
             resolved_predictions,
@@ -307,13 +329,7 @@ pub async fn resolve_tournament(
             settled,
         )
         .await?;
-    Ok(Some(ResolutionReport {
-        tournament_id,
-        predictions,
-        answers,
-        changed,
-        settled,
-    }))
+    Ok(Some(report))
 }
 
 /// Résout jusqu'à `limit` tournois non réglés, les moins récemment résolus d'abord. Une erreur

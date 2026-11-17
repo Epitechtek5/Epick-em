@@ -99,6 +99,26 @@ impl MemoryStore {
         self.state().points.insert(participant_id, points);
     }
 
+    pub(super) fn with_prediction_gate<T>(
+        &self,
+        match_id: Uuid,
+        write: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let state = self.state();
+        if let Some(found) = state.matches.iter().find(|m| m.id == match_id) {
+            let tournament = state
+                .steps
+                .iter()
+                .find(|s| s.id == found.step_id)
+                .and_then(|s| state.tournaments.iter().find(|t| t.id == s.tournament_id))
+                .ok_or(StoreError::PredictionLocked)?;
+            if crate::predictions::is_locked(found, tournament, &now_rfc3339()) {
+                return Err(StoreError::PredictionLocked);
+            }
+        }
+        write()
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }

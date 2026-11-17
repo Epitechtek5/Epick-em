@@ -80,8 +80,12 @@ pub struct LiveMessage {
 
 impl LiveMessage {
     /// Local control message: the Pub/Sub subscription was restored after a possible gap.
-    pub fn resync() -> Self { Self::new("*", "resync", Value::Null) }
-    pub fn is_resync(&self) -> bool { self.topic == "*" && self.event == "resync" }
+    pub fn resync() -> Self {
+        Self::new("*", "resync", Value::Null)
+    }
+    pub fn is_resync(&self) -> bool {
+        self.topic == "*" && self.event == "resync"
+    }
 
     pub fn new(topic: impl Into<String>, event: impl Into<String>, data: Value) -> Self {
         LiveMessage {

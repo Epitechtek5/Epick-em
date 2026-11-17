@@ -35,34 +35,36 @@ impl PickemMemory {
 #[async_trait]
 impl PickemStore for MemoryStore {
     async fn upsert_prediction(&self, input: PredictionInput) -> Result<Prediction, StoreError> {
-        let mut state = self.pickem.state();
-        let now = now_rfc3339();
-        if let Some(found) = state
-            .predictions
-            .iter_mut()
-            .find(|p| p.user_id == input.user_id && p.match_id == input.match_id)
-        {
-            found.winner_id = input.winner_id;
-            found.ranking = input.ranking;
-            found.outcome = PickOutcome::Pending;
-            found.points = 0.0;
-            found.updated_at = now;
-            return Ok(found.clone());
-        }
-        let prediction = Prediction {
-            id: Uuid::new_v4(),
-            user_id: input.user_id,
-            tournament_id: input.tournament_id,
-            match_id: input.match_id,
-            winner_id: input.winner_id,
-            ranking: input.ranking,
-            outcome: PickOutcome::Pending,
-            points: 0.0,
-            created_at: now.clone(),
-            updated_at: now,
-        };
-        state.predictions.push(prediction.clone());
-        Ok(prediction)
+        self.with_prediction_gate(input.match_id, || {
+            let mut state = self.pickem.state();
+            let now = now_rfc3339();
+            if let Some(found) = state
+                .predictions
+                .iter_mut()
+                .find(|p| p.user_id == input.user_id && p.match_id == input.match_id)
+            {
+                found.winner_id = input.winner_id;
+                found.ranking = input.ranking;
+                found.outcome = PickOutcome::Pending;
+                found.points = 0.0;
+                found.updated_at = now;
+                return Ok(found.clone());
+            }
+            let prediction = Prediction {
+                id: Uuid::new_v4(),
+                user_id: input.user_id,
+                tournament_id: input.tournament_id,
+                match_id: input.match_id,
+                winner_id: input.winner_id,
+                ranking: input.ranking,
+                outcome: PickOutcome::Pending,
+                points: 0.0,
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            state.predictions.push(prediction.clone());
+            Ok(prediction)
+        })
     }
 
     async fn find_prediction(
@@ -80,12 +82,14 @@ impl PickemStore for MemoryStore {
     }
 
     async fn delete_prediction(&self, user_id: Uuid, match_id: Uuid) -> Result<bool, StoreError> {
-        let mut state = self.pickem.state();
-        let before = state.predictions.len();
-        state
-            .predictions
-            .retain(|p| !(p.user_id == user_id && p.match_id == match_id));
-        Ok(state.predictions.len() != before)
+        self.with_prediction_gate(match_id, || {
+            let mut state = self.pickem.state();
+            let before = state.predictions.len();
+            state
+                .predictions
+                .retain(|p| !(p.user_id == user_id && p.match_id == match_id));
+            Ok(state.predictions.len() != before)
+        })
     }
 
     async fn list_match_predictions(&self, match_id: Uuid) -> Result<Vec<Prediction>, StoreError> {
@@ -137,6 +141,7 @@ impl PickemStore for MemoryStore {
             kind: input.kind,
             params: input.params,
             points: input.points,
+            opens_at: input.opens_at,
             locks_at: input.locks_at,
             created_at: now_rfc3339(),
         };
@@ -176,6 +181,9 @@ impl PickemStore for MemoryStore {
         let Some(question) = state.questions.iter_mut().find(|q| q.id == id) else {
             return Ok(None);
         };
+        if question.opens_at <= now_rfc3339() {
+            return Err(StoreError::PickemLocked);
+        }
         if let Some(points) = update.points {
             question.points = points;
         }
@@ -187,6 +195,13 @@ impl PickemStore for MemoryStore {
 
     async fn delete_question(&self, id: Uuid) -> Result<bool, StoreError> {
         let mut state = self.pickem.state();
+        if state
+            .questions
+            .iter()
+            .any(|q| q.id == id && q.opens_at <= now_rfc3339())
+        {
+            return Err(StoreError::PickemLocked);
+        }
         let before = state.questions.len();
         state.questions.retain(|q| q.id != id);
         state.answers.retain(|a| a.question_id != id);
@@ -196,6 +211,13 @@ impl PickemStore for MemoryStore {
     async fn upsert_answer(&self, input: AnswerInput) -> Result<Answer, StoreError> {
         let mut state = self.pickem.state();
         let now = now_rfc3339();
+        if !state
+            .questions
+            .iter()
+            .any(|q| q.id == input.question_id && q.opens_at <= now && now < q.locks_at)
+        {
+            return Err(StoreError::PickemLocked);
+        }
         if let Some(found) = state
             .answers
             .iter_mut()
@@ -296,10 +318,11 @@ impl PickemStore for MemoryStore {
             .map(|p| p.tournament_id)
             .chain(state.questions.iter().map(|q| q.tournament_id))
             .filter(|id| seen.insert(*id))
-            .filter_map(|id| match state.resolutions.get(&id) {
-                Some((_, true)) => None,
-                Some((clock, false)) => Some((*clock, id)),
-                None => Some((0, id)),
+            .map(|id| {
+                (
+                    state.resolutions.get(&id).map_or(0, |(clock, _)| *clock),
+                    id,
+                )
             })
             .collect();
         found.sort_by_key(|(clock, _)| *clock);

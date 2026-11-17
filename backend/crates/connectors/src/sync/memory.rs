@@ -3,7 +3,8 @@
 use super::{ChangeEvent, NewSource, SourceRecord, StoreError, Success, SyncStore};
 use crate::model::{Capabilities, SyncCursor};
 use async_trait::async_trait;
-use std::sync::Mutex;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Default)]
@@ -15,6 +16,7 @@ struct State {
 #[derive(Default)]
 pub struct MemorySyncStore {
     state: Mutex<State>,
+    projection_cache: Option<Arc<dyn infra::Cache>>,
 }
 
 impl MemorySyncStore {
@@ -22,8 +24,13 @@ impl MemorySyncStore {
         Self::default()
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    pub fn with_projection_cache(mut self, cache: Arc<dyn infra::Cache>) -> Self {
+        self.projection_cache = Some(cache);
+        self
+    }
+
+    async fn state(&self) -> tokio::sync::MutexGuard<'_, State> {
+        self.state.lock().await
     }
 }
 
@@ -38,7 +45,7 @@ impl SyncStore for MemorySyncStore {
         source: NewSource,
         now: i64,
     ) -> Result<(SourceRecord, bool), StoreError> {
-        let mut state = self.state();
+        let mut state = self.state().await;
         let reference = &source.reference;
         if let Some((existing, _)) = state.sources.iter().find(|(s, _)| {
             s.provider == reference.provider && s.external_id == reference.external_id
@@ -79,6 +86,7 @@ impl SyncStore for MemorySyncStore {
     async fn find(&self, id: Uuid) -> Result<Option<SourceRecord>, StoreError> {
         Ok(self
             .state()
+            .await
             .sources
             .iter()
             .find(|(s, _)| s.id == id)
@@ -91,6 +99,7 @@ impl SyncStore for MemorySyncStore {
     ) -> Result<Option<SourceRecord>, StoreError> {
         Ok(self
             .state()
+            .await
             .sources
             .iter()
             .find(|(s, _)| s.tournament_id == Some(tournament_id))
@@ -100,6 +109,7 @@ impl SyncStore for MemorySyncStore {
     async fn list(&self) -> Result<Vec<SourceRecord>, StoreError> {
         Ok(self
             .state()
+            .await
             .sources
             .iter()
             .map(|(s, _)| s.clone())
@@ -112,7 +122,7 @@ impl SyncStore for MemorySyncStore {
         limit: u32,
         lease_secs: i64,
     ) -> Result<Vec<SourceRecord>, StoreError> {
-        let mut state = self.state();
+        let mut state = self.state().await;
         let mut claimed = Vec::new();
         for (source, lease) in state.sources.iter_mut() {
             if claimed.len() as u32 >= limit {
@@ -132,7 +142,7 @@ impl SyncStore for MemorySyncStore {
         now: i64,
         lease_secs: i64,
     ) -> Result<Option<SourceRecord>, StoreError> {
-        let mut state = self.state();
+        let mut state = self.state().await;
         Ok(state
             .sources
             .iter_mut()
@@ -150,12 +160,28 @@ impl SyncStore for MemorySyncStore {
         success: Success,
         changes: &[ChangeEvent],
     ) -> Result<(), StoreError> {
-        let mut state = self.state();
+        let mut state = self.state().await;
         let Some((source, lease)) = state.sources.iter_mut().find(|(s, _)| s.id == id) else {
             return Ok(());
         };
         if *lease != Some(lease_until) {
             return Err(StoreError::LeaseLost);
+        }
+        if !success.projection.is_empty() {
+            let cache = self
+                .projection_cache
+                .as_ref()
+                .ok_or_else(|| StoreError::Other("projection cache missing".into()))?;
+            for entry in &success.projection {
+                cache
+                    .set(
+                        &entry.key,
+                        entry.value.clone(),
+                        infra::Ttl::from_secs(entry.ttl_secs),
+                    )
+                    .await
+                    .map_err(|e| StoreError::Other(e.to_string()))?;
+            }
         }
         source.snapshot = Some(success.snapshot);
         source.capabilities = success.capabilities;
@@ -181,7 +207,13 @@ impl SyncStore for MemorySyncStore {
         now: i64,
         next_sync_at: i64,
     ) -> Result<(), StoreError> {
-        if let Some((source, lease)) = self.state().sources.iter_mut().find(|(s, _)| s.id == id) {
+        if let Some((source, lease)) = self
+            .state()
+            .await
+            .sources
+            .iter_mut()
+            .find(|(s, _)| s.id == id)
+        {
             if *lease != Some(lease_until) {
                 return Err(StoreError::LeaseLost);
             }
@@ -200,6 +232,7 @@ impl SyncStore for MemorySyncStore {
     ) -> Result<Vec<(i64, Uuid, ChangeEvent)>, StoreError> {
         Ok(self
             .state()
+            .await
             .events
             .iter()
             .filter(|(.., processed)| !processed)
@@ -209,7 +242,7 @@ impl SyncStore for MemorySyncStore {
     }
 
     async fn mark_processed(&self, ids: &[i64]) -> Result<(), StoreError> {
-        for event in self.state().events.iter_mut() {
+        for event in self.state().await.events.iter_mut() {
             if ids.contains(&event.0) {
                 event.3 = true;
             }
@@ -218,7 +251,7 @@ impl SyncStore for MemorySyncStore {
     }
 
     async fn delete(&self, id: Uuid) -> Result<bool, StoreError> {
-        let mut state = self.state();
+        let mut state = self.state().await;
         let before = state.sources.len();
         state.sources.retain(|(s, _)| s.id != id);
         state.events.retain(|(_, source, ..)| *source != id);
