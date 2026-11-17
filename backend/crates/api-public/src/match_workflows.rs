@@ -318,8 +318,8 @@ async fn update_workflow(
     let mut archive_games = None;
     let mut reason = None;
     let mut accept = None;
-    let event;
-    match request.action {
+
+    let event = match request.action {
         MatchAction::Schedule {
             scheduled_at,
             duration_minutes,
@@ -347,14 +347,14 @@ async fn update_workflow(
             workflow.schedule.duration_minutes = duration_minutes;
             workflow.schedule.venue = schedule_text(venue)?;
             workflow.schedule.station = schedule_text(station)?;
-            event = "match.rescheduled";
+            "match.rescheduled"
         }
         MatchAction::Call => {
             if !can_manage {
                 return Err(ApiError::Forbidden);
             }
             workflow.schedule.called_at = Some(now.clone());
-            event = "match.called";
+            "match.called"
         }
         MatchAction::Delay {
             minutes,
@@ -371,7 +371,7 @@ async fn update_workflow(
             }
             reason = Some(required_reason(&explanation)?);
             workflow.schedule.delay_minutes = minutes;
-            event = "match.rescheduled";
+            "match.rescheduled"
         }
         MatchAction::Attendance {
             participant_id: id,
@@ -442,7 +442,7 @@ async fn update_workflow(
                     .await?,
                 );
             }
-            event = "match.attendance";
+            "match.attendance"
         }
         MatchAction::Submit { report } => {
             let id = participant_id.ok_or(ApiError::Forbidden)?;
@@ -517,7 +517,7 @@ async fn update_workflow(
                     created_at: now.clone(),
                 });
             }
-            event = "match.result_submitted";
+            "match.result_submitted"
         }
         MatchAction::Confirm { submission_id } => {
             let id = participant_id.ok_or(ApiError::Forbidden)?;
@@ -542,7 +542,7 @@ async fn update_workflow(
             if submission.confirmations.len() == members.len() {
                 accept = Some(submission_id);
             }
-            event = "match.confirmed";
+            "match.confirmed"
         }
         MatchAction::Dispute {
             submission_id,
@@ -587,7 +587,7 @@ async fn update_workflow(
                 created_at: now.clone(),
                 decision: None,
             });
-            event = "match.disputed";
+            "match.disputed"
         }
         MatchAction::Resolve {
             dispute_id,
@@ -616,7 +616,7 @@ async fn update_workflow(
             if !workflow.disputes.iter().any(|d| d.decision.is_none()) {
                 accept = Some(submission_id);
             }
-            event = "match.resolved";
+            "match.resolved"
         }
         MatchAction::Adjudicate {
             report,
@@ -635,9 +635,9 @@ async fn update_workflow(
             if !reported_games.is_empty() {
                 games = Some(import_games(&reported_games));
             }
-            event = "match.resolved";
+            "match.resolved"
         }
-    }
+    };
     if let Some(id) = accept {
         if workflow.disputes.iter().any(|d| d.decision.is_none()) {
             return Err(ApiError::InvalidTransition);

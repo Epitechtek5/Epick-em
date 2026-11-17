@@ -1154,8 +1154,8 @@ async fn conflicting_reports_block_finalization_until_an_organizer_decides() {
     generate(&app, &setup, &run).await;
     let found = matches(&app, &setup, &run).await.remove(0);
     let path = format!("{}/matches/{}/workflow", run.base(), id(&found));
-    for index in 0..2 {
-        let (status, response) = post(&app, &path, &setup.players[index], json!({"operation_id":Uuid::new_v4(),"revision":index,"action":{"kind":"submit","report": report_for(&found, index == 1)}})).await;
+    for (index, player) in setup.players.iter().take(2).enumerate() {
+        let (status, response) = post(&app, &path, player, json!({"operation_id":Uuid::new_v4(),"revision":index,"action":{"kind":"submit","report": report_for(&found, index == 1)}})).await;
         assert_eq!(status, StatusCode::OK, "{response}");
     }
     let (_, view) = get(&app, &path, &setup.admin).await;

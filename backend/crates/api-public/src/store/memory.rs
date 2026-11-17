@@ -2358,10 +2358,10 @@ impl AuthStore for MemoryStore {
         if step.status != StepStatus::Ongoing {
             return Err(StoreError::StepState);
         }
-        if let Some(expected) = &closing.expected_competition_revision {
-            if state.competition_snapshot(step.tournament_id)?.revision()? != *expected {
-                return Err(StoreError::StepState);
-            }
+        if let Some(expected) = &closing.expected_competition_revision
+            && state.competition_snapshot(step.tournament_id)?.revision()? != *expected
+        {
+            return Err(StoreError::StepState);
         }
         // L'étape suivante est lancée d'abord : si elle échoue, rien n'a changé.
         let mut scratch = State {
@@ -2698,15 +2698,14 @@ impl AuthStore for MemoryStore {
         {
             return Err(StoreError::MatchState);
         }
-        if let Some(finish) = &update.finish {
-            if finish.match_id != update.match_id
+        if let Some(finish) = &update.finish
+            && (finish.match_id != update.match_id
                 || !state.matches.iter().any(|m| {
                     m.id == update.match_id
                         && matches!(m.status, MatchStatus::Scheduled | MatchStatus::Ongoing)
-                })
-            {
-                return Err(StoreError::MatchState);
-            }
+                }))
+        {
+            return Err(StoreError::MatchState);
         }
         if let Some(expected) = &update.archive_games {
             let mut actual: Vec<_> = state

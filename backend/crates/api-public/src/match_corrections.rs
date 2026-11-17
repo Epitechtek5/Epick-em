@@ -208,10 +208,9 @@ async fn plan(
         if let Err(error) =
             crate::generation::generate_next_round(&projected, tournament, &projected_step, false)
                 .await
+            && !matches!(error, ApiError::Validation(_))
         {
-            if !matches!(error, ApiError::Validation(_)) {
-                return Err(error);
-            }
+            return Err(error);
         }
     }
     let next = memory
