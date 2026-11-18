@@ -15,18 +15,20 @@ import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { Input } from '@/components/ui/input';
 import { ScreenState, FormMessage } from '@/components/ui/feedback';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 export default function MatchEditorScreen() {
   const { t } = useTranslation();
-  const { user, token } = useAuth();
+  const { token } = useAuth();
   const state = useMatchContext();
+  const { canReferee } = useTournamentAccess(state.tournamentId);
 
   if (!state.data) return <MatchState {...state} />;
 
   const { step, match } = state.data;
   if (
     !token ||
-    user?.role !== 'admin' ||
+    !canReferee ||
     step.status !== 'ongoing' ||
     (match && !['scheduled', 'ongoing'].includes(match.status))
   ) {
@@ -43,6 +45,9 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
   const { step, match, groups } = data;
   const [group, setGroup] = useState(
     match ? (match.group_id ?? '') : (groups[0]?.group_id ?? ''),
+  );
+  const [bestOf, setBestOf] = useState<'1' | '3' | '5'>(
+    String(match?.best_of ?? 1) as '1' | '3' | '5',
   );
   const [round, setRound] = useState(match?.round?.toString() ?? '');
   const [bracket, setBracket] = useState<Bracket | ''>(match?.bracket ?? '');
@@ -63,6 +68,7 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
   function save() {
     const input = {
       group_id: group,
+      best_of: Number(bestOf) as 1 | 3 | 5,
       round: round.trim() ? Number(round) : null,
       bracket: bracket || null,
       next_match_id: next || null,
@@ -95,6 +101,9 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
                 ),
             ));
         const changes = {
+          ...(input.best_of !== (match.best_of ?? 1) && {
+            best_of: input.best_of,
+          }),
           ...(input.round !== match.round && { round: input.round }),
           ...(input.bracket !== match.bracket && { bracket: input.bracket }),
           ...(input.next_match_id !== match.next_match_id && {
@@ -129,6 +138,19 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
       <View className="gap-4 rounded-xl border border-border bg-card p-4">
         <Text className="text-lg font-semibold">{t('matches.detail')}</Text>
 
+        <StepOptionSelect
+          label={t('matchGames.format')}
+          value={bestOf}
+          options={['1', '3', '5']}
+          labelFor={(value) => t('matchGames.bestOf', { count: Number(value) })}
+          description={t(
+            match?.games?.length
+              ? 'matchGames.formatLocked'
+              : 'matchGames.formatHelp',
+          )}
+          disabled={Boolean(match?.games?.length) || action.busy}
+          onSelect={setBestOf}
+        />
         <StepOptionSelect
           label={t('matches.group')}
           disabled={!!match}

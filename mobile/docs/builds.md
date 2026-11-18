@@ -8,7 +8,7 @@ SDK 58 requires Android compile SDK 37, target SDK 36 and Xcode 26.4 or newer ([
 
 ## Android
 
-Install JDK 17 and Android SDK command line tools/Android Studio. Configure `JAVA_HOME`, `ANDROID_HOME` and SDK platform tools; accept the Android SDK licenses. Install SDK platform 37.0 (`platforms;android-37.0`), build tools 37.0.0, NDK 27.1.12297006 and CMake 3.30.5. The build script passes `-Pandroid.cmakeVersion=3.30.5`, which the SDK 58 Expo root Gradle plugin applies to native modules as well as the app. On a clean checkout:
+Install JDK 17 and Android SDK command line tools/Android Studio. Configure `JAVA_HOME`, `ANDROID_HOME` and SDK platform tools; accept the Android SDK licenses. Install SDK platform 37.0 (`platforms;android-37.0`), build tools 37.0.0, NDK 27.1.12297006 and CMake 3.30.5. The Android package identifier includes the minor version; `platforms;android-37` does not exist. The build script passes `-Pandroid.cmakeVersion=3.30.5`, which the SDK 58 Expo root Gradle plugin applies to native modules as well as the app. On a clean checkout:
 
 ```sh
 npm ci

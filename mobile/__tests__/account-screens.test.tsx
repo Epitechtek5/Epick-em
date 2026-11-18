@@ -106,6 +106,46 @@ it('normalizes and updates only the current account recovery email', async () =>
   });
   expect(accounts.updateUser).not.toHaveBeenCalled();
 });
+it('sets and removes the current account profile picture URL', async () => {
+  jest.mocked(accounts.updateMe).mockResolvedValue({
+    ...user,
+    picture_url: 'https://cdn.example.com/alice.png',
+  });
+  await render(
+    <PreferencesProvider>
+      <ProfileScreen />
+    </PreferencesProvider>,
+  );
+  await screen.findByText('Account');
+  await fireEvent.press(screen.getByLabelText('Edit account'));
+  await fireEvent.changeText(
+    screen.getByLabelText('Profile picture URL'),
+    ' https://cdn.example.com/alice.png ',
+  );
+  await fireEvent.press(screen.getByLabelText('Save changes'));
+  expect(accounts.updateMe).toHaveBeenCalledWith('test-token', {
+    picture_url: 'https://cdn.example.com/alice.png',
+  });
+});
+it('removes an existing profile picture with an empty value', async () => {
+  jest.mocked(useAuth).mockReturnValue({
+    ...auth,
+    user: { ...user, picture_url: 'https://cdn.example.com/alice.png' },
+  });
+  jest.mocked(accounts.updateMe).mockResolvedValue(user);
+  await render(
+    <PreferencesProvider>
+      <ProfileScreen />
+    </PreferencesProvider>,
+  );
+  await screen.findByText('Account');
+  await fireEvent.press(screen.getByLabelText('Edit account'));
+  await fireEvent.changeText(screen.getByLabelText('Profile picture URL'), '');
+  await fireEvent.press(screen.getByLabelText('Save changes'));
+  expect(accounts.updateMe).toHaveBeenCalledWith('test-token', {
+    picture_url: '',
+  });
+});
 it('clears the revoked local session after changing the current password', async () => {
   jest.mocked(accounts.updateMe).mockResolvedValue(user);
   await render(

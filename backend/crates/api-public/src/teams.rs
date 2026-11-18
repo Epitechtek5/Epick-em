@@ -8,6 +8,7 @@ use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
 use crate::games::is_image_url;
 use crate::store::{StoreError, Team, TeamInput, TeamMember, TeamRole, TeamUpdate};
+use crate::users::require_admin;
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -314,7 +315,7 @@ async fn list_members(
     Ok(HttpResponse::Ok().json(members))
 }
 
-/// Ajoute un compte à l'équipe (propriétaire). Le rôle `owner` n'est pas attribuable.
+/// Ajoute directement un compte à l'équipe (administrateur uniquement).
 #[utoipa::path(
     post,
     path = "/teams/{id}/members",
@@ -326,7 +327,7 @@ async fn list_members(
         (status = 201, description = "Membre ajouté", body = TeamMember),
         (status = 400, description = "Requête invalide ou compte introuvable", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
-        (status = 403, description = "Réservé au propriétaire", body = ErrorResponse),
+        (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
         (status = 404, description = "Équipe introuvable", body = ErrorResponse),
         (status = 409, description = "Déjà membre de l'équipe", body = ErrorResponse),
     ),
@@ -339,7 +340,7 @@ async fn add_member(
     body: web::Json<AddMemberRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let team = find_team(&state, id.into_inner()).await?;
-    require_owner(&claims, team.owner_id)?;
+    require_admin(&state, &claims).await?;
     let AddMemberRequest { user_id, role } = body.into_inner();
     require_assignable(role)?;
     let member = state
@@ -348,6 +349,10 @@ async fn add_member(
         .await
         .map_err(store_error)?
         .ok_or_else(|| ApiError::Validation(vec![("user_id", "Compte introuvable.".into())]))?;
+    crate::notifications::emit(
+        &state,
+        crate::notifications::team_member_added(team.id, &team.name, user_id, &member.joined_at),
+    );
     Ok(HttpResponse::Created().json(member))
 }
 
@@ -430,6 +435,15 @@ async fn remove_member(
         .await
         .map_err(ApiError::internal)?
     {
+        crate::notifications::emit(
+            &state,
+            crate::notifications::team_member_removed(
+                team.id,
+                &team.name,
+                user_id,
+                &crate::store::now_rfc3339(),
+            ),
+        );
         Ok(HttpResponse::NoContent().finish())
     } else {
         Err(ApiError::NotFound)

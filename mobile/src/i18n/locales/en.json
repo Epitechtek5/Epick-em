@@ -17,6 +17,11 @@
     "usernameHint": "3 to 32 letters, numbers, underscores, dots or hyphens",
     "logo": "Epick'em logo",
     "back": "Back",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "true": "Yes",
+    "false": "No",
+    "noData": "No data available.",
     "showPassword": "Show {{label}}",
     "hidePassword": "Hide {{label}}"
   },
@@ -56,6 +61,23 @@
     "language": "Language",
     "english": "English",
     "french": "Français",
+    "spanish": "Español",
+    "notifications": "Notifications",
+    "syncing": "Synchronizing settings",
+    "syncFailed": "Unable to synchronize settings. Local changes were kept.",
+    "channels": {
+      "email": "Email",
+      "push": "Push"
+    },
+    "categories": {
+      "tournaments": "Tournaments",
+      "teams": "Teams",
+      "matches": "Matches",
+      "predictions": "Predictions",
+      "pickem": "Pick’em",
+      "rankings": "Rankings",
+      "account": "Account and security"
+    },
     "session": "Session",
     "logout": "Log out",
     "loggingOut": "Logging out",
@@ -77,7 +99,9 @@
     "identifier": "Account UUID",
     "recoveryEmail": "Recovery email",
     "recoveryEmailMissing": "No recovery email configured",
-    "recoveryEmailHint": "Use this address to sign in and recover your account."
+    "recoveryEmailHint": "Use this address to sign in and recover your account.",
+    "pictureUrl": "Profile picture URL",
+    "pictureUrlHint": "Enter an HTTP(S) image URL, or leave it empty to remove the picture."
   },
   "users": {
     "title": "Users",
@@ -116,7 +140,8 @@
     "passwordSpecial": "Password must contain at least one special character.",
     "match": "Passwords do not match.",
     "email": "Enter a valid email address.",
-    "emailRemovalUnsupported": "A recovery email cannot currently be removed."
+    "emailRemovalUnsupported": "A recovery email cannot currently be removed.",
+    "pictureUrl": "Enter an HTTP(S) URL of at most 2,048 bytes."
   },
   "form": {
     "noChanges": "No changes to save.",
@@ -239,8 +264,10 @@
     "key": "Key",
     "type": "Type",
     "types": {
-      "flat": "Flat",
-      "percent": "Percent"
+      "flat": "Number",
+      "percent": "Percent",
+      "select": "Selection",
+      "mvp": "MVP"
     },
     "information": "Statistic definition",
     "formHint": "Name, unique key and type",
@@ -272,10 +299,12 @@
     "validation": {
       "name": "Name must contain 1–64 characters after trimming.",
       "key": "Key must be at most 64 lowercase letters, digits or underscore-separated segments.",
-      "type": "Choose Flat or Percent.",
+      "type": "Choose a statistic type.",
       "fileFormat": "Choose a .json or .csv file.",
       "fileSize": "File must be between 1 byte and 256 KiB.",
-      "fileContent": "File must contain valid UTF-8; JSON files must be valid JSON."
+      "fileContent": "File must contain valid UTF-8; JSON files must be valid JSON.",
+      "scope": "Choose a scope compatible with this statistic.",
+      "options": "Use 1 to 64 characters per value, with at most 500 values."
     },
     "errors": {
       "keyTaken": "This statistic key is already in use.",
@@ -285,7 +314,22 @@
       "readFile": "Unable to read the selected file.",
       "saveFile": "Unable to save the file.",
       "sharing": "Unable to share the file."
-    }
+    },
+    "scope": "Applies to",
+    "scopes": {
+      "participant": "Participant or player",
+      "match": "Each game"
+    },
+    "typeHelp": "Numeric statistics remain numeric to preserve existing results.",
+    "configureOptions": "Configure values",
+    "noOptions": "No values configured for this game.",
+    "optionsHelp": "These choices apply only to this game. Renaming a value preserves its existing results.",
+    "optionLabel": "Value {{number}}",
+    "removeOption": "Remove {{name}}",
+    "removeOptionHelp": "Existing results keep this value, but it will no longer be available for new entries. Save to apply the change.",
+    "newOption": "New value",
+    "addOption": "Add value",
+    "addBeforeSave": "Add the new value or clear the field before saving."
   },
   "tournaments": {
     "title": "Tournaments",
@@ -324,6 +368,8 @@
     "manageParticipants": "Manage participants",
     "checkIn": "Check in",
     "withdraw": "Withdraw",
+    "removeParticipant": "Remove",
+    "confirmSelfWithdrawal": "Withdraw from this tournament?",
     "emptyParticipants": "No participants yet.",
     "emptyRanking": "Rankings are not available yet.",
     "emptyRules": "No scoring rules configured.",
@@ -370,6 +416,24 @@
       "participantType": "Participant type",
       "team": "Team",
       "teamSize": "Players per team",
+      "teamMinStarters": "Minimum starters",
+      "teamMaxStarters": "Maximum starters",
+      "teamMaxSubstitutes": "Maximum substitutes",
+      "teamComposition": "Team composition",
+      "mode": "Tournament mode",
+      "location": "Location",
+      "visibility": "Visibility",
+      "rules": "Rules",
+      "owner": "Owner",
+      "registrationPolicy": "Registration policy",
+      "waitingList": "Waiting list",
+      "checkInOpen": "Check-in opens",
+      "checkInClose": "Check-in closes",
+      "fieldKey": "Field key",
+      "fieldLabel": "Field label",
+      "fieldType": "Field type",
+      "fieldOptions": "Options (comma-separated)",
+      "required": "Required",
       "maxParticipants": "Maximum participants",
       "teamScoringMode": "Team scoring",
       "teamScoringN": "Scored team members"
@@ -387,7 +451,10 @@
       "teamCapacityHelp": "Maximum number of registered teams.",
       "scoring": "Team scoring",
       "scoringHelp": "Optional aggregation of affiliated solo players for team rankings.",
-      "topNHelp": "Number of highest-scoring affiliated players to include."
+      "topNHelp": "Number of highest-scoring affiliated players to include.",
+      "registrationFields": "Registration form",
+      "registrationFieldsHelp": "Ask participants for the information required to enter the tournament.",
+      "addRegistrationField": "Add registration field"
     },
     "status": {
       "draft": "Draft",
@@ -404,7 +471,11 @@
       "registered": "Registered",
       "checked_in": "Checked in",
       "disqualified": "Disqualified",
-      "withdrawn": "Withdrawn"
+      "withdrawn": "Withdrawn",
+      "pending": "Pending approval",
+      "rejected": "Rejected",
+      "waitlisted": "Waiting list",
+      "absent": "Absent"
     },
     "teamScoring": {
       "none": "No team ranking",
@@ -449,7 +520,64 @@
       "soloWithoutTeam": "Your account will be registered without a team affiliation.",
       "unavailable": "Registration is not currently available for this tournament.",
       "success": "Registration completed successfully.",
-      "checkedIn": "Check-in completed successfully."
+      "checkedIn": "Check-in completed successfully.",
+      "waitingPosition": "Waiting-list position: {{position}}",
+      "approve": "Approve",
+      "reject": "Reject",
+      "promote": "Promote waiting list",
+      "closeCheckIn": "Close check-in",
+      "checkInAvailable": "Check-in is open now.",
+      "checkInUpcoming": "Check-in has not opened yet.",
+      "checkInClosed": "The check-in deadline has passed."
+    },
+    "mode": {
+      "online": "Online",
+      "in_person": "In person",
+      "hybrid": "Hybrid"
+    },
+    "visibility": {
+      "public": "Public",
+      "invitation_only": "Invitation only"
+    },
+    "registrationPolicy": {
+      "open": "Open registration",
+      "approval_required": "Administrator approval"
+    },
+    "fieldType": {
+      "text": "Text",
+      "number": "Number",
+      "select": "Choice",
+      "boolean": "Yes / No"
+    },
+    "role": {
+      "admin": "Administrator",
+      "referee": "Referee"
+    },
+    "management": {
+      "title": "Tournament management",
+      "team": "Owner and management team",
+      "owner": "Owner",
+      "userId": "User",
+      "assign": "Assign role",
+      "transfer": "Transfer ownership",
+      "transferConfirm": "Transfer tournament ownership to this user?",
+      "invitations": "Invitations",
+      "invite": "Invite user",
+      "reuse": "Duplicate or reuse",
+      "copyName": "Name for the new tournament or template",
+      "duplicate": "Duplicate tournament",
+      "saveTemplate": "Save as template",
+      "useTemplate": "Create from {{name}}"
+    },
+    "public": {
+      "title": "Public tournaments",
+      "help": "View schedules, participants and rankings without an account.",
+      "browse": "Browse public tournaments",
+      "backToLogin": "Back to sign in",
+      "detailsAction": "View tournament",
+      "viewDetails": "View {{name}}",
+      "empty": "No public tournaments are available yet.",
+      "matches": "{{count}} matches"
     },
     "scoringMode": {
       "linear": "Linear",
@@ -462,6 +590,9 @@
       "dates": "Enter valid dates in chronological order.",
       "capacity": "Enter a maximum from 1 to 10,000.",
       "teamSize": "Enter a team size from 1 to 100.",
+      "location": "Enter a location for an in-person or hybrid tournament.",
+      "checkIn": "Enter a valid check-in window.",
+      "registrationFields": "Complete each registration field with a unique key and valid options.",
       "topN": "Enter a scored member count from 1 to 100.",
       "scoring": "Select a game statistic and enter a valid coefficient or non-empty numeric JSON table.",
       "fileFormat": "Choose a JSON or CSV file.",
@@ -653,7 +784,8 @@
       "date": "Choose a valid date and time.",
       "bracket": "Bracket regions require double elimination.",
       "next": "Select another match in this elimination stage.",
-      "participants": "Choose distinct group members within the match capacity."
+      "participants": "Choose distinct group members within the match capacity.",
+      "bestOf": "Choose BO1, BO3 or BO5."
     },
     "manage": "Match options",
     "entryScope": "Enter statistics for",
@@ -788,5 +920,143 @@
     "denied": "Unable to confirm these credentials for an account without email.",
     "verified": "Verified email",
     "unverified": "Unverified email"
+  },
+  "invitations": {
+    "to": "To {{name}}",
+    "title": "Invitations",
+    "details": "Invitation",
+    "create": "Create an invitation",
+    "incoming": "Received",
+    "outgoing": "Sent",
+    "status": "Status",
+    "type": "Type",
+    "view": "View invitation",
+    "empty": "No invitations",
+    "emptyDescription": "Invitations matching your filters will appear here.",
+    "resourceUnavailable": "Invitation",
+    "from": "Invited by {{name}}",
+    "role": "Role",
+    "expires": "Expires {{date}}",
+    "usage": "{{used}} of {{max}} uses",
+    "previous": "Previous",
+    "next": "Next",
+    "accept": "Accept invitation",
+    "decline": "Decline",
+    "revoke": "Revoke invitation",
+    "resend": "Resend invitation",
+    "acceptedTeam": "Invitation accepted. You have joined the team.",
+    "acceptedTournament": "Invitation accepted. Open the tournament to check whether your registration is confirmed, awaiting approval or waitlisted.",
+    "tournamentPolicy": "The tournament’s registration and waiting-list policies still apply.",
+    "loginTitle": "An invitation is waiting for you",
+    "loginDescription": "Sign in to view it. You will return here after signing in. Nothing is accepted without your confirmation.",
+    "secretUnavailable": "For your security, shared links are only displayed when created. You can revoke this invitation and create a new link.",
+    "inviteMembers": "Invite members",
+    "inviteParticipants": "Invite participants",
+    "recipient": "Recipient",
+    "search": "Filter users by username",
+    "searchPage": "Search filters the current page. Use Next to browse more users.",
+    "maxUses": "Maximum uses (1–1000)",
+    "validity": "Validity",
+    "send": "Send invitation",
+    "generate": "Generate link",
+    "share": "Share link",
+    "shareNow": "Share this link now. It cannot be retrieved after you leave this screen.",
+    "sent": "Invitation created successfully.",
+    "done": "Done",
+    "modes": {
+      "user": "Choose a player",
+      "link": "Share a link"
+    },
+    "ttl": {
+      "default": "Server default",
+      "24": "24 hours",
+      "168": "7 days"
+    },
+    "types": {
+      "all": "All types",
+      "team": "Team",
+      "tournament_team": "Tournament team",
+      "tournament": "Tournament"
+    },
+    "statuses": {
+      "all": "All statuses",
+      "pending": "Pending",
+      "accepted": "Accepted",
+      "declined": "Declined",
+      "revoked": "Revoked",
+      "expired": "Expired"
+    },
+    "confirm": {
+      "decline": "Decline this invitation?",
+      "revoke": "This invitation will stop working immediately. This cannot be undone."
+    },
+    "messages": {
+      "decline": "Invitation declined.",
+      "revoke": "Invitation revoked.",
+      "resend": "Delivery requested. The expiration date is unchanged."
+    },
+    "errors": {
+      "network": "Could not load invitations. Check your connection and try again.",
+      "forbidden": "You do not have permission to perform this action.",
+      "unavailable": "This invitation is unavailable. It may be invalid, expired, revoked, exhausted or intended for another account.",
+      "expired": "This invitation has expired. Ask the sender for a new one.",
+      "conflict": "This invitation can no longer be processed, or the resource cannot accept you. Refresh its details before trying again.",
+      "rateLimit": "An invitation was recently resent. Wait a minute before trying again.",
+      "validation": "Check the recipient, role, validity and usage limit. The server may restrict the requested duration.",
+      "recipient": "Select a recipient.",
+      "uses": "Enter a whole number between 1 and 1000.",
+      "share": "Could not open sharing. Try again."
+    },
+    "openTeam": "View team",
+    "openTournament": "View tournament",
+    "receivedNotice": "You have a new invitation",
+    "acceptedNotice": "Your invitation was accepted",
+    "declinedNotice": "Your invitation was declined",
+    "activity": "New activity",
+    "dismiss": "Dismiss notification",
+    "badgeLabel": "Invitations, {{count}} pending invitations or new responses",
+    "newResponses": "View new responses ({{count}})",
+    "markRead": "Mark responses as read"
+  },
+  "matchGames": {
+    "format": "Match format",
+    "bestOf": "BO{{count}} · Best of {{count}}",
+    "formatHelp": "The series ends when a participant wins a majority of games, or all games have been played.",
+    "formatLocked": "The format is locked once the first game has started.",
+    "series": "Series",
+    "seriesHelp": "BO{{count}} · {{wins}} wins needed",
+    "wins": "Games won",
+    "empty": "No games started yet.",
+    "legacy": "This match has results entered directly.",
+    "number": "Game {{number}}",
+    "wonBy": "Won by {{name}}",
+    "enter": "Enter results",
+    "view": "View game",
+    "start": "Start game {{number}}",
+    "detail": "Game details",
+    "winner": "Winner",
+    "fromPoints": "Calculate from points",
+    "totalsHelp": "Enter team totals separately from individual player statistics. Only team totals determine the points.",
+    "noStats": "No participant statistics configured. Choose a winner or enter ranks to finish this game.",
+    "save": "Save results",
+    "finish": "Finish game",
+    "confirmFinish": "Results will become final. This may finish the series, advance the winner and close the stage. Continue?",
+    "finishHelp": "Finishing makes the results read-only. Series totals are calculated automatically.",
+    "saveFirst": "Save your changes before finishing this game.",
+    "finished": "Game finished.",
+    "seriesFinished": "Series finished. Results have been updated.",
+    "readOnly": "This game is finished. Its results cannot be changed.",
+    "adminOnly": "Results can only be entered by an administrator while the game is in progress.",
+    "delete": "Delete this game",
+    "confirmDelete": "Delete this unfinished game and its saved results? This cannot be undone.",
+    "invalidAttributes": "Choose a configured value and an MVP who participates in this game.",
+    "invalidPlayer": "A player is no longer on this team. Reload the game before entering results.",
+    "unavailableOption": "Value no longer available",
+    "incompleteRanks": "Enter a rank for every participant, or leave all ranks empty to calculate them from points.",
+    "aggregatePending": "After the series",
+    "bestOf_one": "BO1 · One game",
+    "bestOf_other": "BO{{count}} · Best of {{count}}",
+    "seriesHelp_one": "BO1 · 1 win needed",
+    "seriesHelp_other": "BO{{count}} · {{wins}} wins needed"
   }
 }

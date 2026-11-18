@@ -25,7 +25,7 @@ function winnerId(match: Match) {
 
 function bracketParticipants(
   match: Match,
-  context: MatchContext,
+  context: Pick<MatchContext, 'matches' | 'names'>,
   t: ReturnType<typeof useTranslation>['t'],
 ): BracketParticipant[] {
   const participants = [...match.participants]
@@ -93,7 +93,7 @@ export function BracketMatchCard({
   onPress,
 }: {
   match: Match;
-  context: MatchContext;
+  context: Pick<MatchContext, 'matches' | 'names'>;
   onPress: () => void;
 }) {
   const { t } = useTranslation();

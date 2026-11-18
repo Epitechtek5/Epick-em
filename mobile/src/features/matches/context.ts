@@ -18,6 +18,7 @@ export function matchError(error: unknown) {
     const fields: Record<string, string> = {
       group_id: 'group',
       round: 'round',
+      best_of: 'bestOf',
       bracket: 'bracket',
       next_match_id: 'next',
       scheduled_at: 'date',
@@ -71,7 +72,10 @@ export function useMatchContext(group_id?: string, status?: MatchStatus) {
           matchId ? api.get(matchId) : null,
         ]);
       const playerIds = new Set(
-        match?.participants.flatMap((p) =>
+        [
+          ...(match?.participants ?? []),
+          ...(match?.games?.flatMap((game) => game.participants) ?? []),
+        ].flatMap((p) =>
           detailed(p.stats) ? Object.keys(p.stats.players ?? {}) : [],
         ),
       );
@@ -85,9 +89,7 @@ export function useMatchContext(group_id?: string, status?: MatchStatus) {
           }
         }),
       );
-      const statDefinitions = match?.participants.some(
-        (p) => Object.keys(p.stats).length,
-      )
+      const statDefinitions = match
         ? await listGameStats(token, match.game_id).catch((error: unknown) => {
             if (error instanceof ApiError && error.status === 401) throw error;
             return [];
