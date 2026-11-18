@@ -338,11 +338,11 @@ export default function MatchDetailsPage() {
               </FactTile>
               <FactTile icon={Flag02Icon} label={t('matches.timeline')}>
                 <span className="block font-normal">
-                  {t('matches.startedAt')} :{' '}
+                  {t('matches.startedAt')}{t('common.colon')}{' '}
                   {match.started_at ? <time dateTime={match.started_at}>{formatDateTime(lang, match.started_at)}</time> : '–'}
                 </span>
                 <span className="block font-normal">
-                  {t('matches.endedAt')} :{' '}
+                  {t('matches.endedAt')}{t('common.colon')}{' '}
                   {match.ended_at ? <time dateTime={match.ended_at}>{formatDateTime(lang, match.ended_at)}</time> : '–'}
                 </span>
               </FactTile>

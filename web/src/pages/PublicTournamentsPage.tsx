@@ -3,11 +3,10 @@ import { Link, useSearchParams } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
 import { TournamentCard } from '@/components/tournaments/TournamentCard'
-import { EmptyState, PageHero } from '@/components/tournaments/ui'
+import { STATUS_TONES } from '@/components/tournaments/tones'
+import { EmptyState, HERO_ACTION, HERO_BACK, PageHero } from '@/components/tournaments/ui'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
-import { Label } from '@/components/ui/label'
-import { NativeSelect } from '@/components/ui/native-select'
 import { tournamentErrorKey } from '@/features/tournaments/errors'
 import { statusLabelKey } from '@/features/tournaments/labels'
 import { listPublicTournaments, PUBLIC_PAGE_SIZE } from '@/features/tournaments/public-api'
@@ -16,6 +15,7 @@ import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useI18n } from '@/i18n/context'
 import { useAuth } from '@/lib/auth/auth-context'
+import { cn } from '@/lib/utils'
 
 // Seuls ces statuts sont publiés par le serveur (un brouillon n'est jamais public).
 const PUBLIC_STATUSES: readonly TournamentStatus[] = ['registration', 'ongoing', 'finished', 'cancelled']
@@ -60,34 +60,53 @@ export default function PublicTournamentsPage() {
         description={t('publicTournaments.intro')}
         back={
           isAuthenticated ? (
-            <Link to="/tournaments" className="inline-flex items-center gap-1 font-medium text-white/90 underline underline-offset-4 hover:text-white">
+            <Link to="/tournaments" className={HERO_BACK}>
               <Icon icon={ArrowLeft01Icon} size={16} />
               {t('tournaments.returnToCatalog')}
             </Link>
           ) : (
-            <Link to="/login" className="font-medium text-white/90 underline underline-offset-4 hover:text-white">
+            <Link to="/login" className={HERO_BACK}>
               {t('publicTournaments.signIn')}
             </Link>
           )
         }
-      />
-
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="grid gap-1">
-          <Label htmlFor="public-status">{t('tournaments.filterByStatus')}</Label>
-          <NativeSelect id="public-status" value={status ?? ''} onChange={(event) => update({ status: event.target.value })}>
-            <option value="">{t('tournaments.allStatuses')}</option>
-            {PUBLIC_STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {t(statusLabelKey(value))}
-              </option>
-            ))}
-          </NativeSelect>
+      >
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('tournaments.actions')}>
+          <Button variant="outline" onClick={reload} disabled={state.status === 'loading'} className={HERO_ACTION}>
+            <Icon icon={RefreshIcon} />
+            {t('tournaments.refresh')}
+          </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
-          <Icon icon={RefreshIcon} />
-          {t('tournaments.refresh')}
-        </Button>
+      </PageHero>
+
+      <div className="rounded-2xl bg-card p-4 shadow-sm ring-1 ring-foreground/10" role="search" aria-label={t('tournaments.filters')}>
+        <fieldset className="grid gap-1">
+          <legend className="mb-1 text-sm font-medium">{t('tournaments.filterByStatus')}</legend>
+          <div className="flex flex-wrap gap-2">
+            {([undefined, ...PUBLIC_STATUSES] as const).map((value) => {
+              const active = status === value
+              return (
+                <button
+                  key={value ?? 'all'}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => update({ status: value ?? '' })}
+                  className={cn(
+                    'inline-flex min-h-8 items-center rounded-full px-3 text-sm font-medium ring-1 ring-inset outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50',
+                    active
+                      ? value
+                        ? cn(STATUS_TONES[value], 'ring-2')
+                        : 'bg-foreground text-background ring-foreground'
+                      : 'bg-background text-muted-foreground ring-foreground/15 hover:bg-accent hover:text-foreground',
+                  )}
+                >
+                  {active ? <span aria-hidden="true" className="mr-1">✓</span> : null}
+                  {value ? t(statusLabelKey(value)) : t('tournaments.allStatuses')}
+                </button>
+              )
+            })}
+          </div>
+        </fieldset>
       </div>
 
       {state.status === 'loading' ? <StateMessage kind="loading">{t('tournaments.loading')}</StateMessage> : null}
@@ -108,7 +127,7 @@ export default function PublicTournamentsPage() {
       ) : null}
 
       {tournaments.length > 0 ? (
-        <ul aria-label={t('publicTournaments.list')} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <ul aria-label={t('publicTournaments.list')} className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {tournaments.map((tournament) => (
             <li key={tournament.id}>
               <TournamentCard
@@ -123,14 +142,14 @@ export default function PublicTournamentsPage() {
 
       {state.status === 'success' && (page > 1 || hasNext) ? (
         <nav aria-label={t('tournaments.pagination')} className="flex items-center justify-between gap-3">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => update({ page: page - 1 })}>
+          <Button variant="outline" disabled={page <= 1} onClick={() => update({ page: page - 1 })}>
             <Icon icon={ArrowLeft01Icon} />
             {t('games.previous')}
           </Button>
           <span className="text-sm text-muted-foreground" aria-current="page">
             {t('games.page', { page })}
           </span>
-          <Button variant="outline" size="sm" disabled={!hasNext} onClick={() => update({ page: page + 1 })}>
+          <Button variant="outline" disabled={!hasNext} onClick={() => update({ page: page + 1 })}>
             {t('games.next')}
             <Icon icon={ArrowRight01Icon} />
           </Button>

@@ -3,6 +3,7 @@ import {
   ArrowRight01Icon,
   Award01Icon,
   Calendar03Icon,
+  ChampionIcon,
   Clock01Icon,
   Globe02Icon,
   HierarchyIcon,
@@ -13,7 +14,7 @@ import {
   UserIcon,
   UserMultiple02Icon,
 } from '@hugeicons/core-free-icons'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
@@ -24,8 +25,8 @@ import { StepStatusBadge } from '@/components/steps/StepBadges'
 import { Podium } from '@/components/tournaments/RankingSection'
 import { TournamentStatusBadge } from '@/components/tournaments/TournamentStatusBadge'
 import { PARTICIPANT_TONES } from '@/components/tournaments/tones'
-import { Avatar, EmptyState, FactTile, SectionCard } from '@/components/tournaments/ui'
-import { Button } from '@/components/ui/button'
+import { Avatar, EmptyState, FactTile, HERO_ACTION, HERO_BACK, PageHero, SectionCard } from '@/components/tournaments/ui'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -78,7 +79,7 @@ export default function PublicTournamentPage() {
   useDocumentTitle(tournament?.name ?? t('publicTournaments.details'))
 
   const back = (
-    <Link to="/public/tournaments" className="inline-flex items-center gap-1 text-sm font-medium text-primary underline underline-offset-4 dark:text-violet-300">
+    <Link to="/public/tournaments" className={HERO_BACK}>
       <Icon icon={ArrowLeft01Icon} size={16} />
       {t('publicTournaments.back')}
     </Link>
@@ -86,19 +87,10 @@ export default function PublicTournamentPage() {
 
   return (
     <div className="grid w-full max-w-6xl gap-8 self-start">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {back}
-        {isAuthenticated && tournament ? (
-          <Link to={`/tournaments/${tournament.id}`} className="text-sm text-primary underline underline-offset-4 dark:text-violet-300">
-            {t('publicTournaments.openFull')}
-          </Link>
-        ) : null}
-      </div>
-
       {state.status === 'loading' ? <StateMessage kind="loading">{t('tournaments.loadingDetails')}</StateMessage> : null}
       {state.status === 'error' ? (
         <>
-          <h1 className="text-3xl font-semibold tracking-tight">{t('publicTournaments.details')}</h1>
+          <PageHero icon={Globe02Icon} title={t('publicTournaments.details')} back={back} />
           <StateMessage
             kind="error"
             action={
@@ -118,17 +110,17 @@ export default function PublicTournamentPage() {
 
       {tournament ? (
         <>
-          <PublicHeader tournament={tournament} />
+          <PublicHeader tournament={tournament} back={back} openFull={isAuthenticated} />
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <FactTile icon={Calendar03Icon} label={t('tournaments.dates')}>
-              <span className="block">{t('tournaments.startDate')} : {formatDateTime(lang, tournament.start_date)}</span>
-              <span className="block">{t('tournaments.endDate')} : {formatDateTime(lang, tournament.end_date)}</span>
+              <span className="block">{t('tournaments.startDate')}{t('common.colon')} {formatDateTime(lang, tournament.start_date)}</span>
+              <span className="block">{t('tournaments.endDate')}{t('common.colon')} {formatDateTime(lang, tournament.end_date)}</span>
             </FactTile>
             <FactTile icon={Clock01Icon} label={t('tournaments.registrationWindow')}>
               <span className="block">{t(policyLabelKey(tournament.registration_policy))}</span>
               {tournament.registration_close_at ? (
                 <span className="block font-normal">
-                  {t('tournaments.registrationClose')} : {formatDateTime(lang, tournament.registration_close_at)}
+                  {t('tournaments.registrationClose')}{t('common.colon')} {formatDateTime(lang, tournament.registration_close_at)}
                 </span>
               ) : null}
               {tournament.check_in_close_at ? (
@@ -163,27 +155,40 @@ export default function PublicTournamentPage() {
   )
 }
 
-function PublicHeader({ tournament }: { tournament: PublicTournament }) {
+function PublicHeader({ tournament, back, openFull }: { tournament: PublicTournament; back: ReactNode; openFull: boolean }) {
   const { t, lang } = useI18n()
   return (
-    <header className="relative isolate overflow-hidden rounded-3xl bg-gradient-to-br from-violet-700 via-violet-800 to-fuchsia-800 p-6 text-white shadow-lg sm:p-8">
-      <div className="grid gap-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <TournamentStatusBadge status={tournament.status} className="shadow-sm" />
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-semibold ring-1 ring-white/25 ring-inset">
-            <Icon icon={Globe02Icon} size={14} />
-            {t('publicTournaments.badge')}
-          </span>
+    <PageHero
+      icon={ChampionIcon}
+      title={tournament.name}
+      back={back}
+      description={
+        <div className="grid gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <TournamentStatusBadge status={tournament.status} className="shadow-sm" />
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-semibold text-white ring-1 ring-white/25 ring-inset">
+              <Icon icon={Globe02Icon} size={14} />
+              {t('publicTournaments.badge')}
+            </span>
+          </div>
+          <p className="inline-flex items-center gap-1.5 text-sm text-white/90">
+            <Icon icon={Calendar03Icon} />
+            <span className="sr-only">{t('tournaments.dates')}{t('common.colon')}</span>
+            {formatDateRange(lang, tournament.start_date, tournament.end_date)}
+          </p>
+          {tournament.description ? <p className="whitespace-pre-line">{tournament.description}</p> : null}
         </div>
-        <h1 className="text-3xl font-bold tracking-tight break-words sm:text-5xl">{tournament.name}</h1>
-        <p className="inline-flex items-center gap-1.5 text-sm text-white/90">
-          <Icon icon={Calendar03Icon} />
-          <span className="sr-only">{t('tournaments.dates')} :</span>
-          {formatDateRange(lang, tournament.start_date, tournament.end_date)}
-        </p>
-        {tournament.description ? <p className="max-w-3xl whitespace-pre-line text-white/85">{tournament.description}</p> : null}
-      </div>
-    </header>
+      }
+    >
+      {openFull ? (
+        <div className="flex flex-wrap gap-2">
+          <Link to={`/tournaments/${tournament.id}`} className={cn(buttonVariants({ variant: 'outline' }), HERO_ACTION)}>
+            <Icon icon={ArrowRight01Icon} />
+            {t('publicTournaments.openFull')}
+          </Link>
+        </div>
+      ) : null}
+    </PageHero>
   )
 }
 
@@ -240,9 +245,9 @@ function PublicParticipants({ tournament }: { tournament: PublicTournament }) {
             <li key={row.id} className="flex flex-wrap items-center gap-3 bg-card px-4 py-3">
               <Avatar name={row.name} />
               <span className="font-semibold break-words">{row.name}</span>
-              {row.team ? <span className="text-xs text-muted-foreground">{t('tournaments.participants.forTeam')} : {row.team}</span> : null}
+              {row.team ? <span className="text-xs text-muted-foreground">{t('tournaments.participants.forTeam')}{t('common.colon')} {row.team}</span> : null}
               <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset', PARTICIPANT_TONES[row.status])}>
-                <span className="sr-only">{t('tournaments.participants.statusLabel')} : </span>
+                <span className="sr-only">{t('tournaments.participants.statusLabel')}{t('common.colon')} </span>
                 {t(participantStatusLabelKey(row.status))}
               </span>
             </li>

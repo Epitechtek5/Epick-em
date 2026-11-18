@@ -513,7 +513,7 @@ function ParticipantRow({
         </span>
         {participant.tournament_team_id ? (
           <span className="text-xs text-muted-foreground">
-            {participant.user_id ? `${t('tournaments.participants.forTeam')} : ` : `${t('tournaments.participants.team')} : `}
+            {participant.user_id ? `${t('tournaments.participants.forTeam')}${t('common.colon')} ` : `${t('tournaments.participants.team')}${t('common.colon')} `}
             <Link
               to={`/tournament-teams/${participant.tournament_team_id}`}
               className="text-primary underline underline-offset-4 dark:text-violet-300"
@@ -781,7 +781,7 @@ function StatusPill({ status }: { status: ParticipantStatus }) {
         PARTICIPANT_TONES[status],
       )}
     >
-      <span className="sr-only">{t('tournaments.participants.statusLabel')} : </span>
+      <span className="sr-only">{t('tournaments.participants.statusLabel')}{t('common.colon')} </span>
       {t(participantStatusLabelKey(status))}
     </span>
   )
@@ -799,7 +799,7 @@ function ResponsesSummary({ tournament, participant }: { tournament: Tournament;
         const value = responses[field.key]
         return (
           <div key={field.key} className="flex gap-1">
-            <dt>{field.label} :</dt>
+            <dt>{field.label}{t('common.colon')}</dt>
             <dd className="font-medium text-foreground/80">
               {typeof value === 'boolean' ? t(value ? 'common.yes' : 'common.no') : String(value)}
             </dd>

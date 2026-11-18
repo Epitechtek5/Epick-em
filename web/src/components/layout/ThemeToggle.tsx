@@ -1,30 +1,32 @@
-import { useEffect, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { useI18n } from '@/i18n/context'
+import { Moon02Icon, Sun03Icon } from '@hugeicons/core-free-icons'
+import { useSyncExternalStore } from 'react'
 
+import { Button } from '@/components/ui/button'
+import { Icon } from '@/components/ui/icon'
+import { useSettings } from '@/features/settings/context'
+import { useI18n } from '@/i18n/context'
+import { themeStore } from '@/lib/theme/theme-store'
+
+// Bascule rapide clair/sombre de l'en-tête (icône du thème proposé). Le choix complet
+// (dont « système ») se fait dans les réglages du compte ; connecté, la bascule y est aussi
+// enregistrée.
 export function ThemeToggle() {
   const { t } = useI18n()
-  const [dark, setDark] = useState(() => {
-    try {
-      return localStorage.getItem('epickem-theme') !== 'light'
-    } catch {
-      return true
-    }
-  })
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark)
-    document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-    try {
-      localStorage.setItem('epickem-theme', dark ? 'dark' : 'light')
-    } catch {
-      // Le thème reste utilisable lorsque le stockage est désactivé.
-    }
-  }, [dark])
+  const { setTheme } = useSettings()
+  const resolved = useSyncExternalStore(themeStore.subscribe, themeStore.resolved)
+  const dark = resolved === 'dark'
+  const label = dark ? t('shell.lightMode') : t('shell.darkMode')
 
   return (
-    <Button variant="outline" size="sm" aria-pressed={dark} onClick={() => setDark(!dark)}>
-      {dark ? t('shell.lightMode') : t('shell.darkMode')}
+    <Button
+      variant="ghost"
+      size="icon-lg"
+      aria-label={label}
+      title={label}
+      aria-pressed={dark}
+      onClick={() => setTheme(dark ? 'light' : 'dark')}
+    >
+      <Icon icon={dark ? Sun03Icon : Moon02Icon} size={18} />
     </Button>
   )
 }
