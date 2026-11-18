@@ -38,6 +38,7 @@ function server(initial: Partial<ServerState> = {}) {
   const fetchMock = routeFetch((path, init) => {
     const method = init.method ?? 'GET'
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+    if (path.endsWith('/workflow')) return jsonResponse(403, {error:'forbidden'})
     const custom = state.on?.(path, method, body)
     if (custom) return custom
     const user = userResponse(path)

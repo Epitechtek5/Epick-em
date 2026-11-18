@@ -1,6 +1,9 @@
 import { ApiError } from '@/lib/api';
 
 const fieldKeys: Record<string, string> = {
+  rules: 'steps.advanced.invalidRules',
+  seed_order: 'steps.advanced.invalidOrder',
+  pairing: 'steps.advanced.pairingError',
   position: 'steps.validation.position',
   format: 'steps.validation.format',
   match_type: 'steps.validation.matchType',

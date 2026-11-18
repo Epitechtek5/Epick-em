@@ -15,10 +15,12 @@ import {
 } from '../src/features/preferences/provider';
 import { PreferenceSections } from '../src/components/preference-sections';
 import i18n, { deviceLanguage, useTranslation } from '../src/i18n';
+import { defaultNotifications } from '../src/features/preferences/api';
 
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(),
   setItemAsync: jest.fn(),
+  deleteItemAsync: jest.fn(),
 }));
 jest.mock('expo-localization', () => ({
   getLocales: jest.fn(() => [{ languageCode: 'en' }]),
@@ -55,7 +57,11 @@ it('uses System by default, applies themes immediately and persists changes sepa
   await waitFor(() =>
     expect(SecureStore.setItemAsync).toHaveBeenLastCalledWith(
       'epickem.preferences',
-      JSON.stringify({ theme: 'dark', language: 'en' }),
+      JSON.stringify({
+        theme: 'dark',
+        language: 'en',
+        notifications: defaultNotifications(),
+      }),
     ),
   );
   await fireEvent.press(screen.getByRole('radio', { name: 'Light' }));
@@ -80,7 +86,11 @@ it('restores saved language and theme and changes language without remounting', 
   await waitFor(() =>
     expect(SecureStore.setItemAsync).toHaveBeenLastCalledWith(
       'epickem.preferences',
-      JSON.stringify({ theme: 'dark', language: 'en' }),
+      JSON.stringify({
+        theme: 'dark',
+        language: 'en',
+        notifications: defaultNotifications(),
+      }),
     ),
   );
 });
@@ -89,6 +99,9 @@ it('uses the French device language, with English fallback for unsupported or mi
   const supported = locales()[0];
   locales.mockReturnValue([{ ...supported, languageCode: 'fr' }]);
   expect(deviceLanguage()).toBe('fr');
+  locales.mockReturnValue([{ ...supported, languageCode: 'es' }]);
+  expect(deviceLanguage()).toBe('es');
+  locales.mockReturnValue([{ ...supported, languageCode: 'fr' }]);
   await render(
     <PreferencesProvider>
       <Probe />
@@ -100,6 +113,25 @@ it('uses the French device language, with English fallback for unsupported or mi
   locales.mockReturnValue([{ ...supported, languageCode: null }]);
   expect(deviceLanguage()).toBe('en');
   locales.mockReturnValue([supported]);
+});
+it('persists notification channel preferences', async () => {
+  await render(
+    <PreferencesProvider>
+      <Probe />
+    </PreferencesProvider>,
+  );
+  await screen.findByText('Settings');
+  await fireEvent(
+    screen.getByLabelText('Tournaments · Push'),
+    'valueChange',
+    false,
+  );
+  await waitFor(() => {
+    const stored = jest.mocked(SecureStore.setItemAsync).mock.calls.at(-1)?.[1];
+    expect(JSON.parse(stored ?? '{}').notifications.tournaments.push).toBe(
+      false,
+    );
+  });
 });
 it('reports persistence failures locally while keeping the immediate selection', async () => {
   jest

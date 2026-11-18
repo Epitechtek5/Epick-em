@@ -359,7 +359,10 @@ async fn creation_is_validated() {
             "registration_close_at",
         ),
         (bad(json!({ "max_participants": 0 })), "max_participants"),
-        (bad(json!({ "participant_type": "team" })), "team_size"),
+        (
+            bad(json!({ "participant_type": "team" })),
+            "team_min_starters",
+        ),
         (bad(json!({ "team_size": 3 })), "team_size"),
         (
             bad(json!({ "team_scoring_mode": "top_n" })),
@@ -867,6 +870,7 @@ async fn the_registration_window_is_enforced() {
 async fn team_of(
     app: &app_type!(),
     tid: &str,
+    admin: &str,
     owner: &Account,
     name: &str,
     members: &[&Account],
@@ -884,7 +888,7 @@ async fn team_of(
         let (status, added) = post(
             app,
             &format!("/tournament-teams/{team}/members"),
-            &owner.token,
+            admin,
             json!({ "user_id": member.id, "role": "member" }),
         )
         .await;
@@ -903,7 +907,7 @@ async fn teams_register_with_exactly_team_size_starters() {
     )
     .await;
     let participants = format!("/tournaments/{tid}/participants");
-    let team = team_of(&app, &tid, &s.alice, "Alpha", &[]).await;
+    let team = team_of(&app, &tid, &s.admin, &s.alice, "Alpha", &[]).await;
 
     // Un titulaire pour deux attendus ; un remplaçant ne compte pas.
     let (status, error) = post(
@@ -917,7 +921,7 @@ async fn teams_register_with_exactly_team_size_starters() {
     let (status, _) = post(
         &app,
         &format!("/tournament-teams/{team}/members"),
-        &s.alice.token,
+        &s.admin,
         json!({ "user_id": s.carol.id, "role": "substitute" }),
     )
     .await;
@@ -933,7 +937,7 @@ async fn teams_register_with_exactly_team_size_starters() {
     let (status, _) = post(
         &app,
         &format!("/tournament-teams/{team}/members"),
-        &s.alice.token,
+        &s.admin,
         json!({ "user_id": s.bob.id, "role": "member" }),
     )
     .await;
@@ -984,7 +988,7 @@ async fn teams_register_with_exactly_team_size_starters() {
         json!({ "participant_type": "team", "team_size": 1 }),
     )
     .await;
-    let foreign = team_of(&app, &other, &s.carol, "Ailleurs", &[]).await;
+    let foreign = team_of(&app, &other, &s.admin, &s.carol, "Ailleurs", &[]).await;
     let (status, _) = post(
         &app,
         &participants,
@@ -1024,8 +1028,8 @@ async fn solo_players_can_score_for_a_tournament_team() {
     )
     .await;
     let participants = format!("/tournaments/{tid}/participants");
-    let team = team_of(&app, &tid, &s.alice, "Alpha", &[&s.bob]).await;
-    let other = team_of(&app, &tid, &s.carol, "Beta", &[]).await;
+    let team = team_of(&app, &tid, &s.admin, &s.alice, "Alpha", &[&s.bob]).await;
+    let other = team_of(&app, &tid, &s.admin, &s.carol, "Beta", &[]).await;
 
     // Carol n'est pas dans l'équipe Alpha.
     let (status, _) = post(
@@ -1126,7 +1130,7 @@ async fn team_scoring_modes_aggregate_the_players() {
     for (mode, expected) in [("sum", 14.0), ("best", 10.0), ("none", 0.0)] {
         let tid = open_tournament(&app, &s, json!({ "team_scoring_mode": mode })).await;
         let participants = format!("/tournaments/{tid}/participants");
-        let team = team_of(&app, &tid, &s.alice, "Alpha", &[&s.bob]).await;
+        let team = team_of(&app, &tid, &s.admin, &s.alice, "Alpha", &[&s.bob]).await;
         let mut ids = Vec::new();
         for account in [&s.alice, &s.bob] {
             let (_, participant) = post(
@@ -1167,7 +1171,7 @@ async fn team_tournaments_rank_their_teams() {
     let participants = format!("/tournaments/{tid}/participants");
     let mut ids = Vec::new();
     for (account, name) in [(&s.alice, "Alpha"), (&s.bob, "Beta"), (&s.carol, "Gamma")] {
-        let team = team_of(&app, &tid, account, name, &[]).await;
+        let team = team_of(&app, &tid, &s.admin, account, name, &[]).await;
         let (status, participant) = post(
             &app,
             &participants,
@@ -1205,7 +1209,8 @@ async fn team_tournaments_rank_their_teams() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    // Au passage en `ongoing`, la composition est revérifiée : Dave rejoint Alpha après coup.
+    // La composition est aussi tenue pendant la constitution des équipes : Dave ne peut pas
+    // devenir un second titulaire d'Alpha (1 titulaire maximum), mais peut être remplaçant.
     let dave = account(&app, "dave").await;
     let alpha = teams
         .as_array()
@@ -1215,11 +1220,25 @@ async fn team_tournaments_rank_their_teams() {
         .unwrap()["tournament_team_id"]
         .as_str()
         .unwrap();
+    let (status, error) = post(
+        &app,
+        &format!("/tournament-teams/{alpha}/members"),
+        &s.admin,
+        json!({ "user_id": dave.id, "role": "member" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["errors"]["role"]
+            .as_str()
+            .unwrap()
+            .contains("titulaires")
+    );
     let (status, _) = post(
         &app,
         &format!("/tournament-teams/{alpha}/members"),
-        &s.alice.token,
-        json!({ "user_id": dave.id, "role": "member" }),
+        &s.admin,
+        json!({ "user_id": dave.id, "role": "substitute" }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -1230,13 +1249,7 @@ async fn team_tournaments_rank_their_teams() {
         json!({ "status": "ongoing" }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
-    assert!(
-        error["errors"]["status"]
-            .as_str()
-            .unwrap()
-            .contains("titulaires")
-    );
+    assert_eq!(status, StatusCode::OK, "{error}");
 }
 
 #[actix_web::test]
@@ -1320,7 +1333,7 @@ async fn deleting_a_user_keeps_the_store_consistent() {
         json!({}),
     )
     .await;
-    team_of(&app, &tid, &s.bob, "Alpha", &[]).await;
+    team_of(&app, &tid, &s.admin, &s.bob, "Alpha", &[]).await;
     let (status, _) = send(
         &app,
         TestRequest::delete(),
@@ -1400,7 +1413,7 @@ async fn populate(app: &app_type!(), s: &Setup) {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{rule}");
     }
-    let team = team_of(app, &solo, &s.alice, "Alpha", &[&s.bob]).await;
+    let team = team_of(app, &solo, &s.admin, &s.alice, "Alpha", &[&s.bob]).await;
     let participants = format!("/tournaments/{solo}/participants");
     for (account, with_team) in [(&s.alice, true), (&s.bob, true), (&s.carol, false)] {
         let body = if with_team {
@@ -1434,7 +1447,7 @@ async fn populate(app: &app_type!(), s: &Setup) {
     )
     .await;
     for (account, name) in [(&s.alice, "Rouge"), (&s.bob, "Bleue")] {
-        let team = team_of(app, &teams, account, name, &[]).await;
+        let team = team_of(app, &teams, &s.admin, account, name, &[]).await;
         let (status, _) = post(
             app,
             &format!("/tournaments/{teams}/participants"),
@@ -1635,7 +1648,7 @@ async fn invalid_files_are_refused_without_any_write() {
         (
             "team_size",
             valid(json!({ "participant_type": "team" })),
-            "team_size",
+            "team_min_starters",
         ),
         (
             "statistique inconnue",
@@ -1946,7 +1959,7 @@ async fn tournament_files_in_json_and_csv_give_the_same_tournaments() {
     let as_json = export(&app, &s.admin, "json").await.1;
     let as_csv = export(&app, &s.admin, "csv").await.1;
     let header = as_csv.lines().next().unwrap().to_string();
-    assert_eq!(header.split(',').count(), 18, "{header}");
+    assert_eq!(header.split(',').count(), 19, "{header}");
     assert!(as_csv.lines().count() > 3, "{as_csv}");
 
     // Chaque fichier, importé après avoir tout supprimé, redonne les deux exports d'origine.

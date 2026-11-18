@@ -259,3 +259,13 @@ Image en deux étapes (build Node, puis nginx non-root sur le port 8080 avec fal
 
 Configuration shadcn : `npx shadcn@latest init --preset b5vnF8h2A --base radix --template vite`. Les composants existants utilisent ce preset.
 Le logo partagé est servi depuis `public/brand/epickem-logo.svg`. Le bouton de l’en-tête permet de basculer entre les thèmes clair et sombre ; le mode sombre est actif par défaut et le choix est mémorisé localement.
+
+## Match reporting, disputes and scheduling (#163)
+
+The existing match details page embeds the match centre. Participants submit per-game results and independently confirm or dispute them. Organizers can schedule the current round, preserve individual scheduling overrides, call participants, record delays and attendance, adjudicate reports and correct finalized results with a mandatory reason. The correction preview identifies affected downstream matches and requires acknowledgement before resetting them.
+
+PNG/JPEG/PDF evidence is uploaded and downloaded through authenticated match endpoints. The backend controls visibility, result validation, scoring, qualification and bracket progression. Network retries keep the operation ID and revision; edits invalidate a previously reviewed correction preview. Both French and English use the existing components, theme and icons.
+
+Run `npm run typecheck`, `npm run lint`, `npm test` and `npm run build`. If a previous container build owns `dist`, choose a separate output with `npm run build -- --outDir /tmp/epickem-web-check`.
+
+Local integration verification on 2026-11-17 exercised two independent browser sessions: a BO3 report, opponent confirmation, evidence-backed dispute, reasoned correction and its retained history, plus round scheduling. The full suite passed 556 tests. The mobile testing document contains the cross-platform manual checklist. These checks use a local API/database and do not establish remote push delivery.

@@ -93,9 +93,14 @@ describe('modification', () => {
   it('préremplit le formulaire et n\'envoie que les champs modifiés (PATCH)', async () => {
     signInAs('admin')
     const user = userEvent.setup()
-    const fetchMock = routeFetch((_path, init) =>
-      init.method === 'PATCH' ? jsonResponse(200, { ...STAT_A, type: 'percent' }) : jsonResponse(200, STAT_A),
-    )
+    const updatedStat = { ...STAT_A, type: 'percent' }
+    const fetchMock = routeFetch((path, init) => {
+      if (path === `/stats/${STAT_A.id}`) {
+        return jsonResponse(200, init.method === 'PATCH' ? updatedStat : STAT_A)
+      }
+      if (path.startsWith('/stats?')) return jsonResponse(200, [updatedStat])
+      throw new Error(`Unexpected request: ${init.method} ${path}`)
+    })
     renderApp(`/stats/${STAT_A.id}/edit`)
 
     expect(await screen.findByLabelText('Nom')).toHaveValue('Éliminations')
@@ -105,6 +110,8 @@ describe('modification', () => {
     await user.selectOptions(screen.getByLabelText('Type'), 'percent')
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }))
 
+    expect(await screen.findByRole('heading', { level: 2, name: 'Éliminations' })).toBeInTheDocument()
+    expect(screen.getByText('Pourcentage (percent)')).toBeInTheDocument()
     expect(await screen.findByText('La statistique Éliminations a été mise à jour.')).toBeInTheDocument()
     const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!
     expect(patch[0]).toBe(`/api/stats/${STAT_A.id}`)

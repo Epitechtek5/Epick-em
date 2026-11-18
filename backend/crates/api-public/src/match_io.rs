@@ -11,6 +11,13 @@
 //!
 //! `best_of` (1, 3 ou 5, 1 s'il est absent) et `games` (les parties de la série, dans l'ordre :
 //! la n-ième est la partie n° n) sont facultatifs : un fichier antérieur aux parties s'importe
+//! tel quel. Les participants d'une partie se désignent comme ceux du match ; dans
+//! `attributes`, un MVP désigné par un participant du match s'écrit `{ "user": "<nom>" }` ou
+//! `{ "team": <rang> }` plutôt que par identifiant, pour survivre à la copie d'un environnement
+//! à l'autre.
+//!
+//! `best_of` (1, 3 ou 5, 1 s'il est absent) et `games` (les parties de la série, dans l'ordre :
+//! la n-ième est la partie n° n) sont facultatifs : un fichier antérieur aux parties s'importe
 //! tel quel, et une série terminée sans ses parties donne les manches gagnées (`games_won`) de
 //! chaque participant. Les participants d'une partie se désignent comme ceux du match ; dans
 //! `attributes`, un MVP désigné par un participant du match s'écrit `{ "user": "<nom>" }` ou
@@ -75,6 +82,8 @@ impl TournamentChild for InSteps {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MatchItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule: Option<crate::store::MatchSchedule>,
     /// Rang du groupe dans l'étape, à partir de 1.
     #[serde(default)]
     group: Option<i32>,
@@ -206,6 +215,35 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
     for (index, item) in matches.iter().enumerate() {
         let mut reasons = Vec::new();
         let label = index + 1;
+        if let Some(schedule) = &item.schedule {
+            let invalid = schedule
+                .duration_minutes
+                .is_some_and(|n| !(1..=1440).contains(&n))
+                || !(0..=1440).contains(&schedule.delay_minutes)
+                || schedule
+                    .venue
+                    .as_ref()
+                    .is_some_and(|s| s.chars().count() > 160)
+                || schedule
+                    .station
+                    .as_ref()
+                    .is_some_and(|s| s.chars().count() > 160)
+                || schedule
+                    .called_at
+                    .as_ref()
+                    .is_some_and(|s| normalize_timestamp(s).is_none())
+                || schedule
+                    .scheduled_at
+                    .as_ref()
+                    .is_some_and(|s| normalize_timestamp(s).is_none())
+                || schedule.scheduled_at != item.scheduled_at;
+            if invalid {
+                reasons.push(
+                    "schedule: invalid duration, venue, timestamp or conflicting scheduled_at."
+                        .into(),
+                );
+            }
+        }
         let allowed = match item.group {
             Some(group) => match scope.groups.get(&group) {
                 Some(members) => Some(members.iter().collect::<HashSet<&Who>>()),
@@ -788,7 +826,9 @@ impl StepMatches for StoreMatches {
                 (a.user.as_ref().map(|u| u.to_lowercase()), a.team)
                     .cmp(&(b.user.as_ref().map(|u| u.to_lowercase()), b.team))
             });
+            let workflow = self.0.match_workflow(found.id).await?;
             let item = MatchItem {
+                schedule: (workflow.revision > 0).then_some(workflow.schedule),
                 group: found.group_id.and_then(|id| groups.get(&id).copied()),
                 round: found.round,
                 number: found.number,
@@ -992,6 +1032,7 @@ impl StepMatches for StoreMatches {
                 });
             }
             imports.push(MatchImport {
+                schedule: item.schedule.clone(),
                 group_id: item.group.and_then(|index| groups.get(&index).copied()),
                 round: item.round,
                 bracket: item.bracket,

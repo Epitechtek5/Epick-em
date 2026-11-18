@@ -37,8 +37,8 @@ use crate::store::{
     StatType, Step, StepFormat, StepStatus, StoreError, Tournament,
 };
 use crate::team_io::normalize_timestamp;
-use crate::tournaments::{find_tournament, nullable};
-use crate::users::require_admin;
+use crate::tournament_access::{require_manage, require_referee};
+use crate::tournaments::{find_tournament, nullable, visible_tournament};
 use actix_web::{HttpResponse, delete, get, patch, post, put, web};
 use domain::bracket::grand_final_ends_tournament;
 use domain::seeding::{games_to_win, series_is_decided};
@@ -193,18 +193,30 @@ pub(crate) struct MatchOutcome {
 #[get("/tournaments/{id}/steps/{step_id}/matches")]
 async fn list_matches(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid)>,
     query: web::Query<MatchesQuery>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    visible_tournament(&state, &claims, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
+    let details = load_details(&state, &step, query.group_id, query.status).await?;
+    Ok(HttpResponse::Ok().json(details))
+}
+
+/// Matchs de l'étape avec leurs participants (route publique comprise).
+pub(crate) async fn load_details(
+    state: &AppState,
+    step: &Step,
+    group_id: Option<Uuid>,
+    status: Option<MatchStatus>,
+) -> Result<Vec<MatchDetail>, ApiError> {
     let matches = state
         .store
-        .list_matches(step.id, query.group_id, query.status)
+        .list_matches(step.id, group_id, status)
         .await
         .map_err(ApiError::internal)?;
-    let mut participants = participants_by_match(&state, &step).await?;
+    let mut participants = participants_by_match(state, step).await?;
     let mut games: HashMap<Uuid, Vec<MatchGame>> = HashMap::new();
     for game in state
         .store
@@ -214,15 +226,14 @@ async fn list_matches(
     {
         games.entry(game.match_id).or_default().push(game);
     }
-    let details: Vec<MatchDetail> = matches
+    Ok(matches
         .into_iter()
         .map(|m| MatchDetail {
             participants: participants.remove(&m.id).unwrap_or_default(),
             games: games.remove(&m.id).unwrap_or_default(),
             r#match: m,
         })
-        .collect();
-    Ok(HttpResponse::Ok().json(details))
+        .collect())
 }
 
 /// Détail d'un match avec ses participants.
@@ -245,10 +256,11 @@ async fn list_matches(
 #[get("/tournaments/{id}/steps/{step_id}/matches/{match_id}")]
 async fn get_match(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id, match_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    visible_tournament(&state, &claims, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let found = find_match(&state, &step, match_id).await?;
     Ok(HttpResponse::Ok().json(detail_of(&state, &step, found).await?))
@@ -281,9 +293,9 @@ async fn create_match(
     path: web::Path<(Uuid, Uuid)>,
     body: web::Json<CreateMatchRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let request = body.into_inner();
     let mut errors = Vec::new();
@@ -355,9 +367,9 @@ async fn update_match(
     path: web::Path<(Uuid, Uuid, Uuid)>,
     body: web::Json<UpdateMatchRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     let request = body.into_inner();
@@ -443,9 +455,9 @@ async fn delete_match(
     claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    let tournament = find_tournament(&state, tournament_id).await?;
+    require_manage(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     require_ongoing(&step)?;
@@ -496,9 +508,9 @@ async fn save_results(
     path: web::Path<(Uuid, Uuid, Uuid)>,
     body: web::Json<ResultsRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_referee(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     require_ongoing(&step)?;
@@ -621,9 +633,9 @@ async fn set_status(
     path: web::Path<(Uuid, Uuid, Uuid)>,
     body: web::Json<StatusRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    require_admin(&state, &claims).await?;
     let (tournament_id, step_id, match_id) = path.into_inner();
     let tournament = find_tournament(&state, tournament_id).await?;
+    require_referee(&state, &claims, &tournament).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let current = find_match(&state, &step, match_id).await?;
     require_ongoing(&step)?;
@@ -654,7 +666,12 @@ async fn set_status(
             if let Some(problem) = participants_problem(&step, members.len()) {
                 return Err(ApiError::Validation(vec![("participants", problem)]));
             }
-            if target == MatchStatus::Ongoing {
+            let kind = if target == MatchStatus::Ongoing {
+                "match.started"
+            } else {
+                "match.finished"
+            };
+            let updated = if target == MatchStatus::Ongoing {
                 state
                     .store
                     .set_match_status(current.id, target)
@@ -677,7 +694,18 @@ async fn set_status(
                 }
                 step_closed = close_if_complete(&state, &tournament, &step).await;
                 finished
-            }
+            };
+            crate::notifications::emit(
+                &state,
+                crate::notifications::match_event(
+                    kind,
+                    &tournament,
+                    step.id,
+                    current.id,
+                    members.iter().map(|m| m.participant_id).collect(),
+                ),
+            );
+            updated
         }
     };
     let step = match &step_closed {
@@ -712,6 +740,23 @@ pub(crate) async fn finish_series(
     members: &[MatchParticipant],
     game: Option<GameFinish>,
 ) -> Result<Match, ApiError> {
+    let finish = prepare_series_finish(state, step, current, members, game).await?;
+    state
+        .store
+        .finish_match(finish)
+        .await
+        .map_err(match_error)?
+        .ok_or(ApiError::NotFound)
+}
+
+/// Build the same authoritative finalization for administrator and participant workflows.
+pub(crate) async fn prepare_series_finish(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+    game: Option<GameFinish>,
+) -> Result<MatchFinish, ApiError> {
     // Une série se décide aux manches : ses rangs en viennent, avant toute autre validation.
     let members = series_members(step, current, members)?;
     let mut scores =
@@ -746,19 +791,14 @@ pub(crate) async fn finish_series(
         })
         .collect();
 
-    state
-        .store
-        .finish_match(MatchFinish {
-            match_id: current.id,
-            scores,
-            placements,
-            cancel,
-            step_points,
-            game,
-        })
-        .await
-        .map_err(match_error)?
-        .ok_or(ApiError::NotFound)
+    Ok(MatchFinish {
+        match_id: current.id,
+        scores,
+        placements,
+        cancel,
+        step_points,
+        game,
+    })
 }
 
 /// Série au meilleur de 3 ou 5 : le vainqueur est celui qui atteint la majorité des manches.
@@ -964,7 +1004,7 @@ pub(crate) async fn close_if_complete(
 }
 
 /// Chaque groupe a au moins un match terminé et aucun match n'est encore à jouer.
-fn is_complete(step: &Step, groups: &[Uuid], matches: &[Match]) -> bool {
+pub(crate) fn is_complete(step: &Step, groups: &[Uuid], matches: &[Match]) -> bool {
     // Une étape suisse générée n'est terminée qu'après sa dernière ronde.
     if step.format == StepFormat::Swiss
         && matches.iter().any(|m| m.number.is_some())

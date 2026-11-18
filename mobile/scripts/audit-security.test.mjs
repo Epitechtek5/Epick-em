@@ -272,3 +272,104 @@ test('accepts a complete clean report and rejects inconsistent status', () => {
   );
   assert.throws(() => inspectAudit(result(report)), /exit status/);
 });
+
+function picomatchReport() {
+  return {
+    auditReportVersion: 2,
+    vulnerabilities: {
+      picomatch: {
+        name: 'picomatch',
+        severity: 'high',
+        range: '<=4.0.7',
+        fixAvailable: false,
+        via: [
+          {
+            name: 'picomatch',
+            dependency: 'picomatch',
+            severity: 'high',
+            range: '<=4.0.7',
+            url: 'https://github.com/advisories/GHSA-fc5q-39xc-vjpf',
+            title: 'Repeated extglob ReDoS',
+          },
+        ],
+      },
+      tooling: { name: 'tooling', severity: 'high', via: ['picomatch'] },
+    },
+    metadata: {
+      vulnerabilities: {
+        info: 0,
+        low: 0,
+        moderate: 0,
+        high: 2,
+        critical: 0,
+        total: 2,
+      },
+    },
+  };
+}
+
+test('temporarily accepts only the exact picomatch advisory and its propagated chain', () => {
+  const findings = inspectAudit(
+    result(picomatchReport()),
+    new Date('2026-11-17T12:00:00Z'),
+  );
+  assert.deepEqual(findings.unexpected, []);
+  assert.equal(findings.accepted.length, 1);
+  assert.match(
+    findings.accepted[0],
+    /expires 2026-12-01T00:00:00Z; vulnerability remains unfixed/,
+  );
+});
+
+test('picomatch exception expires at the exact deadline and stays expired', () => {
+  for (const date of ['2026-12-01T00:00:00Z', '2027-01-01T00:00:00Z']) {
+    const findings = inspectAudit(result(picomatchReport()), new Date(date));
+    assert.deepEqual(findings.accepted, []);
+    assert.equal(findings.unexpected.length, 1);
+    assert.match(findings.unexpected[0].reason, /Temporary exception expired/);
+  }
+  assert.equal(
+    inspectAudit(
+      result(picomatchReport()),
+      new Date('2026-11-30T23:59:59.999Z'),
+    ).accepted.length,
+    1,
+  );
+  assert.throws(
+    () => inspectAudit(result(picomatchReport()), new Date('invalid')),
+    /Invalid audit policy/,
+  );
+});
+
+test('picomatch acceptance cannot cover another advisory, package, range or severity', () => {
+  for (const patch of [
+    { url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz' },
+    { name: 'other' },
+    { dependency: 'other' },
+    { range: '<=5.0.0' },
+    { severity: 'critical' },
+  ]) {
+    const report = picomatchReport();
+    Object.assign(report.vulnerabilities.picomatch.via[0], patch);
+    const findings = inspectAudit(
+      result(report),
+      new Date('2026-11-17T12:00:00Z'),
+    );
+    assert.deepEqual(findings.accepted, []);
+    assert.equal(findings.unexpected.length, 1);
+  }
+});
+
+test('new advisories still fail when the accepted picomatch advisory is also present', () => {
+  const report = picomatchReport();
+  report.vulnerabilities.picomatch.via.push({
+    ...report.vulnerabilities.picomatch.via[0],
+    url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz',
+  });
+  const findings = inspectAudit(
+    result(report),
+    new Date('2026-11-17T12:00:00Z'),
+  );
+  assert.equal(findings.accepted.length, 1);
+  assert.equal(findings.unexpected.length, 1);
+});

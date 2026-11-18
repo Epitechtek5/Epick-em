@@ -1,6 +1,6 @@
 # Epick’em mobile
 
-Expo SDK 58 / React Native 0.88 application using TypeScript 6 and Expo Router, with backend authentication, account management, bilingual English/French screens and persistent appearance settings.
+Expo SDK 58 / React Native 0.88 application using TypeScript 6 and Expo Router, with backend authentication, account management, English/French/Spanish screens, synchronized settings and native push notifications.
 
 Use Node.js **24.21.0** and npm (the committed lockfile is authoritative):
 
@@ -25,4 +25,4 @@ npm audit --audit-level=moderate
 npm audit --omit=dev --audit-level=moderate
 ```
 
-The security audits currently fail on upstream tooling advisories; consult the security document before approval. `npm run build` exports JavaScript bundles; native artifacts require the platform build scripts.
+Raw npm audits still report an upstream picomatch vulnerability. The CI policy temporarily accepts only that advisory until December 1, 2026 (UTC); consult the security document for its exact scope and remaining risk. `npm run build` exports JavaScript bundles; native artifacts require the platform build scripts.

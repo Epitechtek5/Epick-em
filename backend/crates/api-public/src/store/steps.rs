@@ -235,6 +235,7 @@ pub struct StepOutcome {
 /// lancer dans la même opération.
 #[derive(Debug, Clone)]
 pub struct StepClosing {
+    pub expected_competition_revision: Option<String>,
     pub step_id: Uuid,
     pub outcomes: Vec<StepOutcome>,
     pub next: Option<StepStart>,

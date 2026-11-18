@@ -13,6 +13,7 @@ import GameTransferPage from '@/pages/GameTransferPage'
 import GamesPage from '@/pages/GamesPage'
 import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
+import InvitationPage from '@/pages/InvitationPage'
 import MatchDetailsPage from '@/pages/MatchDetailsPage'
 import MatchEditorPage from '@/pages/MatchEditorPage'
 import NotFoundPage from '@/pages/NotFoundPage'
@@ -46,6 +47,8 @@ export default function App() {
         {/* Liens reçus par e-mail : accessibles connecté ou non (pas de GuestRoute). */}
         <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/invite/:token" element={<InvitationPage />} />
+        <Route path="/invitations/:id" element={<InvitationPage />} />
         <Route element={<GuestRoute />}>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />

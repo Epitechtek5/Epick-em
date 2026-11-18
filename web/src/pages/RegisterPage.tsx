@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useLocation } from 'react-router'
 
 import { ErrorSummary } from '@/components/form/ErrorSummary'
 import { TextField } from '@/components/form/TextField'
@@ -35,9 +35,11 @@ const FIELD_IDS: Record<RegisterField, string> = {
 const FIELDS = Object.keys(FIELD_IDS) as RegisterField[]
 
 export default function RegisterPage() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   useDocumentTitle(t('auth.register.title'))
   const navigate = useNavigate()
+  const location = useLocation()
+  const from = (location.state as LoginLocationState | null)?.from
   const form = useFormErrors<RegisterField>()
   const { summaryRef } = form
 
@@ -68,8 +70,13 @@ export default function RegisterPage() {
     form.clear()
     try {
       // L'adresse part telle que saisie : le serveur la normalise (trim, minuscules).
-      await register({ username: values.username, email: values.email, password: values.password })
-      const state: LoginLocationState = { registered: true, email: values.email.trim() }
+      await register({
+        username: values.username,
+        email: values.email,
+        password: values.password,
+        language: lang,
+      })
+      const state: LoginLocationState = { registered: true, email: values.email.trim(), from }
       navigate('/login', { replace: true, state })
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -162,7 +169,7 @@ export default function RegisterPage() {
           </Button>
           <p className="text-center text-sm text-muted-foreground">
             {t('auth.register.hasAccount')}{' '}
-            <Link to="/login" className="text-primary underline underline-offset-2">
+            <Link to="/login" state={{ from }} className="text-primary underline underline-offset-2">
               {t('auth.register.login')}
             </Link>
           </p>

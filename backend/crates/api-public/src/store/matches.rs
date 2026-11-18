@@ -115,7 +115,7 @@ pub struct MatchUpdate {
 }
 
 /// Résultat d'un participant : ses statistiques et ce qui en est déduit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct MatchScore {
     pub participant_id: Uuid,
     pub stats: serde_json::Value,
@@ -213,6 +213,7 @@ pub struct GameImport {
 /// Match d'une étape tel qu'un fichier le décrit. Les horodatages sont en RFC 3339 UTC.
 #[derive(Debug, Clone)]
 pub struct MatchImport {
+    pub schedule: Option<super::MatchSchedule>,
     pub group_id: Option<Uuid>,
     pub round: Option<i32>,
     pub bracket: Option<Bracket>,
@@ -235,7 +236,7 @@ pub struct MatchImport {
 
 /// Match produit par la génération automatique. `next` et `loser_next` désignent (rang dans la
 /// liste générée, emplacement 1 ou 2).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct GeneratedMatch {
     pub group_id: Uuid,
     pub round: i32,
