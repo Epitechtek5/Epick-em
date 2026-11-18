@@ -19,7 +19,9 @@ import { SettingsContext, type SettingsStatus, type SettingsValue } from './cont
 // chargés à l'ouverture de session (GET /me/settings) puis appliqués (langue, thème) ;
 // chaque modification s'applique tout de suite puis est enregistrée (PATCH /me/settings).
 // Les écritures partent l'une après l'autre ; seule la réponse de la dernière remplace
-// l'état local. En cas d'échec, les préférences de notification reviennent au dernier
+// l'état local. La file d'écritures appartient à la session : à la déconnexion ou au
+// changement de compte, les écritures en attente sont annulées avant d'être envoyées
+// (elles partiraient sinon avec les jetons du compte suivant) et leurs réponses ignorées. En cas d'échec, les préférences de notification reviennent au dernier
 // état confirmé par le serveur ; la langue et le thème restent appliqués localement.
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const { userId } = useAuth()
@@ -42,6 +44,19 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const writes = useRef<Promise<unknown>>(Promise.resolve())
   const revision = useRef(0)
   const generation = useRef(0)
+  const session = useRef<AbortController | null>(null)
+
+  // Une session par compte connecté : quand userId change (déconnexion, autre compte),
+  // l'ancienne est annulée et la file d'écritures repart de zéro.
+  useEffect(() => {
+    const controller = new AbortController()
+    session.current = controller
+    writes.current = Promise.resolve()
+    return () => {
+      controller.abort()
+      if (session.current === controller) session.current = null
+    }
+  }, [userId])
 
   const showNotifications = useCallback((next: NotificationPreferences) => {
     current.current = next
@@ -88,23 +103,29 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const save = useCallback(
     (changes: SettingsPatch) => {
-      if (!userId) return
-      const operation = generation.current
+      const signal = session.current?.signal
+      if (!userId || !signal || signal.aborted) return
       const write = ++revision.current
       setPending((count) => count + 1)
-      const request = writes.current.catch(() => undefined).then(() => updateSettings(changes))
+      const request = writes.current
+        .catch(() => undefined)
+        .then(() => {
+          // Écriture différée : la session a pu changer pendant l'attente.
+          signal.throwIfAborted()
+          return updateSettings(changes, signal)
+        })
       writes.current = request
       request
         .then(
           (settings) => {
-            if (operation !== generation.current) return
+            if (signal.aborted) return
             confirmed.current = settings
             if (write !== revision.current) return
             apply(settings)
             setFailure(null)
           },
           () => {
-            if (operation !== generation.current) return
+            if (signal.aborted) return
             setFailure({ userId, error: 'settings.saveFailed' })
             if (write === revision.current && confirmed.current) {
               showNotifications(confirmed.current.notifications)

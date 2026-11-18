@@ -1,8 +1,10 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { defaultNotifications, type SettingsPatch, type UserSettings } from '@/features/settings/api'
+import { tokenStore } from '@/lib/auth/token-store'
 import { themeStore, THEME_STORAGE_KEY } from '@/lib/theme/theme-store'
+import { makeJwt } from '@/test/jwt'
 import { jsonResponse, renderApp, routeFetch, signInAs } from '@/test/render'
 
 const PROFILE = {
@@ -159,6 +161,47 @@ describe('réglages du compte', () => {
 
     expect(await screen.findByText(/n’ont pas pu être enregistrés/)).toBeInTheDocument()
     expect(tournamentsEmail).toBeChecked()
+  })
+
+  it('n’envoie pas les écritures en attente d’un compte avec la session du suivant', async () => {
+    const patches: Array<{ patch: SettingsPatch; token: string | undefined }> = []
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    routeFetch(async (path, init) => {
+      const method = init.method ?? 'GET'
+      if (path === '/me/settings' && method === 'GET') {
+        return jsonResponse(200, { language: 'fr', theme: 'system', notifications: defaultNotifications() })
+      }
+      if (path === '/me/settings' && method === 'PATCH') {
+        const patch = JSON.parse(String(init.body)) as SettingsPatch
+        patches.push({ patch, token: init.headers.Authorization })
+        // Première écriture de A lente : les suivantes restent dans la file.
+        if (patches.length === 1) await held
+        return jsonResponse(200, { language: 'fr', theme: 'system', notifications: defaultNotifications() })
+      }
+      if (path === '/me' && method === 'GET') return jsonResponse(200, PROFILE)
+      return jsonResponse(404, { error: 'not_found' })
+    })
+    const user = userEvent.setup()
+    openAccount()
+
+    await user.click(await screen.findByRole('switch', { name: 'Équipes : notifications E-mail' }))
+    await user.click(screen.getByRole('switch', { name: 'Matchs : notifications Push' }))
+    await user.click(screen.getByRole('switch', { name: 'Compte et sécurité : notifications E-mail' }))
+    await waitFor(() => expect(patches).toHaveLength(1))
+
+    // A se déconnecte, B se connecte, puis la requête lente de A aboutit.
+    act(() => tokenStore.clear())
+    const bobToken = makeJwt('user', 'bob')
+    act(() => tokenStore.set({ accessToken: bobToken, refreshToken: 'refresh-bob' }))
+    await act(async () => {
+      release()
+      await held
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(patches.map((entry) => entry.patch)).toEqual([{ notifications: { teams: { email: false } } }])
+    expect(patches.some((entry) => entry.token?.includes(bobToken))).toBe(false)
   })
 
   it('erreur de chargement des préférences puis nouvel essai', async () => {

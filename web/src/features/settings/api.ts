@@ -59,6 +59,6 @@ export function getSettings(signal?: AbortSignal) {
 }
 
 // PATCH /me/settings -> 200 UserSettings (réglages complets après fusion) | 400 | 401.
-export function updateSettings(changes: SettingsPatch) {
-  return apiRequest<UserSettings>('/me/settings', { method: 'PATCH', body: changes })
+export function updateSettings(changes: SettingsPatch, signal?: AbortSignal) {
+  return apiRequest<UserSettings>('/me/settings', { method: 'PATCH', body: changes, signal })
 }
