@@ -28,8 +28,9 @@ import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
 
-// Création (/tournaments/new, au statut brouillon) et modification (/tournaments/:id/edit) d'un
-// tournoi, réservées aux administrateurs (AdminRoute ; le serveur reste juge).
+// Création (/tournaments/new, au statut brouillon, administrateurs globaux) et modification
+// (/tournaments/:id/edit, organisateurs du tournoi : TournamentManagerRoute) ; le serveur reste
+// juge.
 export default function TournamentEditorPage() {
   const { id } = useParams()
   const editing = id !== undefined
@@ -182,6 +183,7 @@ export default function TournamentEditorPage() {
           }
           games={games ?? undefined}
           capacityLocked={tournament ? capacityLocked(tournament.status) : false}
+          checkInLocked={tournament ? capacityLocked(tournament.status) || tournament.check_in_settled_at !== null : false}
           submitLabel={tournament ? t('common.save') : t('tournaments.create')}
           busy={busy}
           serverErrors={serverErrors}

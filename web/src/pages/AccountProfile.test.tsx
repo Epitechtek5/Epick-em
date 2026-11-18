@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { tokenStore } from '@/lib/auth/token-store'
 import { makeJwt } from '@/test/jwt'
 import { jsonResponse, renderApp, routeFetch, signInAs } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 const PROFILE = {
   id: '00000000-0000-4000-8000-000000000001',
@@ -164,11 +165,11 @@ describe('traductions', () => {
     renderApp('/app')
 
     expect(screen.getByRole('heading', { level: 1, name: 'Bonjour, alice' })).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Langue'), 'es')
+    await chooseLanguage(user, 'es')
     expect(screen.getByRole('heading', { level: 1, name: 'Hola, alice' })).toBeInTheDocument()
     expect(screen.getAllByText('Próximamente')).toHaveLength(4)
-    await user.selectOptions(screen.getByLabelText('Idioma'), 'en')
+    await chooseLanguage(user, 'en')
     expect(screen.getByRole('heading', { level: 1, name: 'Hello, alice' })).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Language'), 'fr')
+    await chooseLanguage(user, 'fr')
   })
 })

@@ -131,6 +131,14 @@ export default function LoginScreen() {
           <Text>{t(submitting ? 'login.submitting' : 'login.submit')}</Text>
         </Button>
 
+        <Button
+          variant="outline"
+          onPress={() => router.push('/public-tournaments')}
+          accessibilityLabel={t('tournaments.public.browse')}
+        >
+          <Text>{t('tournaments.public.browse')}</Text>
+        </Button>
+
         {error ? <FormMessage>{t(error)}</FormMessage> : null}
       </View>
 

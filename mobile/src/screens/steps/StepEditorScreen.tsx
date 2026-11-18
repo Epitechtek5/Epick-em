@@ -29,6 +29,7 @@ import {
 } from '@/features/steps/validation';
 import { getTournament } from '@/features/tournaments/api';
 import { useTranslation } from '@/i18n';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 const FORMATS: readonly StepFormat[] = [
   'pool',
@@ -40,11 +41,12 @@ const MATCH_TYPES: readonly StepMatchType[] = ['duel', 'ffa'];
 
 export default function StepEditorScreen() {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const { tournamentId, stepId } = useLocalSearchParams<{
     tournamentId: string;
     stepId?: string;
   }>();
+  const { canManage } = useTournamentAccess(tournamentId);
   const insets = useSafeAreaInsets();
   const [values, setValues] = useState<StepInput | null>(null);
   const [criterion, setCriterion] = useState('');
@@ -70,7 +72,7 @@ export default function StepEditorScreen() {
   );
   const resource = useGameResource(load, stepErrorKey);
 
-  if (user?.role !== 'admin') {
+  if (!canManage) {
     return <ScreenState error message={t('errors.forbidden')} />;
   }
   if (!resource.data) {

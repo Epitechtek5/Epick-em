@@ -58,6 +58,32 @@ export function validateTournament(input: TournamentInput): string | null {
   )
     return 'tournaments.validation.dates';
   if (
+    (input.check_in_open_at && !normalizeDate(input.check_in_open_at)) ||
+    (input.check_in_close_at && !normalizeDate(input.check_in_close_at)) ||
+    (input.check_in_open_at &&
+      input.check_in_close_at &&
+      new Date(input.check_in_open_at) >= new Date(input.check_in_close_at))
+  )
+    return 'tournaments.validation.checkIn';
+  if (input.mode !== 'online' && !input.location?.trim())
+    return 'tournaments.validation.location';
+  const fieldKeys = new Set<string>();
+  if (
+    input.registration_fields.length > 30 ||
+    input.registration_fields.some((field) => {
+      const duplicate = fieldKeys.has(field.key);
+      fieldKeys.add(field.key);
+      return (
+        duplicate ||
+        !/^[A-Za-z0-9_]{1,40}$/.test(field.key) ||
+        !field.label.trim() ||
+        Array.from(field.label.trim()).length > 100 ||
+        (field.field_type === 'select' && field.options.length === 0)
+      );
+    })
+  )
+    return 'tournaments.validation.registrationFields';
+  if (
     !Number.isInteger(input.max_participants) ||
     input.max_participants < 1 ||
     input.max_participants > 10000
@@ -65,9 +91,15 @@ export function validateTournament(input: TournamentInput): string | null {
     return 'tournaments.validation.capacity';
   if (
     input.participant_type === 'team' &&
-    (!Number.isInteger(input.team_size) ||
-      (input.team_size ?? 0) < 1 ||
-      (input.team_size ?? 0) > 100)
+    (!Number.isInteger(input.team_min_starters) ||
+      !Number.isInteger(input.team_max_starters) ||
+      (input.team_min_starters ?? 0) < 1 ||
+      (input.team_max_starters ?? 0) < (input.team_min_starters ?? 0) ||
+      (input.team_max_starters ?? 0) > 100 ||
+      (input.team_max_substitutes !== null &&
+        (!Number.isInteger(input.team_max_substitutes) ||
+          input.team_max_substitutes < 0 ||
+          input.team_max_substitutes > 100)))
   )
     return 'tournaments.validation.teamSize';
   if (
@@ -95,7 +127,20 @@ export function buildTournamentInput(input: TournamentInput): TournamentInput {
     registration_close_at: input.registration_close_at
       ? normalizeDate(input.registration_close_at)
       : null,
-    team_size: input.participant_type === 'team' ? input.team_size : null,
+    location: input.mode === 'online' ? null : input.location?.trim() || null,
+    rules: input.rules?.trim() || null,
+    team_min_starters:
+      input.participant_type === 'team' ? input.team_min_starters : null,
+    team_max_starters:
+      input.participant_type === 'team' ? input.team_max_starters : null,
+    team_max_substitutes:
+      input.participant_type === 'team' ? input.team_max_substitutes : null,
+    check_in_open_at: input.check_in_open_at
+      ? normalizeDate(input.check_in_open_at)
+      : null,
+    check_in_close_at: input.check_in_close_at
+      ? normalizeDate(input.check_in_close_at)
+      : null,
     team_scoring_mode: mode,
     team_scoring_n: mode === 'top_n' ? input.team_scoring_n : null,
   };
@@ -113,7 +158,18 @@ export function changedTournamentFields(
     'end_date',
     'registration_open_at',
     'registration_close_at',
-    'team_size',
+    'mode',
+    'location',
+    'visibility',
+    'rules',
+    'team_min_starters',
+    'team_max_starters',
+    'team_max_substitutes',
+    'registration_policy',
+    'waiting_list_enabled',
+    'registration_fields',
+    'check_in_open_at',
+    'check_in_close_at',
     'max_participants',
   ];
   if (current.participant_type === 'solo') {

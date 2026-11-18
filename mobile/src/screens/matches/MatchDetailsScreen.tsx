@@ -17,16 +17,18 @@ import { matchNumber } from '@/components/matches/MatchCard';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { FormMessage } from '@/components/ui/feedback';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 export default function MatchDetailsScreen() {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const state = useMatchContext();
   const action = useMatchAction();
   const [showManagement, setShowManagement] = useState(false);
   const [notice, setNotice] = useState('');
   const [nextStep, setNextStep] = useState<TournamentStep | null>(null);
   const { data, tournamentId, stepId } = state;
+  const { canReferee } = useTournamentAccess(tournamentId);
 
   if (state.error || !data?.match || !token) {
     return <MatchState {...state} />;
@@ -36,7 +38,7 @@ export default function MatchDetailsScreen() {
   const { id } = match;
   const params = { tournamentId, stepId, matchId: id };
   const api = matchApi(token, tournamentId, stepId);
-  const canManage = user?.role === 'admin' && data.step.status === 'ongoing';
+  const canManage = canReferee && data.step.status === 'ongoing';
   const isOpen = match.status === 'scheduled' || match.status === 'ongoing';
   const canPlay = playable(data.step, match.participants.length);
 

@@ -53,7 +53,7 @@ jobs:
               - 'deploy/**'
               - '.github/workflows/deploy.yml'
 
-  # Scan the entire history on every run to enforce ADR-007.
+  # Scan the full checked-out history, excluding unrelated branches, to enforce ADR-007.
   gitleaks:
     name: Scan Git History for Secrets
     runs-on: ubuntu-latest

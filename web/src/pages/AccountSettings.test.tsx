@@ -6,6 +6,7 @@ import { tokenStore } from '@/lib/auth/token-store'
 import { themeStore, THEME_STORAGE_KEY } from '@/lib/theme/theme-store'
 import { makeJwt } from '@/test/jwt'
 import { jsonResponse, renderApp, routeFetch, signInAs } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 const PROFILE = {
   id: '00000000-0000-4000-8000-000000000001',
@@ -120,7 +121,7 @@ describe('réglages du compte', () => {
     openAccount()
     await screen.findByRole('group', { name: 'Apparence' })
 
-    await user.selectOptions(screen.getByLabelText('Langue', { selector: 'select' }), 'es')
+    await chooseLanguage(user, 'es')
 
     expect(screen.getByRole('heading', { level: 1, name: 'Mi cuenta' })).toBeInTheDocument()
     await waitFor(() => expect(state.patches).toEqual([{ language: 'es' }]))

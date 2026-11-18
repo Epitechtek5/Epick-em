@@ -21,6 +21,7 @@ jest.mock('../src/features/games/use-game-resource', () => ({
 }));
 jest.mock('../src/features/steps/api');
 jest.mock('expo-router', () => ({
+  useFocusEffect: jest.requireActual('react').useEffect,
   router: { push: jest.fn(), replace: jest.fn() },
   useLocalSearchParams: () => ({
     tournamentId: '22222222-2222-4222-8222-222222222222',
@@ -43,7 +44,18 @@ const tournament = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo' as const,
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 8,
   team_scoring_mode: 'none' as const,
   team_scoring_n: null,

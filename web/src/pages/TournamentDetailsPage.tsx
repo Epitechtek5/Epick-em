@@ -3,9 +3,15 @@ import {
   Calendar03Icon,
   ChampionIcon,
   Clock01Icon,
+  Copy01Icon,
+  Crown02Icon,
   Edit02Icon,
   GameController03Icon,
+  Globe02Icon,
+  LegalDocument01Icon,
+  Link01Icon,
   RefreshIcon,
+  Task01Icon,
   UserGroupIcon,
   UserIcon,
 } from '@hugeicons/core-free-icons'
@@ -15,6 +21,8 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog'
 import { StateMessage } from '@/components/games/StateMessage'
 import { StepsSection } from '@/components/steps/StepsSection'
+import { CopyTournamentDialog } from '@/components/tournaments/CopyTournamentDialog'
+import { ManagementSection } from '@/components/tournaments/ManagementSection'
 import { ParticipantsSection } from '@/components/tournaments/ParticipantsSection'
 import { RankingSection } from '@/components/tournaments/RankingSection'
 import { ScoringRulesSection } from '@/components/tournaments/ScoringRulesSection'
@@ -26,24 +34,41 @@ import { Icon } from '@/components/ui/icon'
 import { getGame } from '@/features/games/api'
 import { readNotice } from '@/features/games/notice'
 import { isUuid } from '@/features/teams/validation'
-import { deleteTournament, getTournament, listAllTournamentTeams } from '@/features/tournaments/api'
+import {
+  deleteTournament,
+  duplicateTournament,
+  getTournament,
+  listAllTournamentTeams,
+  saveAsTemplate,
+} from '@/features/tournaments/api'
 import { tournamentErrorKey } from '@/features/tournaments/errors'
-import { formatDateRange, formatDateTime } from '@/features/tournaments/format'
-import { participantTypeLabelKey, teamScoringLabelKey } from '@/features/tournaments/labels'
+import { formatDateRange, formatDateTime, teamFormatMessage } from '@/features/tournaments/format'
+import {
+  modeLabelKey,
+  participantTypeLabelKey,
+  policyLabelKey,
+  roleLabelKey,
+  teamScoringLabelKey,
+  visibilityLabelKey,
+} from '@/features/tournaments/labels'
 import { deletable } from '@/features/tournaments/lifecycle'
 import type { Tournament } from '@/features/tournaments/types'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { useTournamentAccess } from '@/hooks/use-tournament-access'
+import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
 
-// Fiche d'un tournoi (GET /tournaments/{id}) : informations, inscriptions, étapes, barème et
-// classements ; cycle de vie, modification et suppression pour les administrateurs.
+// Fiche d'un tournoi (GET /tournaments/{id}) : informations, configuration, inscriptions,
+// étapes, barème et classements ; actions de gestion selon les droits fournis par le serveur
+// (GET /tournaments/{id}/access) : cycle de vie, modification, équipe d'organisation, doublon
+// et modèle, suppression (propriétaire).
 export default function TournamentDetailsPage() {
   const { id = '' } = useParams()
   const { t, lang } = useI18n()
-  const { isAdmin, refreshRole } = useAuth()
+  const { refreshRole } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(id)
@@ -58,6 +83,9 @@ export default function TournamentDetailsPage() {
   const [local, setLocal] = useState<{ base: Tournament; value: Tournament } | null>(null)
   const tournament = local && local.base === loaded ? local.value : loaded
   useDocumentTitle(tournament?.name ?? t('tournaments.details'))
+  const { access, reload: reloadAccess } = useTournamentAccess(tournament)
+  const canManage = access.can_manage
+  const ownerNames = useUsernames(tournament?.owner_id ? [tournament.owner_id] : [])
 
   const gameState = useAsyncResource(
     (signal) => (tournament ? getGame(tournament.game_id, signal) : Promise.resolve(null)),
@@ -116,6 +144,9 @@ export default function TournamentDetailsPage() {
 
   const gameImage = gameState.state.status === 'success' ? gameState.state.data?.images[0] : undefined
   const notSet = <span className="font-normal text-muted-foreground">{t('tournaments.notSet')}</span>
+  const teamFormat = tournament ? teamFormatMessage(tournament.team_min_starters, tournament.team_max_starters) : null
+  // Page publique : tournoi ouvert à tous et lancé (le serveur répond 404 sinon).
+  const publicPage = tournament ? tournament.visibility === 'public' && tournament.status !== 'draft' : false
 
   return (
     <div className="grid w-full max-w-6xl gap-8 self-start">
@@ -204,10 +235,15 @@ export default function TournamentDetailsPage() {
               </FactTile>
               <FactTile icon={tournament.participant_type === 'team' ? UserGroupIcon : UserIcon} label={t('tournaments.format')}>
                 <span className="block">
-                  {tournament.team_size !== null
-                    ? t('tournaments.formatTeam', { size: tournament.team_size })
-                    : t(participantTypeLabelKey(tournament.participant_type))}
+                  {teamFormat ? t(teamFormat.key, teamFormat.params) : t(participantTypeLabelKey(tournament.participant_type))}
                 </span>
+                {tournament.participant_type === 'team' ? (
+                  <span className="block">
+                    {tournament.team_max_substitutes === null
+                      ? t('tournaments.substitutesUnlimited')
+                      : t('tournaments.substitutesMax', { count: tournament.team_max_substitutes })}
+                  </span>
+                ) : null}
                 <span className="block">
                   {t(
                     tournament.participant_type === 'team' ? 'tournaments.capacityTeams' : 'tournaments.capacityPlayers',
@@ -219,7 +255,42 @@ export default function TournamentDetailsPage() {
                 {t(teamScoringLabelKey(tournament.team_scoring_mode))}
                 {tournament.team_scoring_n !== null ? ` (N = ${tournament.team_scoring_n})` : ''}
               </FactTile>
+              <FactTile icon={Globe02Icon} label={t('tournaments.modeLabel')}>
+                <span className="block">{t(modeLabelKey(tournament.mode))}</span>
+                {tournament.location ? <span className="block font-normal">{tournament.location}</span> : null}
+              </FactTile>
+              <FactTile icon={Task01Icon} label={t('tournaments.policyLabel')}>
+                <span className="block">{t(policyLabelKey(tournament.registration_policy))}</span>
+                <span className="block font-normal">
+                  {t(tournament.waiting_list_enabled ? 'tournaments.participants.waitingListOn' : 'tournaments.participants.waitingListOff')}
+                </span>
+              </FactTile>
+              <FactTile icon={Link01Icon} label={t('tournaments.visibilityLabel')}>
+                {t(visibilityLabelKey(tournament.visibility))}
+              </FactTile>
+              <FactTile icon={Crown02Icon} label={t('tournaments.owner')}>
+                <span className="block">
+                  {tournament.owner_id ? (
+                    (ownerNames[tournament.owner_id] ?? '…')
+                  ) : (
+                    <span className="font-normal text-muted-foreground">{t('tournaments.management.noOwner')}</span>
+                  )}
+                </span>
+                {access.role ? (
+                  <span className="block font-normal">{t('tournaments.yourRole', { role: t(roleLabelKey(access.role)) })}</span>
+                ) : null}
+              </FactTile>
             </dl>
+
+            {tournament.rules ? (
+              <details className="rounded-xl bg-card p-4 shadow-sm ring-1 ring-foreground/10">
+                <summary className="flex cursor-pointer items-center gap-2 font-semibold">
+                  <Icon icon={LegalDocument01Icon} />
+                  {t('tournaments.rules')}
+                </summary>
+                <p className="mt-3 whitespace-pre-line text-sm">{tournament.rules}</p>
+              </details>
+            ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
               <Link to={`/tournaments/${tournament.id}/teams`} className={buttonVariants()}>
@@ -230,12 +301,57 @@ export default function TournamentDetailsPage() {
                 <Icon icon={RefreshIcon} />
                 {t('tournaments.refreshTournament')}
               </Button>
-              {isAdmin ? (
+              {publicPage ? (
+                <Link to={`/public/tournaments/${tournament.id}`} className={buttonVariants({ variant: 'outline' })}>
+                  <Icon icon={Globe02Icon} />
+                  {t('tournaments.publicPage')}
+                </Link>
+              ) : null}
+              {access.can_duplicate ? (
                 <>
-                  <Link to={`/tournaments/${tournament.id}/edit`} className={buttonVariants({ variant: 'outline' })}>
-                    <Icon icon={Edit02Icon} />
-                    {t('tournaments.edit')}
-                  </Link>
+                  <CopyTournamentDialog
+                    source={tournament}
+                    idPrefix="duplicate"
+                    icon={Copy01Icon}
+                    label={t('tournaments.copy.duplicate')}
+                    title={t('tournaments.copy.duplicateTitle')}
+                    description={t('tournaments.copy.duplicateHint')}
+                    submitLabel={t('tournaments.copy.duplicateSubmit')}
+                    defaultName={t('tournaments.copy.copyName', { name: tournament.name })}
+                    onCopy={async (input) => {
+                      const created = await duplicateTournament(tournament.id, input)
+                      navigate(`/tournaments/${created.id}`, {
+                        state: { notice: { key: 'tournaments.copy.duplicated', params: { name: created.name } } },
+                      })
+                    }}
+                  />
+                  <CopyTournamentDialog
+                    source={tournament}
+                    idPrefix="template"
+                    icon={Task01Icon}
+                    withDates={false}
+                    label={t('tournaments.copy.saveTemplate')}
+                    title={t('tournaments.copy.templateTitle')}
+                    description={t('tournaments.copy.templateHint')}
+                    submitLabel={t('tournaments.copy.templateSubmit')}
+                    defaultName={t('tournaments.copy.templateName', { name: tournament.name })}
+                    onCopy={async (input) => {
+                      const created = await saveAsTemplate(tournament.id, input)
+                      navigate('/tournament-templates', {
+                        state: { notice: { key: 'tournaments.templates.saved', params: { name: created.name } } },
+                      })
+                    }}
+                  />
+                </>
+              ) : null}
+              {canManage ? (
+                <Link to={`/tournaments/${tournament.id}/edit`} className={buttonVariants({ variant: 'outline' })}>
+                  <Icon icon={Edit02Icon} />
+                  {t('tournaments.edit')}
+                </Link>
+              ) : null}
+              {access.can_assign_roles ? (
+                <>
                   {deletable(tournament.status) ? (
                     <ConfirmDeleteDialog
                       label={t('tournaments.delete')}
@@ -253,7 +369,7 @@ export default function TournamentDetailsPage() {
                 <span className="break-all">{tournament.id}</span>
               </span>
             </div>
-            {isAdmin && !deletable(tournament.status) ? (
+            {access.can_assign_roles && !deletable(tournament.status) ? (
               <p className="text-sm text-muted-foreground">{t('tournaments.deleteLocked')}</p>
             ) : null}
             {deleteError ? <StateMessage kind="error">{t(deleteError)}</StateMessage> : null}
@@ -261,7 +377,7 @@ export default function TournamentDetailsPage() {
 
           <TournamentLifecycle
             tournament={tournament}
-            canManage={isAdmin}
+            canManage={canManage}
             onChanged={(value) => loaded && setLocal({ base: loaded, value })}
           />
 
@@ -283,10 +399,22 @@ export default function TournamentDetailsPage() {
             tournament={tournament}
             teams={teams}
             teamsReady={teamsState.state.status === 'success'}
+            access={access}
             onChanged={() => setRankingVersion((v) => v + 1)}
+            onTournamentChanged={(value) => loaded && setLocal({ base: loaded, value })}
           />
-          <StepsSection tournament={tournament} canManage={isAdmin} />
-          <ScoringRulesSection tournament={tournament} />
+          {canManage ? (
+            <ManagementSection
+              tournament={tournament}
+              access={access}
+              onOwnershipChanged={() => {
+                reload()
+                reloadAccess()
+              }}
+            />
+          ) : null}
+          <StepsSection tournament={tournament} canManage={canManage} />
+          <ScoringRulesSection tournament={tournament} canManage={canManage} />
           <RankingSection tournament={tournament} teams={teams} version={rankingVersion} />
         </>
       ) : null}

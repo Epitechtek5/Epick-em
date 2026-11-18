@@ -64,6 +64,10 @@ export default function AuthenticatedLayout() {
         options={{ title: t('tournaments.ranking') }}
       />
       <Stack.Screen
+        name="tournaments/[tournamentId]/management"
+        options={{ title: t('tournaments.management.title') }}
+      />
+      <Stack.Screen
         name="tournaments/[tournamentId]/steps/index"
         options={{ title: t('steps.title') }}
       />

@@ -60,6 +60,12 @@ pub enum ApiError {
     StepPositionTaken,
     /// Les inscriptions ne sont pas ouvertes.
     RegistrationClosed,
+    /// La fenêtre de pointage n'est pas ouverte.
+    CheckInClosed,
+    /// L'inscrit n'est pas dans le statut attendu pour cette opération.
+    InvalidParticipantState,
+    /// Le propriétaire du tournoi a changé entre-temps.
+    OwnershipChanged,
     /// Changement de statut impossible depuis le statut actuel.
     InvalidTransition,
     /// Adresse e-mail déjà utilisée par un autre compte.
@@ -175,6 +181,21 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "registration_closed",
                 "Les inscriptions à ce tournoi ne sont pas ouvertes",
+            ),
+            ApiError::CheckInClosed => (
+                StatusCode::CONFLICT,
+                "check_in_closed",
+                "La fenêtre de pointage de ce tournoi n'est pas ouverte",
+            ),
+            ApiError::InvalidParticipantState => (
+                StatusCode::CONFLICT,
+                "invalid_participant_state",
+                "Cet inscrit n'est pas dans le statut attendu pour cette opération",
+            ),
+            ApiError::OwnershipChanged => (
+                StatusCode::CONFLICT,
+                "ownership_changed",
+                "Le propriétaire du tournoi a changé : réessayez",
             ),
             ApiError::InvalidTransition => (
                 StatusCode::CONFLICT,

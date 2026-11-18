@@ -40,6 +40,8 @@ pub const USERNAME_MIN: usize = 3;
 pub const USERNAME_MAX: usize = 32;
 pub const PASSWORD_MIN: usize = 8;
 pub const PASSWORD_MAX: usize = 128;
+use crate::events::{EventSink, NoopEvents};
+
 const DEFAULT_PUBLIC_URL: &str = "http://localhost:3000";
 
 #[derive(Clone)]
@@ -65,6 +67,8 @@ pub struct AppState {
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
     pub(crate) public_url: Arc<str>,
+    /// Événements d'inscription et de pointage ; par défaut ignorés (voir [`crate::events`]).
+    pub(crate) events: Arc<dyn EventSink>,
     /// Envoi des notifications push ; par défaut [`NoopPush`] (canal ignoré).
     pub(crate) push: Arc<dyn PushSender>,
     /// Types d'événements du moteur de notifications.
@@ -90,10 +94,17 @@ impl AppState {
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
+            events: Arc::new(NoopEvents),
             push: Arc::new(NoopPush),
             catalog: Arc::new(Catalog::builtin()),
             retry_delay: DEFAULT_RETRY_DELAY,
         })
+    }
+
+    /// Branche la destination des événements d'inscription et de pointage.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.events = events;
+        self
     }
 
     /// Branche l'envoi des notifications push (Expo en production).
@@ -287,7 +298,7 @@ async fn register(
             .store
             .update_user_settings(
                 user.id,
-                crate::store::SettingsUpdate {
+                crate::store::UserSettingsUpdate {
                     language: Some(language),
                     ..Default::default()
                 },
