@@ -13,6 +13,9 @@ const CODES: Record<string, MessageKey> = {
   player_already_registered: 'teams.errors.playerRegistered',
   team_already_registered: 'teams.errors.alreadyRegistered',
   scoring_rule_taken: 'tournaments.errors.scoringRuleTaken',
+  check_in_closed: 'tournaments.errors.checkInClosed',
+  invalid_participant_state: 'tournaments.errors.participantState',
+  ownership_changed: 'tournaments.errors.ownershipChanged',
   stat_in_use: 'stats.errors.inUse',
 }
 
@@ -27,8 +30,18 @@ const FIELDS: Array<[string, MessageKey]> = [
   ['registration_open_at', 'tournaments.validation.date'],
   ['registration_close_at', 'tournaments.validation.closeBeforeOpen'],
   ['max_participants', 'tournaments.validation.capacity'],
-  ['team_size', 'tournaments.validation.teamSize'],
+  ['team_size', 'tournaments.validation.starters'],
+  ['team_min_starters', 'tournaments.validation.starters'],
+  ['team_max_starters', 'tournaments.validation.maxBelowMin'],
+  ['team_max_substitutes', 'tournaments.validation.substitutes'],
   ['team_scoring_n', 'tournaments.validation.scoringN'],
+  ['location', 'tournaments.validation.location'],
+  ['rules', 'tournaments.validation.rules'],
+  ['registration_fields', 'tournaments.validation.fields'],
+  ['check_in_open_at', 'tournaments.validation.date'],
+  ['check_in_close_at', 'tournaments.validation.checkInOrder'],
+  ['responses', 'tournaments.participants.errors.responses'],
+  ['role', 'tournaments.errors.rosterFull'],
   ['stat_id', 'tournaments.scoring.errors.statNotLinked'],
   ['coefficient', 'tournaments.scoring.validation.coefficient'],
   ['points_table', 'tournaments.scoring.validation.table'],
@@ -81,7 +94,15 @@ export function tournamentFieldErrors(error: unknown): TournamentFieldErrors | n
     'registration_close_at',
     'max_participants',
     'team_size',
+    'team_min_starters',
+    'team_max_starters',
+    'team_max_substitutes',
     'team_scoring_n',
+    'location',
+    'rules',
+    'registration_fields',
+    'check_in_open_at',
+    'check_in_close_at',
   ])
   const errors: TournamentFieldErrors = {}
   if (found.game_id) errors.game_id = 'tournaments.validation.game'
@@ -93,7 +114,20 @@ export function tournamentFieldErrors(error: unknown): TournamentFieldErrors | n
   if (found.registration_close_at) errors.registration_close_at = 'tournaments.validation.closeBeforeOpen'
   // Le seul 400 possible sur une capacité valide : moins de places que d'inscrits actifs.
   if (found.max_participants) errors.max_participants = 'tournaments.errors.capacityBelowRegistered'
-  if (found.team_size) errors.team_size = 'tournaments.validation.teamSize'
+  if (found.team_size) errors.team_min_starters = 'tournaments.validation.starters'
+  // Les équipes déjà inscrites ne respectent plus la nouvelle composition (détail du serveur).
+  if (found.team_min_starters) {
+    errors.team_min_starters = /inscrite/.test(found.team_min_starters)
+      ? 'tournaments.errors.teamsDontFit'
+      : 'tournaments.validation.starters'
+  }
+  if (found.team_max_starters) errors.team_max_starters = 'tournaments.validation.maxBelowMin'
+  if (found.team_max_substitutes) errors.team_max_substitutes = 'tournaments.validation.substitutes'
+  if (found.location) errors.location = 'tournaments.validation.location'
+  if (found.rules) errors.rules = 'tournaments.validation.rules'
+  if (found.registration_fields) errors.registration_fields = 'tournaments.validation.fields'
+  if (found.check_in_open_at) errors.check_in_open_at = 'tournaments.validation.date'
+  if (found.check_in_close_at) errors.check_in_close_at = 'tournaments.validation.checkInOrder'
   if (found.team_scoring_n) errors.team_scoring_n = 'tournaments.validation.scoringN'
   return Object.keys(errors).length > 0 ? errors : null
 }

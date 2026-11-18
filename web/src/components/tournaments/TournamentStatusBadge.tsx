@@ -42,7 +42,7 @@ export function TournamentStatusBadge({ status, className }: { status: Tournamen
       ) : (
         <Icon icon={ICONS[status]} size={14} />
       )}
-      <span className="sr-only">{t('tournaments.statusLabel')} : </span>
+      <span className="sr-only">{t('tournaments.statusLabel')}{t('common.colon')} </span>
       {t(statusLabelKey(status))}
     </span>
   )

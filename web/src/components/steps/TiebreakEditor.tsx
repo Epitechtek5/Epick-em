@@ -127,7 +127,7 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
                 {index + 1}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })} : </span>
+                <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })}{t('common.colon')} </span>
                 <code className="font-mono text-sm font-semibold break-all">{key}</code>
               </span>
               <span className="flex gap-1">

@@ -2124,3 +2124,46 @@ async fn public_participants_are_paginated_with_their_names() {
     assert_eq!(rest.as_array().unwrap().len(), 1);
     assert_eq!(rest[0]["name"], "carol");
 }
+
+/// Les droits de l'appelant sont exposés pour que les clients adaptent leurs actions.
+#[actix_web::test]
+async fn the_caller_access_is_exposed_per_tournament() {
+    let (app, s) = setup().await;
+    let tid = open(&app, &s, json!({})).await;
+    let access = format!("/tournaments/{tid}/access");
+    let (status, root) = get(&app, &access, &s.admin).await;
+    assert_eq!(status, StatusCode::OK, "{root}");
+    assert_eq!(root["role"], "owner");
+    assert_eq!(root["global_admin"], true);
+    assert_eq!(root["can_assign_roles"], true);
+    assert_eq!(root["can_duplicate"], true);
+
+    put(
+        &app,
+        &format!("/tournaments/{tid}/roles/{}", s.alice.id),
+        &s.admin,
+        json!({ "role": "referee" }),
+    )
+    .await;
+    let (_, referee) = get(&app, &access, &s.alice).await;
+    assert_eq!(referee["role"], "referee");
+    assert_eq!(referee["can_referee"], true);
+    assert_eq!(referee["can_manage"], false);
+    assert_eq!(referee["can_assign_roles"], false);
+    assert_eq!(referee["can_duplicate"], false);
+
+    let (_, player) = get(&app, &access, &s.bob).await;
+    assert!(player["role"].is_null());
+    assert_eq!(player["can_manage"], false);
+    assert_eq!(player["can_referee"], false);
+
+    // Tournoi sur invitation : rien n'est révélé à un non-invité.
+    let hidden = open(
+        &app,
+        &s,
+        json!({ "name": "Privé", "visibility": "invitation_only" }),
+    )
+    .await;
+    let (status, _) = get(&app, &format!("/tournaments/{hidden}/access"), &s.bob).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
