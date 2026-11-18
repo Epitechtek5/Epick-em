@@ -9,8 +9,9 @@ use actix_web::test::TestRequest;
 use api_public::config::AuthConfig;
 use api_public::events::{EventKind, MemoryEvents};
 use api_public::store::{
-    AuthStore, MemoryStore, ParticipantInput, ParticipantStatus, Role, SettingsUpdate, StoreError,
-    TeamRole, TournamentInput, TournamentSettings, TournamentUpdate, Visibility, no_responses,
+    AuthStore, MemoryStore, ParticipantInput, ParticipantStatus, Role, StoreError, TeamRole,
+    TournamentInput, TournamentSettings, TournamentSettingsUpdate, TournamentUpdate, Visibility,
+    no_responses,
 };
 use api_public::{AppState, app};
 use common::{SECRET, access, call, logged_in_as, login, request};
@@ -1776,7 +1777,7 @@ async fn a_settings_update_only_writes_the_fields_it_names() {
         .update_tournament(
             tournament.id,
             TournamentUpdate {
-                settings: SettingsUpdate {
+                settings: TournamentSettingsUpdate {
                     visibility: Some(Visibility::InvitationOnly),
                     ..Default::default()
                 },
@@ -1792,7 +1793,7 @@ async fn a_settings_update_only_writes_the_fields_it_names() {
         .update_tournament(
             tournament.id,
             TournamentUpdate {
-                settings: SettingsUpdate {
+                settings: TournamentSettingsUpdate {
                     rules: Some(Some("Pas de triche.".into())),
                     ..Default::default()
                 },

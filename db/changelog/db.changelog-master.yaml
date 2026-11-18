@@ -31,4 +31,6 @@ databaseChangeLog:
   - include:
       file: changelog/0015-email-verification.yaml
   - include:
+      file: changelog/0016-user-settings.yaml
+  - include:
       file: changelog/0016-extend-tournaments.yaml

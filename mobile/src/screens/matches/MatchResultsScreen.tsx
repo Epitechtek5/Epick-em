@@ -31,16 +31,18 @@ import { Input } from '@/components/ui/input';
 import { ScreenState, FormMessage } from '@/components/ui/feedback';
 import { StepOptionSelect } from '@/components/steps/option-select';
 import { useTranslation } from '@/i18n';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 export default function MatchResultsScreen() {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const state = useMatchContext();
+  const { canReferee } = useTournamentAccess(state.tournamentId);
   const { data } = state;
   const match = data?.match;
   if (!data || !match) return <MatchState {...state} />;
   if (
     !token ||
-    user?.role !== 'admin' ||
+    !canReferee ||
     data.step.status !== 'ongoing' ||
     !['scheduled', 'ongoing'].includes(match.status)
   )

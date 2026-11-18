@@ -17,6 +17,11 @@
     "usernameHint": "3 to 32 letters, numbers, underscores, dots or hyphens",
     "logo": "Epick'em logo",
     "back": "Back",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "true": "Yes",
+    "false": "No",
+    "noData": "No data available.",
     "showPassword": "Show {{label}}",
     "hidePassword": "Hide {{label}}"
   },
@@ -56,6 +61,23 @@
     "language": "Language",
     "english": "English",
     "french": "Français",
+    "spanish": "Español",
+    "notifications": "Notifications",
+    "syncing": "Synchronizing settings",
+    "syncFailed": "Unable to synchronize settings. Local changes were kept.",
+    "channels": {
+      "email": "Email",
+      "push": "Push"
+    },
+    "categories": {
+      "tournaments": "Tournaments",
+      "teams": "Teams",
+      "matches": "Matches",
+      "predictions": "Predictions",
+      "pickem": "Pick’em",
+      "rankings": "Rankings",
+      "account": "Account and security"
+    },
     "session": "Session",
     "logout": "Log out",
     "loggingOut": "Logging out",
@@ -77,7 +99,9 @@
     "identifier": "Account UUID",
     "recoveryEmail": "Recovery email",
     "recoveryEmailMissing": "No recovery email configured",
-    "recoveryEmailHint": "Use this address to sign in and recover your account."
+    "recoveryEmailHint": "Use this address to sign in and recover your account.",
+    "pictureUrl": "Profile picture URL",
+    "pictureUrlHint": "Enter an HTTP(S) image URL, or leave it empty to remove the picture."
   },
   "users": {
     "title": "Users",
@@ -116,7 +140,8 @@
     "passwordSpecial": "Password must contain at least one special character.",
     "match": "Passwords do not match.",
     "email": "Enter a valid email address.",
-    "emailRemovalUnsupported": "A recovery email cannot currently be removed."
+    "emailRemovalUnsupported": "A recovery email cannot currently be removed.",
+    "pictureUrl": "Enter an HTTP(S) URL of at most 2,048 bytes."
   },
   "form": {
     "noChanges": "No changes to save.",
@@ -324,6 +349,8 @@
     "manageParticipants": "Manage participants",
     "checkIn": "Check in",
     "withdraw": "Withdraw",
+    "removeParticipant": "Remove",
+    "confirmSelfWithdrawal": "Withdraw from this tournament?",
     "emptyParticipants": "No participants yet.",
     "emptyRanking": "Rankings are not available yet.",
     "emptyRules": "No scoring rules configured.",
@@ -370,6 +397,24 @@
       "participantType": "Participant type",
       "team": "Team",
       "teamSize": "Players per team",
+      "teamMinStarters": "Minimum starters",
+      "teamMaxStarters": "Maximum starters",
+      "teamMaxSubstitutes": "Maximum substitutes",
+      "teamComposition": "Team composition",
+      "mode": "Tournament mode",
+      "location": "Location",
+      "visibility": "Visibility",
+      "rules": "Rules",
+      "owner": "Owner",
+      "registrationPolicy": "Registration policy",
+      "waitingList": "Waiting list",
+      "checkInOpen": "Check-in opens",
+      "checkInClose": "Check-in closes",
+      "fieldKey": "Field key",
+      "fieldLabel": "Field label",
+      "fieldType": "Field type",
+      "fieldOptions": "Options (comma-separated)",
+      "required": "Required",
       "maxParticipants": "Maximum participants",
       "teamScoringMode": "Team scoring",
       "teamScoringN": "Scored team members"
@@ -387,7 +432,10 @@
       "teamCapacityHelp": "Maximum number of registered teams.",
       "scoring": "Team scoring",
       "scoringHelp": "Optional aggregation of affiliated solo players for team rankings.",
-      "topNHelp": "Number of highest-scoring affiliated players to include."
+      "topNHelp": "Number of highest-scoring affiliated players to include.",
+      "registrationFields": "Registration form",
+      "registrationFieldsHelp": "Ask participants for the information required to enter the tournament.",
+      "addRegistrationField": "Add registration field"
     },
     "status": {
       "draft": "Draft",
@@ -404,7 +452,11 @@
       "registered": "Registered",
       "checked_in": "Checked in",
       "disqualified": "Disqualified",
-      "withdrawn": "Withdrawn"
+      "withdrawn": "Withdrawn",
+      "pending": "Pending approval",
+      "rejected": "Rejected",
+      "waitlisted": "Waiting list",
+      "absent": "Absent"
     },
     "teamScoring": {
       "none": "No team ranking",
@@ -449,7 +501,58 @@
       "soloWithoutTeam": "Your account will be registered without a team affiliation.",
       "unavailable": "Registration is not currently available for this tournament.",
       "success": "Registration completed successfully.",
-      "checkedIn": "Check-in completed successfully."
+      "checkedIn": "Check-in completed successfully.",
+      "waitingPosition": "Waiting-list position: {{position}}",
+      "approve": "Approve",
+      "reject": "Reject",
+      "promote": "Promote waiting list",
+      "closeCheckIn": "Close check-in",
+      "checkInAvailable": "Check-in is open now.",
+      "checkInUpcoming": "Check-in has not opened yet.",
+      "checkInClosed": "The check-in deadline has passed."
+    },
+    "mode": {
+      "online": "Online",
+      "in_person": "In person",
+      "hybrid": "Hybrid"
+    },
+    "visibility": { "public": "Public", "invitation_only": "Invitation only" },
+    "registrationPolicy": {
+      "open": "Open registration",
+      "approval_required": "Administrator approval"
+    },
+    "fieldType": {
+      "text": "Text",
+      "number": "Number",
+      "select": "Choice",
+      "boolean": "Yes / No"
+    },
+    "role": { "admin": "Administrator", "referee": "Referee" },
+    "management": {
+      "title": "Tournament management",
+      "team": "Owner and management team",
+      "owner": "Owner",
+      "userId": "User",
+      "assign": "Assign role",
+      "transfer": "Transfer ownership",
+      "transferConfirm": "Transfer tournament ownership to this user?",
+      "invitations": "Invitations",
+      "invite": "Invite user",
+      "reuse": "Duplicate or reuse",
+      "copyName": "Name for the new tournament or template",
+      "duplicate": "Duplicate tournament",
+      "saveTemplate": "Save as template",
+      "useTemplate": "Create from {{name}}"
+    },
+    "public": {
+      "title": "Public tournaments",
+      "help": "View schedules, participants and rankings without an account.",
+      "browse": "Browse public tournaments",
+      "backToLogin": "Back to sign in",
+      "detailsAction": "View tournament",
+      "viewDetails": "View {{name}}",
+      "empty": "No public tournaments are available yet.",
+      "matches": "{{count}} matches"
     },
     "scoringMode": {
       "linear": "Linear",
@@ -462,6 +565,9 @@
       "dates": "Enter valid dates in chronological order.",
       "capacity": "Enter a maximum from 1 to 10,000.",
       "teamSize": "Enter a team size from 1 to 100.",
+      "location": "Enter a location for an in-person or hybrid tournament.",
+      "checkIn": "Enter a valid check-in window.",
+      "registrationFields": "Complete each registration field with a unique key and valid options.",
       "topN": "Enter a scored member count from 1 to 100.",
       "scoring": "Select a game statistic and enter a valid coefficient or non-empty numeric JSON table.",
       "fileFormat": "Choose a JSON or CSV file.",

@@ -7,7 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Text } from '@/components/ui/text';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { useAuth } from '@/features/auth/session';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 import { useGameResource } from '@/features/games/use-game-resource';
 import { listSteps } from '@/features/steps/api';
 import { stepErrorKey } from '@/features/steps/errors';
@@ -18,8 +18,8 @@ import { useTranslation } from '@/i18n';
 
 export default function TournamentStepsScreen() {
   const { t } = useTranslation();
-  const { user } = useAuth();
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
+  const { canManage } = useTournamentAccess(tournamentId);
   const insets = useSafeAreaInsets();
   const load = useCallback(
     async (accessToken: string) => {
@@ -58,8 +58,7 @@ export default function TournamentStepsScreen() {
   }
 
   const editable =
-    user?.role === 'admin' &&
-    ['draft', 'registration'].includes(data.tournament.status);
+    canManage && ['draft', 'registration'].includes(data.tournament.status);
   const chainProblems = stepChainProblems(data.tournament, data.steps);
 
   return (

@@ -13,7 +13,9 @@ use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
 use crate::mail::{Mailer, NoopMailer};
 use crate::match_io::InSteps;
+use crate::notifications::{Catalog, DEFAULT_RETRY_DELAY};
 use crate::password_reset::{email_error, normalize_email};
+use crate::push::{NoopPush, PushSender};
 use crate::stat_io::StoreStats;
 use crate::step_io::StoreSteps;
 use crate::store::{AuthStore, Role, StoreError, UserRecord};
@@ -67,6 +69,12 @@ pub struct AppState {
     pub(crate) public_url: Arc<str>,
     /// Événements d'inscription et de pointage ; par défaut ignorés (voir [`crate::events`]).
     pub(crate) events: Arc<dyn EventSink>,
+    /// Envoi des notifications push ; par défaut [`NoopPush`] (canal ignoré).
+    pub(crate) push: Arc<dyn PushSender>,
+    /// Types d'événements du moteur de notifications.
+    pub(crate) catalog: Arc<Catalog>,
+    /// Attente entre deux essais d'une livraison de notification.
+    pub(crate) retry_delay: std::time::Duration,
 }
 
 impl AppState {
@@ -87,12 +95,33 @@ impl AppState {
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
             events: Arc::new(NoopEvents),
+            push: Arc::new(NoopPush),
+            catalog: Arc::new(Catalog::builtin()),
+            retry_delay: DEFAULT_RETRY_DELAY,
         })
     }
 
     /// Branche la destination des événements d'inscription et de pointage.
     pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
         self.events = events;
+        self
+    }
+
+    /// Branche l'envoi des notifications push (Expo en production).
+    pub fn with_push(mut self, push: Arc<dyn PushSender>) -> Self {
+        self.push = push;
+        self
+    }
+
+    /// Remplace le catalogue des événements, pour y enregistrer ceux d'une nouvelle fonction.
+    pub fn with_catalog(mut self, catalog: Catalog) -> Self {
+        self.catalog = Arc::new(catalog);
+        self
+    }
+
+    /// Règle l'attente entre deux essais d'une livraison de notification.
+    pub fn with_retry_delay(mut self, delay: std::time::Duration) -> Self {
+        self.retry_delay = delay;
         self
     }
 
@@ -164,6 +193,8 @@ struct RegisterRequest {
     #[serde(default)]
     #[schema(required = true, max_length = 254, format = Email, example = "alice@example.com")]
     email: String,
+    /// Preferred language for account emails; defaults to French.
+    language: Option<crate::store::Language>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -262,6 +293,19 @@ async fn register(
             StoreError::EmailTaken => ApiError::EmailTaken,
             other => ApiError::internal(other),
         })?;
+    if let Some(language) = request.language {
+        state
+            .store
+            .update_user_settings(
+                user.id,
+                crate::store::UserSettingsUpdate {
+                    language: Some(language),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(ApiError::internal)?;
+    }
     crate::verification::send(&state, email, token, Some(user.username.clone()));
     Ok(HttpResponse::Created().json(RegisterResponse {
         id: user.id,
@@ -563,6 +607,7 @@ mod tests {
             email: None,
             email_verified_at: None,
             pending_email: None,
+            picture_url: None,
         };
         let response = token_response(&config, &user, "r".into()).unwrap();
         let claims = decode_access_token(&response.access_token, secret).unwrap();

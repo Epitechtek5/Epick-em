@@ -74,7 +74,14 @@ pub fn send(state: &AppState, email: String, token: String, welcome: Option<Stri
         state.public_url.trim_end_matches('/')
     );
     actix_web::rt::spawn(async move {
-        if let Err(err) = mailer.send_verification(&email, &link).await {
+        let language = match store.find_user_by_verification_email(&email).await {
+            Ok(Some(user)) => match store.user_settings(user.id).await {
+                Ok(Some(settings)) => settings.language,
+                _ => crate::store::Language::Fr,
+            },
+            _ => crate::store::Language::Fr,
+        };
+        if let Err(err) = mailer.send_verification(&email, &link, language).await {
             eprintln!("api-public: verification email delivery failed: {err}");
         } else if welcome.is_none()
             && store
@@ -85,7 +92,7 @@ pub fn send(state: &AppState, email: String, token: String, welcome: Option<Stri
             eprintln!("api-public: could not activate replacement verification link");
         }
         if let Some(username) = welcome
-            && let Err(err) = mailer.send_welcome(&email, &username).await
+            && let Err(err) = mailer.send_welcome(&email, &username, language).await
         {
             eprintln!("api-public: welcome email delivery failed: {err}");
         }

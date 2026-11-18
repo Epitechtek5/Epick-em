@@ -22,6 +22,7 @@ import {
   checkInParticipant,
   deleteTournament,
   getTournament,
+  listTournamentRoles,
   removeParticipant,
   setTournamentStatus,
   updateParticipantStatus,
@@ -35,6 +36,7 @@ import type {
 } from '@/features/tournaments/types';
 import { allowedTransitions } from '@/features/tournaments/validation';
 import { useTranslation } from '@/i18n';
+import { getUser } from '@/features/users/api';
 
 export default function TournamentDetailsScreen() {
   const { t, i18n } = useTranslation();
@@ -46,9 +48,13 @@ export default function TournamentDetailsScreen() {
   const load = useCallback(
     async (accessToken: string) => {
       const tournament = await getTournament(accessToken, tournamentId);
-      const [game, participants] = await Promise.all([
+      const [game, participants, roles, owner] = await Promise.all([
         getGame(accessToken, tournament.game_id).catch(() => null),
         listAllTournamentParticipants(accessToken, tournamentId),
+        listTournamentRoles(accessToken, tournamentId).catch(() => null),
+        tournament.owner_id
+          ? getUser(accessToken, tournament.owner_id).catch(() => null)
+          : Promise.resolve(null),
       ]);
       const teamIds = [
         ...new Set(
@@ -72,12 +78,14 @@ export default function TournamentDetailsScreen() {
       );
       return {
         tournament,
+        ownerName: owner?.username,
         gameName: game?.name ?? tournament.game_id,
         participants,
         teamRegistrations: teamRegistrations.filter(
           (registration) => registration !== null,
         ),
         loadedAt: Date.now(),
+        roles,
       };
     },
     [tournamentId],
@@ -105,7 +113,7 @@ export default function TournamentDetailsScreen() {
   }
 
   async function transition(status: TournamentStatus) {
-    if (!token || user?.role !== 'admin') return;
+    if (!token) return;
     await mutate(
       () => setTournamentStatus(token, tournamentId, status),
       (caught) =>
@@ -139,7 +147,7 @@ export default function TournamentDetailsScreen() {
         text: t('common.delete'),
         style: 'destructive',
         onPress: async () => {
-          if (!token || user?.role !== 'admin') return;
+          if (!token) return;
           try {
             await deleteTournament(token, tournamentId);
             router.replace('/(authenticated)/(tabs)/tournaments');
@@ -163,6 +171,12 @@ export default function TournamentDetailsScreen() {
   }
 
   const { tournament, participants, teamRegistrations, loadedAt } = data;
+  const canManage =
+    user?.role === 'admin' ||
+    data.roles?.owner_id === user?.id ||
+    data.roles?.roles.some(
+      (role) => role.user_id === user?.id && role.role === 'admin',
+    );
   const activeParticipants = participants.filter(
     (participant) =>
       participant.status === 'registered' ||
@@ -204,6 +218,11 @@ export default function TournamentDetailsScreen() {
     (!tournament.registration_close_at ||
       loadedAt <= Date.parse(tournament.registration_close_at));
   const isFull = activeParticipants.length >= tournament.max_participants;
+  const checkInOpen =
+    (!tournament.check_in_open_at ||
+      loadedAt >= Date.parse(tournament.check_in_open_at)) &&
+    (!tournament.check_in_close_at ||
+      loadedAt <= Date.parse(tournament.check_in_close_at));
 
   const routes = {
     participants: '/(authenticated)/tournaments/[tournamentId]/participants',
@@ -212,6 +231,7 @@ export default function TournamentDetailsScreen() {
     steps: '/(authenticated)/tournaments/[tournamentId]/steps',
     teams: '/(authenticated)/tournaments/[tournamentId]/teams',
     edit: '/(authenticated)/tournaments/[tournamentId]/edit',
+    management: '/(authenticated)/tournaments/[tournamentId]/management',
   } as const;
   function open(section: keyof typeof routes) {
     router.push({ pathname: routes[section], params: { tournamentId } });
@@ -318,12 +338,36 @@ export default function TournamentDetailsScreen() {
           label={t('tournaments.detailsSections.capacity')}
           value={`${activeParticipants.length} / ${tournament.max_participants}`}
         />
-        {tournament.team_size ? (
+        {tournament.team_min_starters ? (
           <InfoLine
-            label={t('tournaments.fields.teamSize')}
-            value={String(tournament.team_size)}
+            label={t('tournaments.fields.teamComposition')}
+            value={`${tournament.team_min_starters}–${tournament.team_max_starters}`}
           />
         ) : null}
+        <InfoLine
+          label={t('tournaments.fields.mode')}
+          value={t(`tournaments.mode.${tournament.mode}`)}
+        />
+        <InfoLine
+          label={t('tournaments.fields.visibility')}
+          value={t(`tournaments.visibility.${tournament.visibility}`)}
+        />
+        {tournament.location ? (
+          <InfoLine
+            label={t('tournaments.fields.location')}
+            value={tournament.location}
+          />
+        ) : null}
+        {tournament.rules ? (
+          <View className="gap-2">
+            <Text className="font-medium">{t('tournaments.fields.rules')}</Text>
+            <Text variant="muted">{tournament.rules}</Text>
+          </View>
+        ) : null}
+        <InfoLine
+          label={t('tournaments.fields.owner')}
+          value={data.ownerName ?? t('common.noData')}
+        />
         {tournament.participant_type === 'solo' ? (
           <InfoLine
             label={t('tournaments.fields.teamScoringMode')}
@@ -346,6 +390,7 @@ export default function TournamentDetailsScreen() {
         ) : null}
         {myRegistration?.status === 'registered' &&
         canActOnRegistration &&
+        checkInOpen &&
         tournament.status === 'registration' ? (
           <Button
             disabled={busy}
@@ -405,7 +450,7 @@ export default function TournamentDetailsScreen() {
         </CardContent>
       </Card>
 
-      {user?.role === 'admin' ? (
+      {canManage ? (
         <Card>
           <CardContent className="gap-2 pt-5">
             <View className="flex-row items-center gap-2">
@@ -425,6 +470,9 @@ export default function TournamentDetailsScreen() {
             </Button>
             <Button variant="outline" onPress={() => open('teams')}>
               <Text>{t('teams.tournamentTeams')}</Text>
+            </Button>
+            <Button variant="outline" onPress={() => open('management')}>
+              <Text>{t('tournaments.management.title')}</Text>
             </Button>
             {allowedTransitions(tournament.status).map((status) => (
               <Button

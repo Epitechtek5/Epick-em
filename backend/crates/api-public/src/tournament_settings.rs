@@ -2,8 +2,8 @@
 //! inscriptions, pointage) : corps des requêtes, validation et réponses aux champs d'inscription.
 
 use crate::store::{
-    FieldType, ParticipantType, RegistrationField, RegistrationPolicy, SettingsUpdate,
-    TournamentMode, TournamentSettings, Visibility,
+    FieldType, ParticipantType, RegistrationField, RegistrationPolicy, TournamentMode,
+    TournamentSettings, TournamentSettingsUpdate, Visibility,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournaments::nullable;
@@ -150,9 +150,9 @@ impl UpdateSettingsRequest {
 
     /// Les champs fournis par la requête, avec leur valeur validée dans `checked` (la
     /// configuration fusionnée puis nettoyée) : seuls ceux-là sont écrits en base.
-    pub fn to_update(&self, checked: &TournamentSettings) -> SettingsUpdate {
+    pub fn to_update(&self, checked: &TournamentSettings) -> TournamentSettingsUpdate {
         let composition = self.team_size.is_some();
-        SettingsUpdate {
+        TournamentSettingsUpdate {
             mode: self.mode.map(|_| checked.mode),
             location: self.location.as_ref().map(|_| checked.location.clone()),
             visibility: self.visibility.map(|_| checked.visibility),

@@ -23,14 +23,16 @@ import { matchApi } from '@/features/matches/api';
 import { statuses } from '@/features/matches/types';
 import { getTournament } from '@/features/tournaments/api';
 import { useTranslation } from '@/i18n';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 export default function StepDetailsScreen() {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const { tournamentId, stepId } = useLocalSearchParams<{
     tournamentId: string;
     stepId: string;
   }>();
+  const { canManage } = useTournamentAccess(tournamentId);
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -147,17 +149,16 @@ export default function StepDetailsScreen() {
 
   const { tournament, step, ranking, names, matches } = data;
   const editable =
-    user?.role === 'admin' &&
-    ['draft', 'registration'].includes(tournament.status);
+    canManage && ['draft', 'registration'].includes(tournament.status);
   const canStart =
-    user?.role === 'admin' &&
+    canManage &&
     tournament.status === 'ongoing' &&
     step.status === 'pending' &&
     !data.steps.some(
       (candidate) =>
         candidate.position < step.position && candidate.status !== 'finished',
     );
-  const canClose = user?.role === 'admin' && step.status === 'ongoing';
+  const canClose = canManage && step.status === 'ongoing';
 
   return (
     <ScrollView
@@ -299,7 +300,7 @@ export default function StepDetailsScreen() {
         )}
       </View>
 
-      {user?.role === 'admin' ? (
+      {canManage ? (
         <View className="gap-2">
           {editable ? (
             <>
