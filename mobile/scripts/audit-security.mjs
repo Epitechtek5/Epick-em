@@ -8,11 +8,19 @@ const exceptions = new Map([
   ['GHSA-86w9-cpqp-85rv', 'node-forge'],
   ['GHSA-rj75-hqrm-r3gf', 'postcss-selector-parser'],
 ]);
+// Explicitly authorized temporary acceptance; the vulnerability remains unfixed.
+const picomatchException = {
+  advisory: 'GHSA-fc5q-39xc-vjpf',
+  expiresAt: '2026-12-01T00:00:00Z',
+};
 const severities = ['info', 'low', 'moderate', 'high', 'critical'];
 const isObject = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-export function inspectAudit(result) {
+export function inspectAudit(result, now = new Date()) {
+  if (!Number.isFinite(now.getTime())) {
+    throw new Error('Invalid audit policy evaluation time');
+  }
   if (result.error || result.signal || ![0, 1].includes(result.status)) {
     throw new Error(
       `Audit execution failed: ${result.error?.message || result.signal || `exit ${result.status}`}`,
@@ -81,12 +89,26 @@ export function inspectAudit(result) {
             via.url,
           );
         const id = match?.[1];
+        const samePackage = via.name === name && via.dependency === name;
+        const isPicomatchException =
+          samePackage &&
+          name === 'picomatch' &&
+          id === picomatchException.advisory &&
+          via.severity === 'high' &&
+          via.range === '<=4.0.7';
+        const expiresAt = Date.parse(picomatchException.expiresAt);
+        const temporaryAcceptance =
+          isPicomatchException && now.getTime() < expiresAt;
         if (
-          exceptions.get(id) === name &&
-          via.name === name &&
-          via.dependency === name
+          (samePackage && exceptions.get(id) === name) ||
+          temporaryAcceptance
         ) {
-          accepted.add(`${name}: ${id}`);
+          accepted.add(
+            `${name}: ${id}` +
+              (temporaryAcceptance
+                ? ` (expires ${picomatchException.expiresAt}; vulnerability remains unfixed)`
+                : ''),
+          );
         } else {
           const advisoryId = id ?? via.url;
           const finding = {
@@ -96,6 +118,11 @@ export function inspectAudit(result) {
             affectedRange: via.range ?? entry.range,
             title: via.title,
             remediation: remediationFor(name, entry.fixAvailable),
+            ...(isPicomatchException && now.getTime() >= expiresAt
+              ? {
+                  reason: `Temporary exception expired at ${picomatchException.expiresAt}. Upgrade to a compatible fix or explicitly reassess the risk.`,
+                }
+              : {}),
           };
           unexpected.set(`${name}:${advisoryId}`, finding);
         }

@@ -7,6 +7,7 @@ mod games;
 mod matches;
 mod memory;
 mod postgres;
+mod settings;
 mod stats;
 mod steps;
 mod teams;
@@ -19,6 +20,10 @@ pub use self::matches::{
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
+pub use self::settings::{
+    Category, Channel, ChannelPreferences, Language, MAX_PUSH_TOKENS, Platform, PushToken,
+    SettingsUpdate, Theme, UserSettings, override_key,
+};
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::steps::{
     MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
@@ -87,6 +92,7 @@ pub struct UserRecord {
     pub email: Option<String>,
     pub pending_email: Option<String>,
     pub email_verified_at: Option<String>,
+    pub picture_url: Option<String>,
 }
 
 /// Vue publique d'un compte : jamais l'empreinte du mot de passe. C'est aussi la valeur mise en
@@ -96,6 +102,9 @@ pub struct UserProfile {
     pub id: Uuid,
     pub username: String,
     pub role: Role,
+    /// URL `http(s)` de la photo de profil.
+    #[serde(default)]
+    pub picture_url: Option<String>,
 }
 
 impl From<&UserRecord> for UserProfile {
@@ -104,6 +113,7 @@ impl From<&UserRecord> for UserProfile {
             id: user.id,
             username: user.username.clone(),
             role: user.role,
+            picture_url: user.picture_url.clone(),
         }
     }
 }
@@ -116,6 +126,8 @@ pub struct UserUpdate {
     pub role: Option<Role>,
     /// Adresse e-mail, en minuscules.
     pub email: Option<String>,
+    /// `Some(None)` efface la photo de profil.
+    pub picture_url: Option<Option<String>>,
 }
 
 #[derive(Debug)]
@@ -231,6 +243,12 @@ pub trait AuthStore: Send + Sync {
     /// Cherche un compte par adresse e-mail (en minuscules).
     async fn find_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, StoreError>;
 
+    /// Find the account targeted by a verification email, including pending addresses.
+    async fn find_user_by_verification_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserRecord>, StoreError>;
+
     async fn find_user_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, StoreError>;
 
     /// Profil public d'un compte (sans empreinte de mot de passe), éventuellement mis en cache.
@@ -246,6 +264,53 @@ pub trait AuthStore: Send + Sync {
         id: Uuid,
         update: UserUpdate,
     ) -> Result<Option<UserProfile>, StoreError>;
+
+    /// Réglages du compte, complétés par les valeurs par défaut ; `None` si le compte n'existe
+    /// pas.
+    async fn user_settings(&self, user_id: Uuid) -> Result<Option<UserSettings>, StoreError>;
+
+    /// Applique `update` (les préférences de notification fusionnent avec les existantes) et
+    /// renvoie les réglages complets ; `None` si le compte n'existe pas.
+    async fn update_user_settings(
+        &self,
+        user_id: Uuid,
+        update: SettingsUpdate,
+    ) -> Result<Option<UserSettings>, StoreError>;
+
+    /// Enregistre l'appareil ; un jeton déjà connu change de propriétaire (l'appareil a changé
+    /// de compte). `None` si le compte n'existe pas. Au-delà de [`MAX_PUSH_TOKENS`] appareils,
+    /// les plus anciens sont retirés.
+    async fn register_push_token(
+        &self,
+        user_id: Uuid,
+        token: &str,
+        platform: Platform,
+    ) -> Result<Option<PushToken>, StoreError>;
+
+    async fn list_push_tokens(&self, user_id: Uuid) -> Result<Vec<PushToken>, StoreError>;
+
+    /// Révoque l'appareil s'il appartient à `user_id` ; `false` sinon.
+    async fn revoke_push_token(&self, user_id: Uuid, token: &str) -> Result<bool, StoreError>;
+
+    /// Retire un jeton refusé par le service de push, quel que soit son propriétaire.
+    async fn remove_push_token(&self, token: &str) -> Result<(), StoreError>;
+
+    /// Réserve la livraison `(event_key, user_id, channel)` ; `false` si elle l'est déjà
+    /// (événement en double).
+    async fn claim_notification(
+        &self,
+        event_key: &str,
+        user_id: Uuid,
+        channel: Channel,
+    ) -> Result<bool, StoreError>;
+
+    /// Libère la réservation après un échec de livraison, pour qu'un nouvel envoi soit possible.
+    async fn release_notification(
+        &self,
+        event_key: &str,
+        user_id: Uuid,
+        channel: Channel,
+    ) -> Result<(), StoreError>;
 
     /// Supprime le compte (et ses jetons de rafraîchissement) ; `false` s'il n'existait pas.
     async fn delete_user(&self, id: Uuid) -> Result<bool, StoreError>;

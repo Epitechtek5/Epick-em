@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import { en } from './en'
+import { es } from './es'
 import { fr, type Messages } from './fr'
-import { I18nContext, type I18nValue, type Lang, type MessageKey, type Params } from './context'
+import { I18nContext, isLang, type I18nValue, type Lang, type MessageKey, type Params } from './context'
 import { translate } from './translate'
 
 const STORAGE_KEY = 'epickem-lang'
-const DICTIONARIES: Record<Lang, Messages> = { fr, en }
+const DICTIONARIES: Record<Lang, Messages> = { fr, en, es }
 
 function readInitialLang(): Lang {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored === 'fr' || stored === 'en') return stored
+    if (isLang(stored)) return stored
   } catch {
     // stockage indisponible : langue par défaut
   }
