@@ -788,5 +788,63 @@
     "denied": "Impossible de confirmer ces identifiants pour un compte sans e-mail.",
     "verified": "Adresse vérifiée",
     "unverified": "Adresse non vérifiée"
+  },
+  "importPreview": {
+    "title": "Vérifier l’import",
+    "intro": "Choisissez un fichier, examinez les changements prévus, puis confirmez.",
+    "readOnly": "Aucune donnée n’a été modifiée. Annuler laisse les données enregistrées intactes.",
+    "fileInfo": "{{format}} · {{size}} Kio",
+    "expires": "Cet aperçu est valable au maximum {{minutes}} minutes.",
+    "destructive": "Des données existantes seront remplacées ou supprimées. Vérifiez toutes les ressources concernées avant de confirmer.",
+    "consent": "J’ai vérifié les remplacements et les suppressions de données existantes.",
+    "confirm": "Confirmer l’import",
+    "changeFile": "Choisir un autre fichier",
+    "refresh": "Actualiser l’aperçu",
+    "invalid": "Corrigez le fichier et générez un nouvel aperçu avant de confirmer.",
+    "success": "Import terminé",
+    "verify": "Vérifier les tournois",
+    "view": "Voir les tournois",
+    "show": "Afficher",
+    "hide": "Masquer",
+    "more_one": "Afficher la suite ({{count}} restant)",
+    "more_other": "Afficher la suite ({{count}} restants)",
+    "seed": "Tête de série n° {{seed}}",
+    "unseeded": "Aucune tête de série manuelle",
+    "rank": "Rang {{rank}}",
+    "progression": "Le vainqueur avance vers le match {{number}}",
+    "placements": "Têtes de série, placement et résultats",
+    "matchResults_one": "Résultats ({{count}} match)",
+    "matchResults_other": "Résultats ({{count}} matchs)",
+    "impacts": "Conséquences en aval",
+    "countChange": "Avant : {{before}} → Après : {{after}}",
+    "serverDetail": "Détails du serveur : {{detail}}",
+    "serverLanguage": "Les diagnostics ci-dessous sont fournis par le serveur dans leur langue d’origine.",
+    "detailsUnavailable": "Ce serveur fournit uniquement les totaux par ressource ; le détail des placements et des résultats n’est pas disponible.",
+    "resourceCounts": "Nombre d’opérations prévues par catégorie de ressources, et non nombre d’enregistrements individuels.",
+    "validationErrors_one": "{{count}} erreur de validation",
+    "validationErrors_other": "{{count}} erreurs de validation",
+    "warnings_one": "{{count}} avertissement",
+    "warnings_other": "{{count}} avertissements",
+    "states": {
+      "loading": "Préparation de l’aperçu…",
+      "applying": "Application de l’import confirmé…",
+      "stale": "Les données ont changé depuis cet aperçu. Rien n’a été importé. Générez un nouvel aperçu et vérifiez à nouveau les changements.",
+      "expired": "Cet aperçu a expiré ou n’est plus disponible. Générez un nouvel aperçu avant de confirmer.",
+      "unknown": "La connexion a été perdue pendant la confirmation. L’import a peut-être déjà été appliqué. Vérifiez les tournois avant de lancer un autre import ; la confirmation ne sera pas renvoyée automatiquement."
+    },
+    "actions": {
+      "create": "Création",
+      "update": "Mise à jour",
+      "replace": "Remplacement",
+      "delete": "Suppression"
+    },
+    "resources": {
+      "tournament": "Tournoi",
+      "scoring_rules": "Barème",
+      "participants": "Participants",
+      "teams": "Équipes",
+      "steps": "Étapes",
+      "matches": "Matchs"
+    }
   }
 }

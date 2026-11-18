@@ -63,6 +63,110 @@ pub(super) struct TournamentChanges {
     changes: Vec<ResourceChange>,
     /// Conséquences en aval : résultats traités, classements recalculés, données écrasées.
     downstream: Vec<String>,
+    /// Server-planned placements and results; clients must not recalculate them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<StepPreview>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct StepPreview {
+    position: i32,
+    status: String,
+    groups: Vec<GroupPreview>,
+    matches: Vec<MatchPreview>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct GroupPreview {
+    index: usize,
+    participants: Vec<PlacementPreview>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct PlacementPreview {
+    name: String,
+    seed: Option<i32>,
+    points: f64,
+    rank: Option<i32>,
+    status: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct MatchPreview {
+    /// One-based position in the stage's import plan.
+    index: usize,
+    status: String,
+    next: Option<usize>,
+    participants: Vec<ResultPreview>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct ResultPreview {
+    name: String,
+    points: f64,
+    rank: Option<i32>,
+    result: Option<String>,
+}
+
+fn step_previews(plan: &TournamentPlan, users: &HashMap<String, Uuid>) -> Vec<StepPreview> {
+    let names: HashMap<Uuid, &str> = users
+        .iter()
+        .map(|(name, id)| (*id, name.as_str()))
+        .collect();
+    let name_of = |entrant: &Entrant| match entrant {
+        Entrant::User(id) => names
+            .get(id)
+            .map_or_else(|| id.to_string(), |name| (*name).to_string()),
+        Entrant::Team(index) => plan
+            .teams
+            .get(*index)
+            .map_or_else(|| index.to_string(), |team| team.name.clone()),
+    };
+    plan.steps
+        .iter()
+        .map(|step| StepPreview {
+            position: step.definition.position,
+            status: step.status.as_str().to_string(),
+            groups: step
+                .groups
+                .iter()
+                .enumerate()
+                .map(|(index, group)| GroupPreview {
+                    index: index + 1,
+                    participants: group
+                        .iter()
+                        .map(|member| PlacementPreview {
+                            name: name_of(&member.who),
+                            seed: member.seed,
+                            points: member.points,
+                            rank: member.final_rank,
+                            status: member.status.as_str().to_string(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            matches: step
+                .matches
+                .iter()
+                .enumerate()
+                .map(|(index, found)| MatchPreview {
+                    index: index + 1,
+                    status: found.status.as_str().to_string(),
+                    next: found.next.map(|next| next + 1),
+                    participants: found
+                        .participants
+                        .iter()
+                        .map(|entry| ResultPreview {
+                            name: name_of(&entry.who),
+                            points: entry.points,
+                            rank: entry.rank,
+                            result: entry.result.map(|result| result.as_str().to_string()),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// Aperçu d'un import : rien n'a été écrit.
@@ -516,6 +620,10 @@ pub(super) async fn analyze(
             destructive: replaces,
             changes: list,
             downstream,
+            steps: plans
+                .get(index)
+                .filter(|_| atomic)
+                .map(|plan| step_previews(plan, &item.plan_scope.users)),
         });
     }
 
