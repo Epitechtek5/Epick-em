@@ -36,7 +36,7 @@ export function TournamentCard({ tournament, gameName, gameImage }: TournamentCa
         <div className="grid gap-1">
           <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-primary uppercase dark:text-violet-300">
             <Icon icon={GameController03Icon} size={14} />
-            <span className="sr-only">{t('tournaments.game')} :</span>
+            <span className="sr-only">{t('tournaments.game')}{t('common.colon')}</span>
             <span className="truncate">{gameName}</span>
           </p>
           <h2 className="text-lg leading-snug font-semibold break-words">

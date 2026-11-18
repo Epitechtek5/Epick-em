@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/card'
 import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useI18n, type MessageKey } from '@/i18n/context'
+import { getSignOutReason, type SignOutReason } from '@/lib/auth/session'
 import { ApiError, NetworkError } from '@/lib/api/client'
 import { getErrorCode, getFieldErrors } from '@/lib/api/errors'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -41,12 +42,20 @@ export interface LoginLocationState {
 
 const linkClass = 'text-primary underline underline-offset-2'
 
+const SIGN_OUT_MESSAGES: Record<SignOutReason, MessageKey> = {
+  expired: 'auth.login.sessionExpired',
+  accountDeleted: 'auth.login.accountDeleted',
+  passwordChanged: 'auth.login.passwordChanged',
+}
+
 export default function LoginPage() {
   const { t } = useI18n()
   useDocumentTitle(t('auth.login.title'))
   const { login } = useAuth()
   const location = useLocation()
   const state = (location.state ?? {}) as LoginLocationState
+  // Déconnexion subie (session expirée, compte supprimé…) : motif expliqué.
+  const signOutReason = getSignOutReason()
   const form = useFormErrors<LoginField>()
   const { summaryRef } = form
 
@@ -120,6 +129,11 @@ export default function LoginPage() {
               </p>
               {state.email ? <ResendVerification email={state.email} /> : null}
             </div>
+          ) : null}
+          {signOutReason ? (
+            <p role="status" className="rounded-lg border border-primary p-4 text-sm">
+              {t(SIGN_OUT_MESSAGES[signOutReason])}
+            </p>
           ) : null}
           {state.passwordReset ? (
             <p role="status" className="rounded-lg border border-primary p-4 text-sm">

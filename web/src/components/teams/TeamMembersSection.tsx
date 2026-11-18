@@ -6,6 +6,7 @@ import { StateMessage } from '@/components/games/StateMessage'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Label } from '@/components/ui/label'
+import { UserAvatar } from '@/components/users/UserAvatar'
 import { NativeSelect } from '@/components/ui/native-select'
 import {
   addTeamMember,
@@ -23,7 +24,7 @@ import { ASSIGNABLE_ROLES, type AssignableTeamRole, type TeamRole } from '@/feat
 import { isUuid } from '@/features/teams/validation'
 import { listAllUsers } from '@/features/users/api'
 import { useAsyncResource } from '@/hooks/use-async-resource'
-import { useUsernames } from '@/hooks/use-usernames'
+import { useUserProfiles } from '@/hooks/use-usernames'
 import { useI18n, type MessageKey, type Params } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 
@@ -83,8 +84,8 @@ export function TeamMembersSection({ scope, teamId, ownerId, canManage }: TeamMe
   const members = state.status === 'success' ? state.data : []
   const active = members.filter((member) => !member.left_at)
   const former = members.filter((member) => member.left_at)
-  const names = useUsernames(members.map((member) => member.user_id))
-  const nameOf = (userId: string) => names[userId] ?? t('teams.unknownUser')
+  const profiles = useUserProfiles(members.map((member) => member.user_id))
+  const nameOf = (userId: string) => profiles[userId]?.username ?? t('teams.unknownUser')
 
   const date = (value?: string | null) => {
     if (!value) return ''
@@ -155,12 +156,15 @@ export function TeamMembersSection({ scope, teamId, ownerId, canManage }: TeamMe
                 key={member.user_id}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 ring-1 ring-foreground/10"
               >
-                <div className="grid">
-                  <span className="font-medium">{name}</span>
-                  <span className="text-sm text-muted-foreground">
-                    {t('teams.members.role')} : {t(teamRoleLabelKey(member.role))}
-                    {member.joined_at ? ` · ${t('teams.members.joined', { date: date(member.joined_at) })}` : ''}
-                  </span>
+                <div className="flex items-center gap-3">
+                  <UserAvatar src={profiles[member.user_id]?.picture_url} name={name} decorative />
+                  <div className="grid">
+                    <span className="font-medium">{name}</span>
+                    <span className="text-sm text-muted-foreground">
+                      {t('teams.members.role')}{t('common.colon')} {t(teamRoleLabelKey(member.role))}
+                      {member.joined_at ? ` · ${t('teams.members.joined', { date: date(member.joined_at) })}` : ''}
+                    </span>
+                  </div>
                 </div>
                 {canManage && !isOwner ? (
                   <div className="flex flex-wrap gap-2">

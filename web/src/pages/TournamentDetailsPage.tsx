@@ -170,14 +170,14 @@ export default function TournamentDetailsPage() {
                 <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-white/90">
                   <span className="inline-flex items-center gap-1.5">
                     <Icon icon={GameController03Icon} />
-                    <span className="sr-only">{t('tournaments.game')} :</span>
+                    <span className="sr-only">{t('tournaments.game')}{t('common.colon')}</span>
                     <Link to={`/games/${tournament.game_id}`} className="font-semibold underline underline-offset-4 hover:text-white">
                       {gameName}
                     </Link>
                   </span>
                   <span className="inline-flex items-center gap-1.5">
                     <Icon icon={Calendar03Icon} />
-                    <span className="sr-only">{t('tournaments.dates')} :</span>
+                    <span className="sr-only">{t('tournaments.dates')}{t('common.colon')}</span>
                     {formatDateRange(lang, tournament.start_date, tournament.end_date)}
                   </span>
                 </p>
@@ -189,16 +189,16 @@ export default function TournamentDetailsPage() {
 
             <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <FactTile icon={Calendar03Icon} label={t('tournaments.dates')}>
-                <span className="block">{t('tournaments.startDate')} : {formatDateTime(lang, tournament.start_date)}</span>
-                <span className="block">{t('tournaments.endDate')} : {formatDateTime(lang, tournament.end_date)}</span>
+                <span className="block">{t('tournaments.startDate')}{t('common.colon')} {formatDateTime(lang, tournament.start_date)}</span>
+                <span className="block">{t('tournaments.endDate')}{t('common.colon')} {formatDateTime(lang, tournament.end_date)}</span>
               </FactTile>
               <FactTile icon={Clock01Icon} label={t('tournaments.registrationWindow')}>
                 <span className="block">
-                  {t('tournaments.registrationOpen')} :{' '}
+                  {t('tournaments.registrationOpen')}{t('common.colon')}{' '}
                   {tournament.registration_open_at ? formatDateTime(lang, tournament.registration_open_at) : notSet}
                 </span>
                 <span className="block">
-                  {t('tournaments.registrationClose')} :{' '}
+                  {t('tournaments.registrationClose')}{t('common.colon')}{' '}
                   {tournament.registration_close_at ? formatDateTime(lang, tournament.registration_close_at) : notSet}
                 </span>
               </FactTile>
@@ -249,7 +249,7 @@ export default function TournamentDetailsPage() {
                 </>
               ) : null}
               <span className="ml-auto font-mono text-xs text-muted-foreground">
-                <span className="font-sans">{t('tournaments.identifier')} : </span>
+                <span className="font-sans">{t('tournaments.identifier')}{t('common.colon')} </span>
                 <span className="break-all">{tournament.id}</span>
               </span>
             </div>
