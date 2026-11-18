@@ -516,10 +516,7 @@
       "in_person": "Sur place",
       "hybrid": "Hybride"
     },
-    "visibility": {
-      "public": "Public",
-      "invitation_only": "Sur invitation"
-    },
+    "visibility": { "public": "Public", "invitation_only": "Sur invitation" },
     "registrationPolicy": {
       "open": "Inscription ouverte",
       "approval_required": "Approbation administrateur"
@@ -530,10 +527,7 @@
       "select": "Choix",
       "boolean": "Oui / Non"
     },
-    "role": {
-      "admin": "Administrateur",
-      "referee": "Arbitre"
-    },
+    "role": { "admin": "Administrateur", "referee": "Arbitre" },
     "management": {
       "title": "Gestion du tournoi",
       "team": "Propriétaire et équipe de gestion",

@@ -10,7 +10,7 @@
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
 use crate::store::{RoleAssignment, RoleAuditEntry, TournamentInvitation, TournamentRole};
-use crate::tournament_access::{require_manage, require_owner};
+use crate::tournament_access::{Capacity, require_manage, require_owner, require_visible};
 use crate::tournaments::find_tournament;
 use actix_web::{HttpResponse, delete, get, post, put, web};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,8 @@ use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
 
 pub fn routes(cfg: &mut ServiceConfig) {
-    cfg.service(list_roles)
+    cfg.service(my_access)
+        .service(list_roles)
         .service(assign_role)
         .service(revoke_role)
         .service(transfer_ownership)
@@ -37,6 +38,26 @@ struct Roles {
     roles: Vec<RoleAssignment>,
 }
 
+/// Ce que l'appelant peut faire sur le tournoi : les clients affichent ou masquent les actions
+/// d'après cette réponse (le serveur vérifie toujours chaque requête).
+#[derive(Serialize, ToSchema)]
+struct MyAccess {
+    /// Rôle propre au tournoi : `owner`, `admin`, `referee`, ou `null`.
+    #[schema(value_type = Option<String>, example = "admin")]
+    role: Option<&'static str>,
+    /// Administrateur global (droits sur tous les tournois).
+    global_admin: bool,
+    /// Modifier le tournoi, gérer les inscriptions et la liste d'attente.
+    can_manage: bool,
+    /// Pointer les inscrits et arbitrer.
+    can_referee: bool,
+    /// Désigner les administrateurs et arbitres, transférer la propriété.
+    can_assign_roles: bool,
+    /// Dupliquer le tournoi et en faire un modèle (création réservée aux administrateurs
+    /// globaux).
+    can_duplicate: bool,
+}
+
 #[derive(Deserialize, ToSchema)]
 struct RoleRequest {
     role: TournamentRole,
@@ -46,6 +67,41 @@ struct RoleRequest {
 struct TransferRequest {
     /// Nouveau propriétaire.
     user_id: Uuid,
+}
+
+/// Droits de l'appelant sur le tournoi (tout compte qui voit le tournoi).
+#[utoipa::path(
+    get,
+    path = "/tournaments/{id}/access",
+    tag = "tournament-roles",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Identifiant du tournoi")),
+    responses(
+        (status = 200, description = "Droits de l'appelant", body = MyAccess),
+        (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
+        (status = 404, description = "Tournoi introuvable ou non visible", body = ErrorResponse),
+    ),
+)]
+#[get("/tournaments/{id}/access")]
+async fn my_access(
+    state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
+    id: web::Path<Uuid>,
+) -> Result<HttpResponse, ApiError> {
+    let tournament = find_tournament(&state, id.into_inner()).await?;
+    let access = require_visible(&state, &claims, &tournament).await?;
+    Ok(HttpResponse::Ok().json(MyAccess {
+        role: access.capacity.map(|capacity| match capacity {
+            Capacity::Owner => "owner",
+            Capacity::Admin => "admin",
+            Capacity::Referee => "referee",
+        }),
+        global_admin: access.global_admin,
+        can_manage: access.can_manage(),
+        can_referee: access.can_referee(),
+        can_assign_roles: access.is_owner(),
+        can_duplicate: access.global_admin,
+    }))
 }
 
 /// Propriétaire, administrateurs et arbitres du tournoi (organisateurs).

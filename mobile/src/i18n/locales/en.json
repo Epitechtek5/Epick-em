@@ -516,10 +516,7 @@
       "in_person": "In person",
       "hybrid": "Hybrid"
     },
-    "visibility": {
-      "public": "Public",
-      "invitation_only": "Invitation only"
-    },
+    "visibility": { "public": "Public", "invitation_only": "Invitation only" },
     "registrationPolicy": {
       "open": "Open registration",
       "approval_required": "Administrator approval"
@@ -530,10 +527,7 @@
       "select": "Choice",
       "boolean": "Yes / No"
     },
-    "role": {
-      "admin": "Administrator",
-      "referee": "Referee"
-    },
+    "role": { "admin": "Administrator", "referee": "Referee" },
     "management": {
       "title": "Tournament management",
       "team": "Owner and management team",

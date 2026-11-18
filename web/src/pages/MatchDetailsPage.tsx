@@ -53,6 +53,7 @@ import { getTournament, listScoringRules } from '@/features/tournaments/api'
 import { formatDateTime, formatPoints } from '@/features/tournaments/format'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { useTournamentAccess } from '@/hooks/use-tournament-access'
 import { useParticipantIdentities, type Identity } from '@/hooks/use-participant-identities'
 import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n, type MessageKey, type Params } from '@/i18n/context'
@@ -116,7 +117,7 @@ function StatsCell({ participant, statName }: { participant: MatchParticipant; s
 export default function MatchDetailsPage() {
   const { tournamentId = '', stepId = '', matchId = '' } = useParams()
   const { t, lang } = useI18n()
-  const { isAdmin, refreshRole } = useAuth()
+  const { refreshRole } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(tournamentId) && isUuid(stepId) && isUuid(matchId)
@@ -145,6 +146,11 @@ export default function MatchDetailsPage() {
   const match = current?.match ?? loaded?.match ?? null
   const step = current?.step ?? loaded?.step ?? null
   const tournament = loaded?.tournament ?? null
+  // Droits fournis par le serveur : organisation (modifier, supprimer) et arbitrage (statut,
+  // résultats).
+  const { access } = useTournamentAccess(tournament)
+  const isAdmin = access.can_manage
+  const canReferee = access.can_referee
 
   const scoring = useAsyncResource(
     async (signal) => {
@@ -332,11 +338,11 @@ export default function MatchDetailsPage() {
               </FactTile>
               <FactTile icon={Flag02Icon} label={t('matches.timeline')}>
                 <span className="block font-normal">
-                  {t('matches.startedAt')} :{' '}
+                  {t('matches.startedAt')}{t('common.colon')}{' '}
                   {match.started_at ? <time dateTime={match.started_at}>{formatDateTime(lang, match.started_at)}</time> : '–'}
                 </span>
                 <span className="block font-normal">
-                  {t('matches.endedAt')} :{' '}
+                  {t('matches.endedAt')}{t('common.colon')}{' '}
                   {match.ended_at ? <time dateTime={match.ended_at}>{formatDateTime(lang, match.ended_at)}</time> : '–'}
                 </span>
               </FactTile>
@@ -481,7 +487,7 @@ export default function MatchDetailsPage() {
             id="match-lifecycle-title"
             icon={Flag02Icon}
             title={t('matches.lifecycle.title')}
-            subtitle={isAdmin ? t('matches.lifecycle.hint') : undefined}
+            subtitle={canReferee ? t('matches.lifecycle.hint') : undefined}
           >
             {match.status === 'finished' ? (
               <p className="flex items-start gap-2 rounded-xl bg-sky-50 px-4 py-3 text-sm font-medium text-sky-900 dark:bg-sky-500/15 dark:text-sky-100">
@@ -496,7 +502,7 @@ export default function MatchDetailsPage() {
             ) : (
               <p className="text-sm text-muted-foreground">{t('matches.lifecycle.flow')}</p>
             )}
-            {isAdmin && transitions.length > 0 ? (
+            {canReferee && transitions.length > 0 ? (
               <div className="grid gap-3 border-t pt-4">
                 {problem && transitions.some((target) => target !== 'cancelled') ? (
                   <p className="flex items-start gap-2 text-sm text-muted-foreground">
@@ -536,7 +542,7 @@ export default function MatchDetailsPage() {
             ) : null}
           </SectionCard>
 
-          {isAdmin && canEnterResults(step, match) ? (
+          {canReferee && canEnterResults(step, match) ? (
             <SectionCard id="match-results-title" icon={RankingIcon} title={t('matches.resultsTitle')}>
               {scoring.state.status === 'loading' ? <StateMessage kind="loading">{t('matches.loadingStats')}</StateMessage> : null}
               {scoring.state.status === 'error' ? (

@@ -2,5 +2,5 @@
 # Sans hash de commit pour rester valable après un rebase.
 backend/crates/api-public/tests/export_cache.rs:generic-api-key:35
 
-# Synthetic password-reset token used only with mocked fetch in a UI test.
+# False positive: synthetic reset token used by a frontend test in this historical commit.
 39519dcea9da752ac93546a1caca5d751eb13dfb:web/src/pages/ResetPasswordPage.test.tsx:generic-api-key:13

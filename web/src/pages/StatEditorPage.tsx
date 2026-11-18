@@ -1,6 +1,8 @@
+import { Analytics01Icon, ArrowLeft01Icon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
 import { StatForm } from '@/components/stats/StatForm'
 import { Button } from '@/components/ui/button'
@@ -10,6 +12,7 @@ import type { StatField, StatInput } from '@/features/stats/types'
 import { changedStatFields, statId } from '@/features/stats/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { Icon } from '@/components/ui/icon'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -84,10 +87,17 @@ export default function StatEditorPage() {
   }
 
   return (
-    <div className="grid w-full max-w-2xl gap-6 self-start">
-      <h1 className="text-3xl font-semibold tracking-tight">
-        {editing ? t('stats.edit') : t('stats.create')}
-      </h1>
+    <div className="grid w-full max-w-3xl gap-6 self-start">
+      <PageHero
+        icon={Analytics01Icon}
+        title={editing ? t('stats.edit') : t('stats.create')}
+        back={
+          <Link to="/stats" className={HERO_BACK}>
+            <Icon icon={ArrowLeft01Icon} size={16} />
+            {t('stats.returnToCatalog')}
+          </Link>
+        }
+      />
 
       {!valid ? (
         <StateMessage

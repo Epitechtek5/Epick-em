@@ -1,4 +1,11 @@
-import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Download04Icon, RefreshIcon } from '@hugeicons/core-free-icons'
+import {
+  Add01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Download04Icon,
+  RefreshIcon,
+  UserGroupIcon,
+} from '@hugeicons/core-free-icons'
 import { Link, useLocation, useSearchParams } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
@@ -18,6 +25,8 @@ import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
+import { EmptyState, HERO_ACTION, HERO_PRIMARY, PageHero } from '@/components/common/page-blocks'
+import { cn } from '@/lib/utils'
 
 function readPage(raw: string | null): number {
   const page = Number.parseInt(raw ?? '1', 10)
@@ -64,31 +73,30 @@ export default function TeamsPage() {
   }
 
   return (
-    <div className="grid w-full max-w-5xl gap-6 self-start">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="grid gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">{t('teams.title')}</h1>
-          <p className="text-muted-foreground">{t('teams.description')}</p>
-        </div>
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      <PageHero icon={UserGroupIcon} title={t('teams.title')} description={t('teams.description')}>
         <div className="flex flex-wrap gap-2" role="group" aria-label={t('teams.actions')}>
-          <Button variant="outline" onClick={reload} disabled={state.status === 'loading'}>
+          <Button variant="outline" className={HERO_ACTION} onClick={reload} disabled={state.status === 'loading'}>
             <Icon icon={RefreshIcon} />
             {t('teams.refresh')}
           </Button>
           {isAdmin ? (
-            <Link to="/teams/transfer" className={buttonVariants({ variant: 'outline' })}>
+            <Link to="/teams/transfer" className={cn(buttonVariants({ variant: 'outline' }), HERO_ACTION)}>
               <Icon icon={Download04Icon} />
               {t('teams.transfer')}
             </Link>
           ) : null}
-          <Link to="/teams/new" className={buttonVariants()}>
+          <Link to="/teams/new" className={cn(buttonVariants(), HERO_PRIMARY)}>
             <Icon icon={Add01Icon} />
             {t('teams.create')}
           </Link>
         </div>
-      </div>
+      </PageHero>
 
-      <div className="grid gap-1 sm:max-w-xs">
+      <div
+        className="grid gap-1 rounded-2xl bg-card p-4 shadow-sm ring-1 ring-foreground/10 sm:max-w-sm"
+        role="search"
+      >
         <Label htmlFor="teams-game-filter">{t('teams.filterByGame')}</Label>
         <NativeSelect
           id="teams-game-filter"
@@ -131,11 +139,11 @@ export default function TeamsPage() {
       ) : null}
 
       {state.status === 'success' && teams.length === 0 ? (
-        <StateMessage kind="empty">{gameFilter ? t('teams.emptyFiltered') : t('teams.empty')}</StateMessage>
+        <EmptyState icon={UserGroupIcon}>{gameFilter ? t('teams.emptyFiltered') : t('teams.empty')}</EmptyState>
       ) : null}
 
       {teams.length > 0 ? (
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label={t('teams.list')}>
+        <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-label={t('teams.list')}>
           {teams.map((team) => (
             <li key={team.id}>
               <TeamCard

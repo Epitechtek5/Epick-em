@@ -43,7 +43,7 @@ export function StepStatusBadge({ status, className }: { status: StepStatus; cla
       ) : (
         <Icon icon={STATUS_ICONS[status]} size={14} />
       )}
-      <span className="sr-only">{t('steps.statusLabel')} : </span>
+      <span className="sr-only">{t('steps.statusLabel')}{t('common.colon')} </span>
       {t(stepStatusLabelKey(status))}
     </span>
   )

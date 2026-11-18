@@ -81,11 +81,16 @@ describe('TournamentEditorPage', () => {
         participant_type: 'solo',
         max_participants: 32,
         team_scoring_mode: 'none',
+        mode: 'online',
+        visibility: 'public',
+        registration_policy: 'open',
+        waiting_list_enabled: false,
+        registration_fields: [],
       },
     })
   })
 
-  it('crée un tournoi par équipes : taille d\'équipe et N obligatoires', async () => {
+  it('crée un tournoi par équipes : titulaires et N obligatoires', async () => {
     signInAs('admin')
     const fetchMock = server()
     const user = userEvent.setup()
@@ -94,16 +99,18 @@ describe('TournamentEditorPage', () => {
     await user.click(screen.getByRole('radio', { name: 'Équipes' }))
     await user.selectOptions(screen.getByLabelText('Score d’équipe'), 'top_n')
     await user.click(screen.getByRole('button', { name: 'Créer un tournoi' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('Saisissez un nombre entier de joueurs entre 1 et 100.')
+    expect(screen.getByRole('alert')).toHaveTextContent('Saisissez un nombre entier de titulaires entre 1 et 100.')
     expect(screen.getByRole('alert')).toHaveTextContent('Saisissez un nombre entier entre 1 et 100.')
 
-    await user.type(screen.getByLabelText('Joueurs par équipe'), '5')
+    await user.type(screen.getByLabelText('Titulaires minimum par équipe'), '5')
+    await user.type(screen.getByLabelText('Titulaires maximum par équipe'), '5')
     await user.type(screen.getByLabelText('Nombre de meilleurs scores retenus (N)'), '3')
     await user.click(screen.getByRole('button', { name: 'Créer un tournoi' }))
     await screen.findByText(/a été créé en brouillon/)
     expect(sent(fetchMock, 'POST')[0].body).toMatchObject({
       participant_type: 'team',
-      team_size: 5,
+      team_min_starters: 5,
+      team_max_starters: 5,
       team_scoring_mode: 'top_n',
       team_scoring_n: 3,
     })
