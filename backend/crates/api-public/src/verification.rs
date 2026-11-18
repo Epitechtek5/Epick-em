@@ -81,8 +81,12 @@ pub fn send(state: &AppState, email: String, token: String, welcome: Option<Stri
             },
             _ => crate::store::Language::Fr,
         };
-        if let Err(err) = mailer.send_verification(&email, &link, language).await {
-            eprintln!("api-public: verification email delivery failed: {err}");
+        if mailer
+            .send_verification(&email, &link, language)
+            .await
+            .is_err()
+        {
+            eprintln!("api-public: verification email delivery failed");
         } else if welcome.is_none()
             && store
                 .activate_verification(&hash_token(&token))
@@ -92,9 +96,12 @@ pub fn send(state: &AppState, email: String, token: String, welcome: Option<Stri
             eprintln!("api-public: could not activate replacement verification link");
         }
         if let Some(username) = welcome
-            && let Err(err) = mailer.send_welcome(&email, &username, language).await
+            && mailer
+                .send_welcome(&email, &username, language)
+                .await
+                .is_err()
         {
-            eprintln!("api-public: welcome email delivery failed: {err}");
+            eprintln!("api-public: welcome email delivery failed");
         }
     });
 }
