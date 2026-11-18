@@ -35,4 +35,8 @@ pub trait Cache: Send + Sync {
 
     /// Supprime les clés données ; une clé absente n'est pas une erreur.
     async fn delete(&self, keys: &[&str]) -> Result<(), CacheError>;
+
+    /// Lit et supprime `key` en une seule opération atomique : de deux appels concurrents, un
+    /// seul obtient la valeur (jeton à usage unique).
+    async fn take(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError>;
 }

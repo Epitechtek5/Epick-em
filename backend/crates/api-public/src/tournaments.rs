@@ -37,6 +37,8 @@ pub fn routes(cfg: &mut ServiceConfig) {
     // `/tournaments/export` et `/tournaments/import` avant `/tournaments/{id}`.
     cfg.service(crate::tournament_io::export_tournaments)
         .service(crate::tournament_io::import_tournaments)
+        .service(crate::tournament_io::preview_import)
+        .service(crate::tournament_io::apply_import)
         .service(list_tournaments)
         .service(get_tournament)
         .service(create_tournament)

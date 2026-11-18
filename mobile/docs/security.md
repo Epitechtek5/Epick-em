@@ -1,5 +1,11 @@
 # Dependency security
 
+## Current audit snapshot: 2026-11-17
+
+The audit currently reports picomatch GHSA-fc5q-39xc-vjpf in both dependency trees. Version 4.0.7 is the latest published release and is still affected. Following the explicitly authorized policy already used on the match-workflow branch, CI temporarily accepts only this advisory for picomatch, severity high, affected range <=4.0.7. The exception expires at 2026-12-01T00:00:00Z. The vulnerability remains unfixed; raw npm audit still fails. Different packages, advisories, ranges, severity, expired exceptions and malformed audit reports continue to block CI.
+
+The four Expo compatibility patches (expo 58.0.26, expo-file-system 58.0.14, expo-router 58.0.32 and jest-expo 58.0.15) keep SDK 58 compatibility. No SDK downgrade or broad audit fix is applied.
+
 ## npm advisory range correction: 2026-11-03
 
 GitHub's aggregated advisory for
@@ -17,7 +23,7 @@ installed 10.2.6 continues to fail CI. A global override to minimatch 11 was not
 used because legacy consumers call the pre-v9 CommonJS function export, which
 minimatch 11 no longer provides.
 
-## Current audit snapshot: 2026-10-28
+## Historical audit snapshot: 2026-10-28
 
 The raw npm reports contain 15 affected packages in the full tree and 13 in the production tree; every entry propagates the same low-severity `deepmerge` advisory. The strict gate temporarily accepts only `deepmerge` / `GHSA-gcqx-w48m-w2h4` through the November 28, 2026 review deadline. Raw `npm audit` still exits with status 1. The mobile security job succeeds only if both reports are valid, all findings match existing exceptions, and no exception has expired.
 

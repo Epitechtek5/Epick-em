@@ -44,6 +44,14 @@ impl Cache for MemoryCache {
         Ok(())
     }
 
+    async fn take(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError> {
+        Ok(self
+            .entries()
+            .remove(key)
+            .filter(|(_, expires_at)| *expires_at > Instant::now())
+            .map(|(value, _)| value))
+    }
+
     async fn delete(&self, keys: &[&str]) -> Result<(), CacheError> {
         let mut entries = self.entries();
         for key in keys {
@@ -78,6 +86,18 @@ mod tests {
             .await
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        assert_eq!(cache.get("k").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn take_returns_the_value_only_once() {
+        let cache = MemoryCache::new();
+        cache
+            .set("k", b"v".to_vec(), Ttl::from_secs(60))
+            .await
+            .unwrap();
+        assert_eq!(cache.take("k").await.unwrap(), Some(b"v".to_vec()));
+        assert_eq!(cache.take("k").await.unwrap(), None);
         assert_eq!(cache.get("k").await.unwrap(), None);
     }
 }

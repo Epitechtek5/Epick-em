@@ -87,6 +87,8 @@ pub struct StepParticipant {
     /// Rang dans le groupe, renseigné à la clôture de l'étape.
     pub final_rank: Option<i32>,
     pub status: StepParticipantStatus,
+    /// Tête de série dans l'étape (1 = la meilleure), si le placement est semé.
+    pub seed: Option<i32>,
 }
 
 /// Réglages d'une étape, communs à la création et au remplacement.

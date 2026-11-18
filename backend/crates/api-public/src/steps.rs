@@ -775,28 +775,50 @@ fn close_group(
     registered: &HashMap<Uuid, String>,
     advance_per_group: i32,
 ) -> Vec<StepOutcome> {
-    let mut ordered: Vec<&StepParticipant> = members.to_vec();
-    ordered.sort_by(|a, b| {
-        b.points
-            .total_cmp(&a.points)
-            .then_with(|| {
-                registered
-                    .get(&a.participant_id)
-                    .cmp(&registered.get(&b.participant_id))
-            })
-            .then_with(|| a.participant_id.cmp(&b.participant_id))
+    let mut entries: Vec<(Uuid, f64, Option<String>)> = members
+        .iter()
+        .map(|m| {
+            (
+                m.participant_id,
+                m.points,
+                registered.get(&m.participant_id).cloned(),
+            )
+        })
+        .collect();
+    // Dernier départage : l'identifiant, le tri qui suit étant stable.
+    entries.sort_by_key(|(id, _, _)| *id);
+    rank_members(entries, advance_per_group)
+        .into_iter()
+        .map(|(participant_id, final_rank, status)| StepOutcome {
+            participant_id,
+            final_rank,
+            status,
+        })
+        .collect()
+}
+
+/// Classement définitif d'un groupe, commun à la clôture d'une étape et à l'import : `entries`
+/// donne (participant, points, instant d'inscription). Points décroissants, puis inscription la
+/// plus ancienne (un instant absent passe après les autres), puis l'ordre d'entrée. Les
+/// `advance_per_group` premiers sont qualifiés, les autres éliminés.
+pub(crate) fn rank_members<K>(
+    mut entries: Vec<(K, f64, Option<String>)>,
+    advance_per_group: i32,
+) -> Vec<(K, i32, StepParticipantStatus)> {
+    entries.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| (a.2.is_none(), &a.2).cmp(&(b.2.is_none(), &b.2)))
     });
-    ordered
+    entries
         .into_iter()
         .zip(1i32..)
-        .map(|(member, rank)| StepOutcome {
-            participant_id: member.participant_id,
-            final_rank: rank,
-            status: if rank <= advance_per_group {
+        .map(|((key, _, _), rank)| {
+            let status = if rank <= advance_per_group {
                 StepParticipantStatus::Qualified
             } else {
                 StepParticipantStatus::Eliminated
-            },
+            };
+            (key, rank, status)
         })
         .collect()
 }
@@ -889,6 +911,7 @@ mod tests {
             points,
             final_rank: None,
             status: StepParticipantStatus::In,
+            seed: None,
         }
     }
 
@@ -1013,6 +1036,29 @@ mod tests {
                 ..valid
             }),
             ["tiebreak"]
+        );
+    }
+
+    #[test]
+    fn members_are_ranked_by_points_then_by_registration() {
+        let ranked = rank_members(
+            vec![
+                ("late", 5.0, Some("2026-11-02T00:00:00Z".to_string())),
+                ("top", 9.0, None),
+                ("early", 5.0, Some("2026-11-01T00:00:00Z".to_string())),
+                ("unregistered", 5.0, None),
+            ],
+            2,
+        );
+        let order: Vec<(&str, i32, StepParticipantStatus)> = ranked;
+        assert_eq!(
+            order,
+            [
+                ("top", 1, StepParticipantStatus::Qualified),
+                ("early", 2, StepParticipantStatus::Qualified),
+                ("late", 3, StepParticipantStatus::Eliminated),
+                ("unregistered", 4, StepParticipantStatus::Eliminated),
+            ]
         );
     }
 }

@@ -30,6 +30,9 @@ impl Cache for FailingCache {
     async fn delete(&self, _: &[&str]) -> Result<(), CacheError> {
         Err(CacheError("injoignable".into()))
     }
+    async fn take(&self, _: &str) -> Result<Option<Vec<u8>>, CacheError> {
+        Err(CacheError("injoignable".into()))
+    }
 }
 
 #[tokio::test]
