@@ -3,8 +3,10 @@
 //! Le trait [`AuthStore`] isole les handlers de PostgreSQL : [`PgStore`] sert en production,
 //! [`MemoryStore`] sert aux tests sans base.
 
+mod competition;
 mod games;
 mod invitations;
+mod match_workflows;
 mod matches;
 mod memory;
 mod postgres;
@@ -14,16 +16,18 @@ mod steps;
 mod teams;
 mod tournaments;
 
+pub use self::competition::*;
 pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::invitations::{
     Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
     InvitationInput, InvitationStatus, InvitationType,
 };
 pub(crate) use self::invitations::{registration_open, role_of};
+pub use self::match_workflows::*;
 pub use self::matches::{
-    Bracket, GameFinish, GameImport, GameScores, Match, MatchFinish, MatchGame,
-    MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchResult, MatchScore,
-    MatchStatus, MatchUpdate,
+    Bracket, GameFinish, GameImport, GameScores, GeneratedMatch, Generation, Match, MatchFinish,
+    MatchGame, MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchResult,
+    MatchScore, MatchStatus, MatchUpdate, Placement,
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
@@ -33,8 +37,9 @@ pub use self::settings::{
 };
 pub use self::stats::{Stat, StatInput, StatOption, StatScope, StatType, StatUpdate};
 pub use self::steps::{
-    MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
-    StepParticipant, StepParticipantStatus, StepStart, StepStatus,
+    MatchType, QualificationPlacement, SeedingStrategy, Step, StepClosing, StepDefinition,
+    StepFormat, StepGroup, StepInput, StepOutcome, StepParticipant, StepParticipantStatus,
+    StepRules, StepScoring, StepStart, StepStatus,
 };
 pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
@@ -888,6 +893,29 @@ pub trait AuthStore: Send + Sync {
     /// [`StoreError::MatchState`] s'il est déjà `finished` ou `cancelled`.
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError>;
 
+    async fn competition_snapshot(
+        &self,
+        tournament_id: Uuid,
+    ) -> Result<CompetitionSnapshot, StoreError>;
+    async fn commit_competition_correction(
+        &self,
+        correction: CompetitionCorrection,
+    ) -> Result<(), StoreError>;
+
+    async fn match_workflow(&self, match_id: Uuid) -> Result<MatchWorkflow, StoreError>;
+    async fn commit_schedule_batch(&self, updates: Vec<WorkflowCommit>) -> Result<(), StoreError>;
+    async fn commit_match_workflow(
+        &self,
+        update: WorkflowCommit,
+    ) -> Result<MatchWorkflow, StoreError>;
+    async fn insert_match_evidence(&self, evidence: MatchEvidence) -> Result<(), StoreError>;
+    async fn match_evidence(&self, id: Uuid) -> Result<Option<MatchEvidence>, StoreError>;
+
+    /// Génère des matchs dans l'étape `ongoing`, avec leurs liens et les points des byes, en une
+    /// seule opération ; [`StoreError::StepState`] si l'étape n'est pas `ongoing` ou si la
+    /// génération a déjà eu lieu (voir [`Generation::initial`]) — jamais de doublon, même en cas
+    /// d'appels concurrents. Renvoie les matchs créés, dans l'ordre de `matches`.
+    async fn generate_matches(&self, generation: Generation) -> Result<Vec<Match>, StoreError>;
     /// Parties du match, par numéro, avec leurs participants.
     async fn list_match_games(&self, match_id: Uuid) -> Result<Vec<MatchGame>, StoreError>;
 

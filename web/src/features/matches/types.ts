@@ -32,6 +32,10 @@ export interface MatchParticipant {
   points: number
   rank: number | null
   result: MatchResult | null
+  // Emplacement (1 ou 2) dans un match de tableau généré.
+  slot?: number | null
+  // Manches gagnées dans une série (BO3, BO5).
+  games_won?: number | null
 }
 
 export interface Match {
@@ -44,6 +48,12 @@ export interface Match {
   bracket: Bracket | null
   // Match de la même étape où va le vainqueur (élimination).
   next_match_id: string | null
+  // Matchs générés : rang dans la ronde, emplacement du vainqueur dans le match suivant, et match
+  // (avec emplacement) où va le perdant en double élimination. Absents des matchs créés à la main.
+  number?: number | null
+  next_slot?: number | null
+  loser_next_match_id?: string | null
+  loser_next_slot?: number | null
   // Format de la série : 1 (une partie, par défaut), 3 ou 5. Indépendant de `round`.
   best_of: number
   // Horodatages RFC 3339 en UTC.

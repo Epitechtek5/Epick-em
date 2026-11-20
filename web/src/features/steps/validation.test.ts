@@ -14,7 +14,9 @@ import {
   startBlocker,
   stepsEditable,
   stepValues,
+  nextRoundReady,
   toStepInput,
+  toStepRules,
   validateStep,
 } from './validation'
 
@@ -164,5 +166,64 @@ describe('erreurs', () => {
       tiebreak: 'steps.validation.tiebreak',
     })
     expect(stepFieldErrors(api(409, { error: 'tournament_locked' }))).toBeNull()
+  })
+})
+
+describe('réglages avancés', () => {
+  const DUEL: StepValues = stepValues({ ...STEP_FINAL })
+
+  it('convertit les séries par ronde et le barème, sans séries ni places hors de propos', () => {
+    const values: StepValues = {
+      ...DUEL,
+      rules: {
+        ...DUEL.rules,
+        seeding: 'ranking',
+        qualification: 'group_rank',
+        best_of: 3,
+        rounds: [{ round: '04', best_of: 5 }],
+        custom_scoring: true,
+        win: '3',
+        draw: '1,5',
+        loss: '-1',
+        placement: ['9'],
+      },
+    }
+    expect(validateStep(values)).toEqual({})
+    expect(toStepRules(values)).toEqual({
+      seeding: 'ranking',
+      qualification: 'group_rank',
+      best_of: 3,
+      best_of_by_round: { '4': 5 },
+      scoring: { win: 3, draw: 1.5, loss: -1, placement: [] },
+    })
+  })
+
+  it('refuse rondes en double ou hors bornes, points invalides et séries en mêlée générale', () => {
+    const rules = DUEL.rules
+    expect(validateStep({ ...DUEL, rules: { ...rules, rounds: [{ round: '2', best_of: 3 }, { round: '2', best_of: 5 }] } }).rules).toBe(
+      'steps.validation.rounds',
+    )
+    expect(validateStep({ ...DUEL, rules: { ...rules, rounds: [{ round: '0', best_of: 3 }] } }).rules).toBe('steps.validation.rounds')
+    expect(validateStep({ ...DUEL, rules: { ...rules, custom_scoring: true, win: 'abc' } }).rules).toBe('steps.validation.scoring')
+    const ffa = stepValues(STEP_POOLS)
+    expect(validateStep({ ...ffa, rules: { ...ffa.rules, best_of: 3 } }).rules).toBe('steps.validation.seriesDuel')
+    expect(validateStep({ ...ffa, format: 'swiss', group_count: '1' }).match_type).toBe('steps.validation.ffaPool')
+  })
+
+  it('n’envoie rules que s’ils changent, quel que soit l’ordre des rondes', () => {
+    const step = { ...STEP_FINAL, rules: { ...STEP_FINAL.rules, best_of_by_round: { '3': 5 as const, '1': 3 as const } } }
+    const values = stepValues(step)
+    expect(changedStepFields(step, toStepInput(values))).toEqual({})
+    const changed = toStepInput({ ...values, rules: { ...values.rules, seeding: 'manual' } })
+    expect(changedStepFields(step, changed)).toEqual({ rules: { ...changed.rules } })
+  })
+
+  it('propose la ronde suisse suivante une fois la ronde jouée', () => {
+    const swiss = { ...STEP_FINAL, format: 'swiss' as const, matches_per_group: 3 }
+    expect(nextRoundReady(swiss, [])).toBe(false)
+    expect(nextRoundReady(swiss, [{ status: 'finished', round: 1 }, { status: 'ongoing', round: 1 }])).toBe(false)
+    expect(nextRoundReady(swiss, [{ status: 'finished', round: 1 }, { status: 'cancelled', round: 1 }])).toBe(true)
+    expect(nextRoundReady(swiss, [{ status: 'finished', round: 3 }])).toBe(false)
+    expect(nextRoundReady(STEP_FINAL, [{ status: 'finished', round: 1 }])).toBe(false)
   })
 })

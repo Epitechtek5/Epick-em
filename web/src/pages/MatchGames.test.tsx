@@ -68,6 +68,8 @@ function server(tournament: Tournament, match: Match) {
   const fetchMock = routeFetch((path, init) => {
     const method = init.method ?? 'GET'
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+    // Centre de match (signalements, litiges) : hors du périmètre de ces tests.
+    if (path.endsWith('/workflow')) return jsonResponse(403, { error: 'forbidden' })
     const user = userResponse(path)
     if (user) return user
     if (path === base) return jsonResponse(200, tournament)

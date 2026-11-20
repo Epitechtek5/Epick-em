@@ -1,9 +1,50 @@
 import { uuid } from '@/features/teams/validation'
 import { apiRequest } from '@/lib/api/client'
-import type { CloseStepResult, GroupRanking, Step, StepChanges, StepInput } from './types'
+import type { Match } from '@/features/matches/types'
+import {
+  BEST_OF_VALUES,
+  DEFAULT_RULES,
+  type BestOf,
+  type CloseStepResult,
+  type GenerationPreview,
+  type GroupRanking,
+  type Step,
+  type StepChanges,
+  type StepInput,
+  type StepRules,
+} from './types'
 
 const base = (tournamentId: string) => `/tournaments/${uuid(tournamentId)}/steps`
 const one = (tournamentId: string, stepId: string) => `${base(tournamentId)}/${uuid(stepId)}`
+
+const bestOf = (value: unknown): BestOf | null =>
+  BEST_OF_VALUES.includes(value as BestOf) ? (value as BestOf) : null
+
+// Réglages avancés d'une étape ; une étape historique (sans `rules`) prend les valeurs par défaut
+// du serveur.
+export function normalizeRules(value: unknown): StepRules {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_RULES, best_of_by_round: {} }
+  const rules = value as Partial<StepRules>
+  const byRound: Record<string, BestOf> = {}
+  for (const [round, series] of Object.entries(rules.best_of_by_round ?? {})) {
+    const valid = bestOf(series)
+    if (valid) byRound[round] = valid
+  }
+  return {
+    seeding: rules.seeding ?? DEFAULT_RULES.seeding,
+    qualification: rules.qualification ?? DEFAULT_RULES.qualification,
+    best_of: bestOf(rules.best_of) ?? 1,
+    best_of_by_round: byRound,
+    scoring: rules.scoring
+      ? {
+          win: rules.scoring.win ?? 0,
+          draw: rules.scoring.draw ?? 0,
+          loss: rules.scoring.loss ?? 0,
+          placement: Array.isArray(rules.scoring.placement) ? rules.scoring.placement : [],
+        }
+      : null,
+  }
+}
 
 // `tiebreak` est un JSON libre côté serveur : seules les chaînes sont gardées.
 export function normalizeStep(step: Step): Step {
@@ -11,6 +52,7 @@ export function normalizeStep(step: Step): Step {
   return {
     ...step,
     tiebreak: Array.isArray(tiebreak) ? tiebreak.filter((key): key is string => typeof key === 'string') : [],
+    rules: normalizeRules(step.rules),
   }
 }
 
@@ -46,9 +88,40 @@ export async function getStepRanking(tournamentId: string, stepId: string, signa
   return [...groups].sort((a, b) => a.index - b.index)
 }
 
-// Tirage au sort des groupes par le serveur ; 400 (errors.steps / errors.participants), 409.
-export async function startStep(tournamentId: string, stepId: string) {
-  return normalizeStep(await apiRequest<Step>(`${one(tournamentId, stepId)}/start`, { method: 'POST' }))
+// Têtes de série puis répartition en serpentin par le serveur ; `seedOrder` (tous les
+// participants, la tête de série 1 en premier) seulement quand `rules.seeding` vaut `manual`.
+// 400 (errors.steps / errors.participants / errors.seed_order), 409.
+export async function startStep(tournamentId: string, stepId: string, seedOrder?: readonly string[]) {
+  return normalizeStep(
+    await apiRequest<Step>(`${one(tournamentId, stepId)}/start`, {
+      method: 'POST',
+      body: seedOrder ? { seed_order: seedOrder } : {},
+    }),
+  )
+}
+
+// Matchs que le serveur générerait, sans rien enregistrer ; 409 si l'étape n'est pas en cours ou
+// a déjà des matchs.
+export async function previewGeneration(tournamentId: string, stepId: string, signal?: AbortSignal) {
+  return apiRequest<GenerationPreview>(`${one(tournamentId, stepId)}/generation-preview`, { signal })
+}
+
+// Génère les matchs prévisualisés ; 409 si le plan a changé depuis l'aperçu (`revision`).
+export async function generateMatches(tournamentId: string, stepId: string, revision: string) {
+  return apiRequest<{ matches: Match[] }>(`${one(tournamentId, stepId)}/generate`, {
+    method: 'POST',
+    body: { revision },
+    expectedStatus: 201,
+  })
+}
+
+// Ronde suisse suivante ; 400 `pairing` si seules des revanches sont possibles.
+export async function generateNextRound(tournamentId: string, stepId: string, allowRematches = false) {
+  return apiRequest<{ matches: Match[] }>(`${one(tournamentId, stepId)}/rounds`, {
+    method: 'POST',
+    body: { allow_rematches: allowRematches },
+    expectedStatus: 201,
+  })
 }
 
 // Qualifie les premiers de chaque groupe ; l'étape suivante peut s'ouvrir seule.

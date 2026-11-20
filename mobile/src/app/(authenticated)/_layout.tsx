@@ -116,6 +116,10 @@ export default function AuthenticatedLayout() {
         options={{ title: t('matches.results') }}
       />
       <Stack.Screen
+        name="tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/workflow"
+        options={{ title: t('matchWorkflow.title') }}
+      />
+      <Stack.Screen
         name="teams/create"
         options={{ title: t('teams.create') }}
       />

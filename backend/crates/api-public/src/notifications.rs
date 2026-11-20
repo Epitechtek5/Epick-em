@@ -96,6 +96,183 @@ impl Catalog {
 
 const BUILTIN: &[EventDefinition] = &[
     EventDefinition {
+        kind: "match.called",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Votre match est appelé",
+                "Rejoignez votre match dans {tournament_name}.",
+            ),
+            (
+                "Your match has been called",
+                "Join your match in {tournament_name}.",
+            ),
+            (
+                "Se ha convocado tu partido",
+                "Acude a tu partido en {tournament_name}.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.rescheduled",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Planning du match modifié",
+                "Consultez le nouvel horaire de votre match.",
+            ),
+            (
+                "Match schedule updated",
+                "Check the updated schedule for your match.",
+            ),
+            (
+                "Horario del partido actualizado",
+                "Consulta el nuevo horario de tu partido.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.attendance",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Présence mise à jour",
+                "La présence ou le forfait a été enregistré pour votre match.",
+            ),
+            (
+                "Attendance updated",
+                "Attendance or a forfeit was recorded for your match.",
+            ),
+            (
+                "Asistencia actualizada",
+                "Se ha registrado la asistencia o una retirada en tu partido.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.result_submitted",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Résultat soumis",
+                "Un résultat a été proposé pour votre match.",
+            ),
+            ("Result submitted", "A result was submitted for your match."),
+            (
+                "Resultado enviado",
+                "Se ha enviado un resultado para tu partido.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.confirmation_requested",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Résultat à confirmer",
+                "Vérifiez le résultat et confirmez-le ou contestez-le.",
+            ),
+            (
+                "Confirm your match result",
+                "Review the result and confirm or dispute it.",
+            ),
+            (
+                "Confirma el resultado",
+                "Revisa el resultado y confírmalo o impúgnalo.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.confirmed",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Résultat confirmé",
+                "Une confirmation indépendante a été enregistrée.",
+            ),
+            (
+                "Result confirmed",
+                "An independent confirmation was recorded.",
+            ),
+            (
+                "Resultado confirmado",
+                "Se ha registrado una confirmación independiente.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.disputed",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Résultat contesté",
+                "Un litige attend une décision pour votre match.",
+            ),
+            (
+                "Result disputed",
+                "A dispute is awaiting a decision for your match.",
+            ),
+            (
+                "Resultado impugnado",
+                "Una disputa de tu partido espera una decisión.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.resolved",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Litige résolu",
+                "L’organisateur a enregistré sa décision pour votre match.",
+            ),
+            (
+                "Dispute resolved",
+                "The organizer recorded a decision for your match.",
+            ),
+            (
+                "Disputa resuelta",
+                "El organizador ha registrado una decisión para tu partido.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
+        kind: "match.corrected",
+        category: Category::Matches,
+        channels: BOTH,
+        texts: [
+            (
+                "Résultat corrigé",
+                "Consultez le résultat corrigé et son historique.",
+            ),
+            (
+                "Result corrected",
+                "Review the corrected result and its history.",
+            ),
+            (
+                "Resultado corregido",
+                "Consulta el resultado corregido y su historial.",
+            ),
+        ],
+        path: Some("/tournaments/{tournament_id}/steps/{step_id}/matches/{match_id}"),
+    },
+    EventDefinition {
         kind: "tournament.started",
         category: Category::Tournaments,
         channels: BOTH,

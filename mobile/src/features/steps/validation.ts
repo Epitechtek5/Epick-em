@@ -2,6 +2,30 @@ import { z } from 'zod';
 import type { Tournament } from '@/features/tournaments/types';
 import type { StepChanges, StepInput, TournamentStep } from './types';
 
+const bestOf = z.union([z.literal(1), z.literal(3), z.literal(5)]);
+const stepRules = z.object({
+  seeding: z.enum(['manual', 'random', 'ranking']),
+  qualification: z.enum(['random', 'rank', 'group_rank']),
+  best_of: bestOf,
+  best_of_by_round: z.record(
+    z
+      .string()
+      .regex(/^[1-9][0-9]{0,3}$/)
+      .refine((value) => Number(value) <= 1000),
+    bestOf,
+  ),
+  scoring: z
+    .object({
+      win: z.number().finite().min(-1_000_000_000).max(1_000_000_000),
+      draw: z.number().finite().min(-1_000_000_000).max(1_000_000_000),
+      loss: z.number().finite().min(-1_000_000_000).max(1_000_000_000),
+      placement: z
+        .array(z.number().finite().min(-1_000_000_000).max(1_000_000_000))
+        .max(10000),
+    })
+    .nullable(),
+});
+
 const tiebreakKey = z.string().regex(/^[a-z0-9_]{1,32}$/);
 
 const stepSchema = z
@@ -14,8 +38,22 @@ const stepSchema = z
     matches_per_group: z.number().int().min(1).max(1000),
     advance_per_group: z.number().int().min(1).max(10000),
     tiebreak: z.array(tiebreakKey).max(8),
+    rules: stepRules.optional(),
   })
   .superRefine((step, context) => {
+    if (
+      step.match_type === 'ffa' &&
+      (step.format !== 'pool' ||
+        (step.rules &&
+          (step.rules.best_of !== 1 ||
+            Object.keys(step.rules.best_of_by_round).length)))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['rules'],
+        message: 'steps.advanced.unsupported',
+      });
+    }
     if (step.advance_per_group > step.group_size) {
       context.addIssue({
         code: 'custom',
@@ -49,6 +87,7 @@ const stepSchema = z
 export type StepFieldErrors = Partial<Record<keyof StepInput, string>>;
 
 const validationKeys: Record<keyof StepInput, string> = {
+  rules: 'steps.advanced.invalidRules',
   position: 'steps.validation.position',
   format: 'steps.validation.format',
   match_type: 'steps.validation.matchType',
@@ -158,7 +197,7 @@ export function changedStepFields(
     const current = step[field];
     const next = input[field];
     if (
-      field === 'tiebreak'
+      field === 'tiebreak' || field === 'rules'
         ? JSON.stringify(current) !== JSON.stringify(next)
         : current !== next
     ) {

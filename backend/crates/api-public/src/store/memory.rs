@@ -3,22 +3,25 @@
 use super::ParticipantType;
 use super::teams::{now_rfc3339, rfc3339_in};
 use super::{
-    AuthStore, CheckInSettlement, Game, GameFinish, GameInput, GameScores, GameUpdate, Invitation,
-    InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter, InvitationInput,
-    InvitationStatus, InvitationType, Match, MatchFinish, MatchGame, MatchGameParticipant,
-    MatchImport, MatchInput, MatchParticipant, MatchScore, MatchStatus, MatchUpdate,
-    NamedParticipant, ParticipantChange, ParticipantImport, ParticipantInput, ParticipantStatus,
-    RegistrationPolicy, Role, RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringRule,
-    ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatOption, StatType, StatUpdate,
-    Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
-    StepParticipantStatus, StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput,
-    TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput,
-    TournamentInvitation, TournamentParticipant, TournamentRole, TournamentStatus, TournamentTeam,
-    TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord,
-    UserUpdate,
+    AuthStore, CheckInSettlement, Game, GameFinish, GameInput, GameScores, GameUpdate, Generation,
+    Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
+    InvitationInput, InvitationStatus, InvitationType, Match, MatchFinish, MatchGame,
+    MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchResult, MatchScore,
+    MatchStatus, MatchUpdate, NamedParticipant, ParticipantChange, ParticipantImport,
+    ParticipantInput, ParticipantStatus, Placement, RegistrationPolicy, Role, RoleAssignment,
+    RoleAuditAction, RoleAuditEntry, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat,
+    StatInput, StatOption, StatType, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
+    StepInput, StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Team,
+    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
+    TournamentInput, TournamentInvitation, TournamentParticipant, TournamentRole, TournamentStatus,
+    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
+    UserRecord, UserUpdate,
 };
 use super::{
     Channel, MAX_PUSH_TOKENS, Platform, PushToken, UserSettings, UserSettingsUpdate, override_key,
+};
+use super::{
+    CompetitionCorrection, CompetitionSnapshot, MatchEvidence, MatchWorkflow, WorkflowCommit,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -78,6 +81,9 @@ struct State {
     matches: Vec<Match>,
     match_participants: Vec<MatchParticipant>,
     match_games: Vec<MatchGame>,
+    archived_matches: HashSet<Uuid>,
+    match_workflows: HashMap<Uuid, MatchWorkflow>,
+    match_evidence: HashMap<Uuid, MatchEvidence>,
     verification_limits: HashMap<String, (Instant, u32)>,
     verification: HashMap<String, (Uuid, String, Instant, VerificationStatus)>,
     reset_tokens: HashMap<String, ResetToken>,
@@ -94,6 +100,123 @@ pub struct MemoryStore {
 impl MemoryStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Isolated projection; no production writes or notifications are performed here.
+    pub fn from_competition(snapshot: CompetitionSnapshot) -> Self {
+        Self {
+            state: Mutex::new(State {
+                tournaments: vec![snapshot.tournament],
+                steps: snapshot.steps,
+                step_groups: snapshot.groups,
+                step_participants: snapshot.step_members,
+                participants: snapshot.participants,
+                matches: snapshot.matches,
+                match_participants: snapshot.members,
+                match_games: snapshot.games,
+                ..State::default()
+            }),
+        }
+    }
+
+    pub fn reset_projected_matches(
+        &self,
+        root: Uuid,
+        reset: &[Uuid],
+        archive: &[Uuid],
+        later_steps: &[Uuid],
+    ) -> Result<(), StoreError> {
+        let mut state = self.state();
+        let current = state
+            .matches
+            .iter()
+            .find(|m| m.id == root)
+            .cloned()
+            .ok_or(StoreError::MatchState)?;
+        let mut reset_ids: HashSet<Uuid> = reset.iter().copied().collect();
+        reset_ids.insert(root);
+        let mut removed_slots = HashSet::new();
+        for source in &state.matches {
+            if reset_ids.contains(&source.id) {
+                if let Some(id) = source.next_match_id {
+                    removed_slots.insert((id, source.next_slot));
+                    if source.loser_next_match_id == Some(id) {
+                        removed_slots.insert((id, Some(1)));
+                        removed_slots.insert((id, Some(2)));
+                    }
+                }
+                if let Some(id) = source.loser_next_match_id {
+                    removed_slots.insert((id, source.loser_next_slot));
+                }
+            }
+        }
+        state
+            .match_participants
+            .retain(|p| p.match_id == root || !removed_slots.contains(&(p.match_id, p.slot)));
+        for member in &mut state.match_participants {
+            if reset_ids.contains(&member.match_id) {
+                member.stats = serde_json::json!({});
+                member.points = 0.0;
+                member.rank = None;
+                member.result = None;
+                member.games_won = None;
+            }
+        }
+        state
+            .match_games
+            .retain(|game| !reset_ids.contains(&game.match_id));
+        let now = now_rfc3339();
+        for m in &mut state.matches {
+            if reset_ids.contains(&m.id) {
+                m.status = MatchStatus::Scheduled;
+                m.started_at = None;
+                m.ended_at = None;
+                m.updated_at = now.clone();
+            }
+        }
+        for id in archive {
+            state.archived_matches.insert(*id);
+        }
+        state.matches.retain(|m| !archive.contains(&m.id));
+        state
+            .match_participants
+            .retain(|m| !archive.contains(&m.match_id));
+        state.match_games.retain(|g| !archive.contains(&g.match_id));
+        state
+            .step_groups
+            .retain(|g| !later_steps.contains(&g.step_id));
+        state
+            .step_participants
+            .retain(|p| !later_steps.contains(&p.step_id));
+        for member in &mut state.step_participants {
+            if member.step_id == current.step_id {
+                member.status = StepParticipantStatus::In;
+                member.final_rank = None;
+            }
+        }
+        for step in &mut state.steps {
+            if later_steps.contains(&step.id) {
+                step.status = StepStatus::Pending;
+                step.updated_at = now.clone();
+            }
+            if step.id == current.step_id {
+                step.status = StepStatus::Ongoing;
+                step.updated_at = now.clone();
+            }
+        }
+        let tournament_id = state
+            .steps
+            .iter()
+            .find(|s| s.id == current.step_id)
+            .map(|s| s.tournament_id);
+        if let Some(tournament) = state
+            .tournaments
+            .iter_mut()
+            .find(|t| Some(t.id) == tournament_id)
+        {
+            tournament.status = TournamentStatus::Ongoing;
+        }
+        Ok(())
     }
 
     /// Change le rôle d'un compte existant (les inscriptions créent toujours un `User`).
@@ -2127,6 +2250,7 @@ impl AuthStore for MemoryStore {
             matches_per_group: definition.matches_per_group,
             advance_per_group: definition.advance_per_group,
             tiebreak: definition.tiebreak,
+            rules: definition.rules,
             status: StepStatus::Pending,
             created_at: now.clone(),
             updated_at: now,
@@ -2165,6 +2289,7 @@ impl AuthStore for MemoryStore {
         step.matches_per_group = definition.matches_per_group;
         step.advance_per_group = definition.advance_per_group;
         step.tiebreak = definition.tiebreak;
+        step.rules = definition.rules;
         step.updated_at = now_rfc3339();
         Ok(Some(step.clone()))
     }
@@ -2216,10 +2341,26 @@ impl AuthStore for MemoryStore {
 
     async fn close_step(&self, closing: StepClosing) -> Result<Option<Step>, StoreError> {
         let mut state = self.state();
+        if state.matches.iter().any(|m| {
+            m.step_id == closing.step_id
+                && !state.archived_matches.contains(&m.id)
+                && state
+                    .match_workflows
+                    .get(&m.id)
+                    .is_some_and(MatchWorkflow::requires_decision)
+        }) {
+            return Err(StoreError::StepState);
+        }
+
         let Some(step) = state.steps.iter().find(|s| s.id == closing.step_id) else {
             return Ok(None);
         };
         if step.status != StepStatus::Ongoing {
+            return Err(StoreError::StepState);
+        }
+        if let Some(expected) = &closing.expected_competition_revision
+            && state.competition_snapshot(step.tournament_id)?.revision()? != *expected
+        {
             return Err(StoreError::StepState);
         }
         // L'étape suivante est lancée d'abord : si elle échoue, rien n'a changé.
@@ -2285,13 +2426,18 @@ impl AuthStore for MemoryStore {
         let mut matches: Vec<Match> = state
             .matches
             .iter()
-            .filter(|m| m.step_id == step_id)
+            .filter(|m| m.step_id == step_id && !state.archived_matches.contains(&m.id))
             .filter(|m| group_id.is_none_or(|id| m.group_id == Some(id)))
             .filter(|m| status.is_none_or(|status| m.status == status))
             .cloned()
             .collect();
-        // Tri stable : à groupe et manche égaux, l'ordre de création est conservé.
-        matches.sort_by_key(|m| (index_of(m.group_id), m.round));
+        // Tri stable : à groupe, ronde, tableau et rang égaux, l'ordre de création est conservé.
+        let bracket_rank = |m: &Match| match m.bracket {
+            None | Some(super::Bracket::Winners) => 0,
+            Some(super::Bracket::Losers) => 1,
+            Some(super::Bracket::GrandFinal) => 2,
+        };
+        matches.sort_by_key(|m| (index_of(m.group_id), m.round, bracket_rank(m), m.number));
         Ok(matches)
     }
 
@@ -2305,10 +2451,9 @@ impl AuthStore for MemoryStore {
     ) -> Result<Vec<MatchParticipant>, StoreError> {
         let state = self.state();
         let in_step = |match_id: Uuid| {
-            state
-                .matches
-                .iter()
-                .any(|m| m.id == match_id && m.step_id == step_id)
+            state.matches.iter().any(|m| {
+                m.id == match_id && m.step_id == step_id && !state.archived_matches.contains(&m.id)
+            })
         };
         let mut participants: Vec<MatchParticipant> = state
             .match_participants
@@ -2331,6 +2476,10 @@ impl AuthStore for MemoryStore {
             round: input.round,
             bracket: input.bracket,
             next_match_id: input.next_match_id,
+            number: None,
+            next_slot: None,
+            loser_next_match_id: None,
+            loser_next_slot: None,
             best_of: input.best_of,
             scheduled_at: input.scheduled_at,
             started_at: None,
@@ -2413,6 +2562,13 @@ impl AuthStore for MemoryStore {
         scores: Vec<MatchScore>,
     ) -> Result<bool, StoreError> {
         let mut state = self.state();
+        if state
+            .match_workflows
+            .get(&match_id)
+            .is_some_and(MatchWorkflow::requires_decision)
+        {
+            return Err(StoreError::MatchState);
+        }
         let Some(m) = state.matches.iter().find(|m| m.id == match_id) else {
             return Ok(false);
         };
@@ -2425,47 +2581,238 @@ impl AuthStore for MemoryStore {
 
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError> {
         let mut state = self.state();
-        let Some(m) = state.matches.iter().find(|m| m.id == finish.match_id) else {
-            return Ok(None);
-        };
-        if matches!(m.status, MatchStatus::Finished | MatchStatus::Cancelled) {
+        if state
+            .match_workflows
+            .get(&finish.match_id)
+            .is_some_and(MatchWorkflow::requires_decision)
+        {
             return Err(StoreError::MatchState);
         }
-        let step_id = m.step_id;
-        if let Some(game) = finish.game {
-            state.finish_game_in(game)?;
-        }
-        state.apply_match_scores(finish.match_id, finish.scores);
-        if let Some((next_id, participant_id)) = finish.advance
-            && !state
-                .match_participants
-                .iter()
-                .any(|p| p.match_id == next_id && p.participant_id == participant_id)
+        state.finish_match_in(finish)
+    }
+
+    async fn competition_snapshot(
+        &self,
+        tournament_id: Uuid,
+    ) -> Result<CompetitionSnapshot, StoreError> {
+        self.state().competition_snapshot(tournament_id)
+    }
+
+    async fn commit_competition_correction(
+        &self,
+        correction: CompetitionCorrection,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state();
+        let tid = correction.next.tournament.id;
+        let before = state.competition_snapshot(tid)?;
+        let workflow = state
+            .match_workflows
+            .get(&correction.match_id)
+            .cloned()
+            .unwrap_or_default();
+        if before.revision()? != correction.expected_revision
+            || !workflow.accepts(&correction.workflow, correction.expected_workflow_revision)
         {
-            state
-                .match_participants
-                .push(empty_participant(next_id, participant_id));
+            return Err(StoreError::MatchState);
         }
-        for (participant_id, points) in finish.step_points {
-            if let Some(member) = state
-                .step_participants
-                .iter_mut()
-                .find(|p| p.step_id == step_id && p.participant_id == participant_id)
-            {
-                member.points = points;
+        for m in &before.matches {
+            if correction.invalidates(m) {
+                let previous = state
+                    .match_workflows
+                    .get(&m.id)
+                    .cloned()
+                    .unwrap_or_default();
+                state
+                    .match_workflows
+                    .insert(m.id, correction.invalidate_workflow(previous));
             }
         }
+        state.apply_competition(correction.next);
+        state
+            .match_workflows
+            .insert(correction.match_id, correction.workflow);
+        Ok(())
+    }
+
+    async fn match_workflow(&self, match_id: Uuid) -> Result<MatchWorkflow, StoreError> {
+        Ok(self
+            .state()
+            .match_workflows
+            .get(&match_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn commit_schedule_batch(&self, updates: Vec<WorkflowCommit>) -> Result<(), StoreError> {
+        let mut state = self.state();
+        let mut ids = HashSet::new();
+        for update in &updates {
+            let previous = state
+                .match_workflows
+                .get(&update.match_id)
+                .cloned()
+                .unwrap_or_default();
+            if !ids.insert(update.match_id)
+                || update.finish.is_some()
+                || update.games.is_some()
+                || !previous.accepts(&update.workflow, update.expected_revision)
+                || !state.matches.iter().any(|m| {
+                    m.id == update.match_id
+                        && m.updated_at == update.expected_updated_at
+                        && m.status == MatchStatus::Scheduled
+                })
+            {
+                return Err(StoreError::MatchState);
+            }
+        }
+        for update in updates {
+            let m = state
+                .matches
+                .iter_mut()
+                .find(|m| m.id == update.match_id)
+                .ok_or(StoreError::MatchState)?;
+            m.scheduled_at = update.workflow.schedule.scheduled_at.clone();
+            m.updated_at = now_rfc3339();
+            state
+                .match_workflows
+                .insert(update.match_id, update.workflow);
+        }
+        Ok(())
+    }
+
+    async fn commit_match_workflow(
+        &self,
+        update: WorkflowCommit,
+    ) -> Result<MatchWorkflow, StoreError> {
+        let mut state = self.state();
+        let current = state
+            .match_workflows
+            .get(&update.match_id)
+            .cloned()
+            .unwrap_or_default();
+        if !current.accepts(&update.workflow, update.expected_revision)
+            || !state
+                .matches
+                .iter()
+                .any(|m| m.id == update.match_id && m.updated_at == update.expected_updated_at)
+        {
+            return Err(StoreError::MatchState);
+        }
+        if let Some(finish) = &update.finish
+            && (finish.match_id != update.match_id
+                || !state.matches.iter().any(|m| {
+                    m.id == update.match_id
+                        && matches!(m.status, MatchStatus::Scheduled | MatchStatus::Ongoing)
+                }))
+        {
+            return Err(StoreError::MatchState);
+        }
+        if let Some(expected) = &update.archive_games {
+            let mut actual: Vec<_> = state
+                .match_games
+                .iter()
+                .filter(|g| g.match_id == update.match_id)
+                .cloned()
+                .collect();
+            actual.sort_by_key(|g| g.number);
+            if update.finish.is_none() || &actual != expected {
+                return Err(StoreError::MatchState);
+            }
+        }
+        if update.games.as_ref().is_some_and(|games| games.len() > 5) {
+            return Err(StoreError::MatchState);
+        }
+        if update.games.is_some()
+            && state
+                .match_games
+                .iter()
+                .any(|g| g.match_id == update.match_id)
+        {
+            return Err(StoreError::MatchState);
+        }
+        if let Some(finish) = update.finish {
+            let step_id = state
+                .finish_match_in(finish)?
+                .ok_or(StoreError::MatchState)?
+                .step_id;
+            let finished: std::collections::HashSet<Uuid> = state
+                .matches
+                .iter()
+                .filter(|m| m.step_id == step_id && m.status == MatchStatus::Finished)
+                .map(|m| m.id)
+                .collect();
+            let mut totals: HashMap<Uuid, f64> = HashMap::new();
+            for score in &state.match_participants {
+                if finished.contains(&score.match_id) {
+                    *totals.entry(score.participant_id).or_default() += score.points;
+                }
+            }
+            for participant in &mut state.step_participants {
+                if participant.step_id == step_id {
+                    participant.points = totals
+                        .get(&participant.participant_id)
+                        .copied()
+                        .unwrap_or(0.0);
+                }
+            }
+        }
+        if update.archive_games.is_some() {
+            state.match_games.retain(|g| g.match_id != update.match_id);
+        }
         let now = now_rfc3339();
-        let m = state
-            .matches
-            .iter_mut()
-            .find(|m| m.id == finish.match_id)
-            .ok_or(StoreError::MatchState)?;
-        m.status = MatchStatus::Finished;
-        m.started_at.get_or_insert(now.clone());
-        m.ended_at = Some(now.clone());
-        m.updated_at = now;
-        Ok(Some(m.clone()))
+        if let Some(games) = update.games {
+            for (index, game) in games.into_iter().enumerate() {
+                state.match_games.push(MatchGame {
+                    id: Uuid::new_v4(),
+                    match_id: update.match_id,
+                    number: i32::try_from(index + 1).map_err(|_| StoreError::MatchState)?,
+                    status: game.status,
+                    attributes: game.attributes,
+                    started_at: game.started_at,
+                    ended_at: game.ended_at,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                    participants: game
+                        .participants
+                        .into_iter()
+                        .map(game_participant)
+                        .collect(),
+                });
+            }
+        }
+        if let Some(m) = state.matches.iter_mut().find(|m| m.id == update.match_id) {
+            m.scheduled_at = update.workflow.schedule.scheduled_at.clone();
+            m.updated_at = now;
+        }
+        state
+            .match_workflows
+            .insert(update.match_id, update.workflow.clone());
+        Ok(update.workflow)
+    }
+
+    async fn insert_match_evidence(&self, evidence: MatchEvidence) -> Result<(), StoreError> {
+        let mut state = self.state();
+        if !state.matches.iter().any(|m| m.id == evidence.match_id) {
+            return Err(StoreError::MatchState);
+        }
+        if let Some(previous) = state.match_evidence.get(&evidence.id) {
+            return if previous.match_id == evidence.match_id
+                && previous.actor_id == evidence.actor_id
+                && previous.filename == evidence.filename
+                && previous.media_type == evidence.media_type
+                && previous.bytes == evidence.bytes
+            {
+                Ok(())
+            } else {
+                Err(StoreError::MatchState)
+            };
+        }
+        state.match_evidence.insert(evidence.id, evidence);
+        Ok(())
+    }
+
+    async fn match_evidence(&self, id: Uuid) -> Result<Option<MatchEvidence>, StoreError> {
+        Ok(self.state().match_evidence.get(&id).cloned())
     }
 
     async fn replace_step_matches(
@@ -2484,12 +2831,30 @@ impl AuthStore for MemoryStore {
             .filter(|m| m.step_id == step_id)
             .map(|m| m.id)
             .collect();
+        if doomed.iter().any(|id| {
+            state
+                .match_workflows
+                .get(id)
+                .is_some_and(|w| !w.history.is_empty())
+        }) {
+            return Err(StoreError::Other("Matches with an audit history cannot be replaced by an import; use a result correction.".into()));
+        }
         for id in doomed {
             state.remove_match(id);
         }
         let ids: Vec<Uuid> = matches.iter().map(|_| Uuid::new_v4()).collect();
         let now = now_rfc3339();
         for (index, import) in matches.into_iter().enumerate() {
+            if let Some(schedule) = import.schedule {
+                state.match_workflows.insert(
+                    ids[index],
+                    MatchWorkflow {
+                        revision: 1,
+                        schedule,
+                        ..Default::default()
+                    },
+                );
+            }
             state.matches.push(Match {
                 id: ids[index],
                 game_id,
@@ -2498,6 +2863,10 @@ impl AuthStore for MemoryStore {
                 round: import.round,
                 bracket: import.bracket,
                 next_match_id: import.next.and_then(|next| ids.get(next).copied()),
+                number: import.number,
+                next_slot: import.next_slot,
+                loser_next_match_id: import.loser_next.and_then(|next| ids.get(next).copied()),
+                loser_next_slot: import.loser_next_slot,
                 best_of: import.best_of,
                 scheduled_at: import.scheduled_at,
                 started_at: import.started_at,
@@ -2514,6 +2883,8 @@ impl AuthStore for MemoryStore {
                     points: score.points,
                     rank: score.rank,
                     result: score.result,
+                    slot: score.slot,
+                    games_won: score.games_won,
                 });
             }
             for (number, game) in import.games.into_iter().enumerate() {
@@ -2536,6 +2907,89 @@ impl AuthStore for MemoryStore {
             }
         }
         Ok(true)
+    }
+
+    async fn generate_matches(&self, generation: Generation) -> Result<Vec<Match>, StoreError> {
+        let mut state = self.state();
+        let Some(step) = state.steps.iter().find(|s| s.id == generation.step_id) else {
+            return Err(StoreError::StepState);
+        };
+        if step.status != StepStatus::Ongoing {
+            return Err(StoreError::StepState);
+        }
+        let existing: Vec<&Match> = state
+            .matches
+            .iter()
+            .filter(|m| m.step_id == generation.step_id && !state.archived_matches.contains(&m.id))
+            .collect();
+        let clash = if generation.initial {
+            !existing.is_empty()
+        } else {
+            generation.matches.iter().any(|g| {
+                existing.iter().any(|m| {
+                    m.number.is_some()
+                        && m.group_id == Some(g.group_id)
+                        && m.round == Some(g.round)
+                        && m.bracket == g.bracket
+                        && m.number == Some(g.number)
+                })
+            })
+        };
+        if clash {
+            return Err(StoreError::StepState);
+        }
+        let ids: Vec<Uuid> = generation.matches.iter().map(|_| Uuid::new_v4()).collect();
+        let now = now_rfc3339();
+        let mut created = Vec::with_capacity(ids.len());
+        for (index, planned) in generation.matches.iter().enumerate() {
+            let bye = planned.bye_points.is_some();
+            let m = Match {
+                id: ids[index],
+                game_id: generation.game_id,
+                step_id: generation.step_id,
+                group_id: Some(planned.group_id),
+                round: Some(planned.round),
+                bracket: planned.bracket,
+                next_match_id: planned.next.and_then(|(n, _)| ids.get(n).copied()),
+                number: Some(planned.number),
+                next_slot: planned.next.map(|(_, slot)| slot),
+                loser_next_match_id: planned.loser_next.and_then(|(n, _)| ids.get(n).copied()),
+                loser_next_slot: planned.loser_next.map(|(_, slot)| slot),
+                best_of: planned.best_of,
+                scheduled_at: None,
+                started_at: bye.then(|| now.clone()),
+                ended_at: bye.then(|| now.clone()),
+                status: if bye {
+                    MatchStatus::Finished
+                } else {
+                    MatchStatus::Scheduled
+                },
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            };
+            for (participant_id, slot) in &planned.participants {
+                let mut member = empty_participant(m.id, *participant_id);
+                member.slot = *slot;
+                if let Some(points) = planned.bye_points {
+                    member.points = points;
+                    member.rank = Some(1);
+                    member.result = Some(MatchResult::Win);
+                }
+                state.match_participants.push(member);
+            }
+            state.matches.push(m.clone());
+            created.push(m);
+        }
+        for (participant_id, points) in generation.step_points {
+            if let Some(member) = state
+                .step_participants
+                .iter_mut()
+                .find(|p| p.step_id == generation.step_id && p.participant_id == participant_id)
+            {
+                member.points = points;
+            }
+        }
+        Ok(created)
     }
 
     async fn list_match_games(&self, match_id: Uuid) -> Result<Vec<MatchGame>, StoreError> {
@@ -2573,6 +3027,13 @@ impl AuthStore for MemoryStore {
         attributes: serde_json::Value,
     ) -> Result<Option<MatchGame>, StoreError> {
         let mut state = self.state();
+        if state
+            .match_workflows
+            .get(&match_id)
+            .is_some_and(MatchWorkflow::requires_decision)
+        {
+            return Err(StoreError::MatchState);
+        }
         let Some(m) = state.matches.iter().find(|m| m.id == match_id) else {
             return Ok(None);
         };
@@ -2989,6 +3450,164 @@ impl AuthStore for MemoryStore {
 }
 
 impl State {
+    fn competition_snapshot(&self, tid: Uuid) -> Result<CompetitionSnapshot, StoreError> {
+        let tournament = self
+            .tournaments
+            .iter()
+            .find(|t| t.id == tid)
+            .cloned()
+            .ok_or(StoreError::MatchState)?;
+        let steps: Vec<Step> = self
+            .steps
+            .iter()
+            .filter(|s| s.tournament_id == tid)
+            .cloned()
+            .collect();
+        let ids: HashSet<Uuid> = steps.iter().map(|s| s.id).collect();
+        let matches: Vec<Match> = self
+            .matches
+            .iter()
+            .filter(|m| ids.contains(&m.step_id) && !self.archived_matches.contains(&m.id))
+            .cloned()
+            .collect();
+        let match_ids: HashSet<Uuid> = matches.iter().map(|m| m.id).collect();
+        let mut stats: Vec<Stat> = self
+            .stats
+            .iter()
+            .filter(|s| self.stat_games.contains(&(s.id, tournament.game_id)))
+            .cloned()
+            .collect();
+        stats.sort_by_key(|s| s.id);
+        for stat in &mut stats {
+            stat.options = self
+                .stat_options
+                .get(&(stat.id, tournament.game_id))
+                .cloned()
+                .unwrap_or_default();
+        }
+        let mut rules: Vec<ScoringRule> = self
+            .scoring_rules
+            .iter()
+            .filter(|r| r.tournament_id == tid)
+            .cloned()
+            .collect();
+        rules.sort_by_key(|r| r.id);
+        let mut snapshot = CompetitionSnapshot {
+            configuration: serde_json::json!({"stats":stats,"rules":rules}),
+            tournament,
+            steps,
+            groups: self
+                .step_groups
+                .iter()
+                .filter(|g| ids.contains(&g.step_id))
+                .cloned()
+                .collect(),
+            step_members: self
+                .step_participants
+                .iter()
+                .filter(|p| ids.contains(&p.step_id))
+                .cloned()
+                .collect(),
+            participants: self
+                .participants
+                .iter()
+                .filter(|p| p.tournament_id == tid)
+                .cloned()
+                .collect(),
+            matches,
+            members: self
+                .match_participants
+                .iter()
+                .filter(|p| match_ids.contains(&p.match_id))
+                .cloned()
+                .collect(),
+            games: self
+                .match_games
+                .iter()
+                .filter(|g| match_ids.contains(&g.match_id))
+                .cloned()
+                .collect(),
+        };
+        snapshot.canonicalize();
+        Ok(snapshot)
+    }
+
+    fn apply_competition(&mut self, next: CompetitionSnapshot) {
+        let step_ids: HashSet<Uuid> = next.steps.iter().map(|s| s.id).collect();
+        let active: HashSet<Uuid> = next.matches.iter().map(|m| m.id).collect();
+        for m in &mut self.matches {
+            if step_ids.contains(&m.step_id) && !active.contains(&m.id) {
+                self.archived_matches.insert(m.id);
+                m.status = MatchStatus::Cancelled;
+                m.group_id = None;
+            }
+        }
+        self.matches.retain(|m| !active.contains(&m.id));
+        self.match_participants
+            .retain(|p| !active.contains(&p.match_id));
+        self.match_games.retain(|g| !active.contains(&g.match_id));
+        self.steps.retain(|s| !step_ids.contains(&s.id));
+        self.step_groups.retain(|g| !step_ids.contains(&g.step_id));
+        self.step_participants
+            .retain(|p| !step_ids.contains(&p.step_id));
+        self.tournaments.retain(|t| t.id != next.tournament.id);
+        self.tournaments.push(next.tournament);
+        self.steps.extend(next.steps);
+        self.step_groups.extend(next.groups);
+        self.step_participants.extend(next.step_members);
+        self.matches.extend(next.matches);
+        self.match_participants.extend(next.members);
+        self.match_games.extend(next.games);
+    }
+
+    fn finish_match_in(&mut self, finish: MatchFinish) -> Result<Option<Match>, StoreError> {
+        let Some(m) = self.matches.iter().find(|m| m.id == finish.match_id) else {
+            return Ok(None);
+        };
+        if matches!(m.status, MatchStatus::Finished | MatchStatus::Cancelled) {
+            return Err(StoreError::MatchState);
+        }
+        let step_id = m.step_id;
+        if let Some(game) = finish.game {
+            self.finish_game_in(game)?;
+        }
+        self.apply_match_scores(finish.match_id, finish.scores);
+        for placement in finish.placements {
+            self.place(placement);
+        }
+        let now = now_rfc3339();
+        for cancelled in finish.cancel {
+            if let Some(m) = self
+                .matches
+                .iter_mut()
+                .find(|m| m.id == cancelled && m.status == MatchStatus::Scheduled)
+            {
+                m.status = MatchStatus::Cancelled;
+                m.ended_at = Some(now.clone());
+                m.updated_at = now.clone();
+            }
+        }
+        for (participant_id, points) in finish.step_points {
+            if let Some(member) = self
+                .step_participants
+                .iter_mut()
+                .find(|p| p.step_id == step_id && p.participant_id == participant_id)
+            {
+                member.points = points;
+            }
+        }
+        let m = self
+            .matches
+            .iter_mut()
+            .find(|m| m.id == finish.match_id)
+            .ok_or(StoreError::MatchState)?;
+        m.status = MatchStatus::Finished;
+        m.started_at.get_or_insert(now.clone());
+        m.ended_at = Some(now.clone());
+        m.updated_at = now;
+        Ok(Some(m.clone()))
+    }
+
     fn record_invitation_event(
         &mut self,
         invitation: Uuid,
@@ -3398,8 +4017,24 @@ impl State {
                 p.points = score.points;
                 p.rank = score.rank;
                 p.result = score.result;
+                p.games_won = score.games_won;
+                if score.slot.is_some() {
+                    p.slot = score.slot;
+                }
             }
         }
+    }
+
+    /// Place un participant dans un match, à l'emplacement demandé s'il est libre.
+    fn place(&mut self, placement: Placement) {
+        if self.match_participants.iter().any(|p| {
+            p.match_id == placement.match_id && p.participant_id == placement.participant_id
+        }) {
+            return;
+        }
+        let mut member = empty_participant(placement.match_id, placement.participant_id);
+        member.slot = placement.slot;
+        self.match_participants.push(member);
     }
 
     fn remove_step(&mut self, id: Uuid) {
@@ -3422,6 +4057,10 @@ impl State {
         let game = self.match_games.iter().find(|g| g.id == game_id);
         let open = game.is_some_and(|g| {
             g.status == MatchStatus::Ongoing
+                && !self
+                    .match_workflows
+                    .get(&g.match_id)
+                    .is_some_and(MatchWorkflow::requires_decision)
                 && self.matches.iter().any(|m| {
                     m.id == g.match_id
                         && matches!(m.status, MatchStatus::Scheduled | MatchStatus::Ongoing)
@@ -3450,12 +4089,18 @@ impl State {
     }
 
     fn remove_match(&mut self, id: Uuid) {
+        self.match_workflows.remove(&id);
+        self.match_evidence
+            .retain(|_, evidence| evidence.match_id != id);
         self.match_games.retain(|g| g.match_id != id);
         self.matches.retain(|m| m.id != id);
         self.match_participants.retain(|p| p.match_id != id);
         for m in &mut self.matches {
             if m.next_match_id == Some(id) {
                 m.next_match_id = None;
+            }
+            if m.loser_next_match_id == Some(id) {
+                m.loser_next_match_id = None;
             }
         }
     }
@@ -3480,6 +4125,13 @@ impl State {
                 }
             }
         }
+        let seed_of = |id: &Uuid| {
+            start
+                .seeds
+                .iter()
+                .position(|s| s == id)
+                .and_then(|p| i32::try_from(p + 1).ok())
+        };
         for (index, ids) in start.groups.iter().enumerate() {
             let group = StepGroup {
                 id: Uuid::new_v4(),
@@ -3494,6 +4146,7 @@ impl State {
                     points: 0.0,
                     final_rank: None,
                     status: StepParticipantStatus::In,
+                    seed: seed_of(id),
                 });
             }
             self.step_groups.push(group);
@@ -3589,6 +4242,8 @@ fn empty_participant(match_id: Uuid, participant_id: Uuid) -> MatchParticipant {
         points: 0.0,
         rank: None,
         result: None,
+        slot: None,
+        games_won: None,
     }
 }
 
@@ -3599,6 +4254,8 @@ fn empty_score(participant_id: Uuid) -> MatchScore {
         points: 0.0,
         rank: None,
         result: None,
+        games_won: None,
+        slot: None,
     }
 }
 

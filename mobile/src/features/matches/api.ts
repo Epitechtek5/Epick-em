@@ -1,3 +1,11 @@
+import type {
+  WorkflowView,
+  WorkflowRequest,
+  Workflow,
+  Report,
+  CorrectionPreview,
+  CorrectionRequest,
+} from './workflow-types';
 import { authenticatedRequest } from '@/lib/api';
 import { authenticatedHeaders } from '@/features/users/api';
 import { teamId } from '@/features/teams/validation';
@@ -29,6 +37,16 @@ export function matchApi(token: string, tournamentId: string, stepId: string) {
     return item(id) + '/games/' + number;
   };
   return {
+    workflow: (id: string) => request<WorkflowView>(item(id) + '/workflow'),
+    updateWorkflow: (id: string, body: WorkflowRequest) =>
+      request<WorkflowView>(item(id) + '/workflow', 'POST', body),
+    previewCorrection: (id: string, report: Report, reason: string) =>
+      request<CorrectionPreview>(item(id) + '/correction-preview', 'POST', {
+        report,
+        reason,
+      }),
+    correct: (id: string, body: CorrectionRequest) =>
+      request<Workflow>(item(id) + '/corrections', 'POST', body),
     createGame: (id: string) =>
       request<MatchGame>(item(id) + '/games', 'POST', {}),
     getGame: (id: string, number: number) =>

@@ -98,3 +98,24 @@ Create a two-participant tournament with an ongoing stage and a BO3 match. From 
 For team tournaments, verify totals and individual player inputs remain separate, only roster members appear in MVP choices, and the saved player statistics and champion labels appear in the finished-game details. Repeat as the ordinary account: details remain readable, but creation, saving, completion, deletion and statistic administration are unavailable, including direct routes. Test offline loading/retry and save errors. Review narrow screens, large text, both themes and FR/EN/ES. Android runtime verification does not establish iOS runtime behavior.
 
 Automated coverage: `match-games.test.ts`, `match-game-screen.test.tsx`, `matches-screens.test.tsx`, and `stats-screens.test.tsx` cover contracts, scopes, options, roster constraints, invalid inputs, permissions, save-before-finish, confirmation, immutable games and existing flows.
+
+## Match operations and advanced brackets (#160)
+
+Automated workflow coverage verifies independent confirmation, server-controlled permissions, same-operation retries after a lost response, per-game drafts and percentage validation. Notification tests cover the exact authenticated workflow route. Backend integration tests cover conflicting reports, free-for-all consensus, private evidence, scheduling overrides, stale correction previews, downstream reset acknowledgement, atomic PostgreSQL writes, forfeit game archives and rejection of imports that would erase an audit trail.
+
+Manual checks use local fixture accounts rather than production data:
+
+1. In a BO3 with two participants, submit two winning games as player A. Confirm the match is still scheduled/ongoing and A cannot confirm their own report. Open it as B, inspect both games and confirm: the official match must finish 2–0.
+2. Submit contradictory reports in another match. Verify finalization is blocked, add a PNG/JPEG/PDF to a reasoned dispute, and resolve as an organizer. Ordinary users must not see the decision controls.
+3. Schedule a match, call participants, announce a delay and record attendance. Check the displayed local date/time and refreshed history. Confirm a forfeit explicitly; previous games must be retained in the audit.
+4. Correct a finished semifinal. Check the identified downstream matches, required replay acknowledgement, rejection of stale previews and the retained old results. Repeat with a completed final.
+5. Exercise generated single/double elimination (including reset final), Swiss next rounds, byes, qualification, manual seeds and BO overrides. Check pan/zoom and names/ranks in both themes and FR/EN/ES.
+6. Disconnect during a write, retry, and verify only one history entry. Open a notification workflow deep link before and after login. Repeat native file selection/share and cancellation on Android and iOS separately.
+
+A successful export or APK build does not replace these device checks. Record native evidence independently; Android verification does not establish iOS runtime behavior.
+
+### Local runtime verification, 2026-11-17
+
+An Android release APK was installed on the running Pixel emulator against an isolated local API/database. Verified: real account login, authenticated workflow deep link, authoritative corrected standings, old results in history, participant calls, a ten-minute delay with reason, native document selection/upload followed by dispute submission, and organizer result validation with a mandatory reason. Server reads confirmed the recorded actions and evidence association. Web integration separately verified independent BO3 confirmation and a reasoned correction. iOS JavaScript export passed; native iOS execution was not available in this Windows environment. Remote push delivery still requires the separately configured notification infrastructure.
+
+The full mobile suite passed 387 tests; the workflow subset was rerun after the final preview invalidation change. Lint, formatting, TypeScript and Expo compatibility checks passed. The upstream picomatch vulnerability remains unfixed; the audit policy has a narrowly scoped, expiring acceptance documented in `security.md`.

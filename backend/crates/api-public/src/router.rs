@@ -37,8 +37,13 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::tournament_roles::routes)
         .configure(crate::tournament_templates::routes)
         .configure(crate::steps::routes)
+        .configure(crate::generation::routes)
         .configure(crate::matches::routes)
         .configure(crate::match_games::routes)
+        .configure(crate::match_workflows::routes)
+        .configure(crate::match_corrections::routes)
+        .configure(crate::match_scheduling::routes)
+        .configure(crate::match_evidence::routes)
         .configure(crate::invitations::routes);
 }
 
@@ -66,6 +71,7 @@ pub fn app(
 > {
     let (app, spec) = App::new()
         .app_data(web::Data::new(state))
+        .app_data(web::PayloadConfig::new(5 * 1024 * 1024))
         // Corps JSON, identifiant ou paramètres invalides : même format d'erreur que les handlers.
         .app_data(web::JsonConfig::default().error_handler(|err, _| ApiError::from(err).into()))
         .app_data(web::PathConfig::default().error_handler(|_, _| ApiError::NotFound.into()))

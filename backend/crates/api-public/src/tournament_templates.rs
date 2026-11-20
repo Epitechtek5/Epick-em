@@ -318,6 +318,7 @@ async fn copy_children(
                     matches_per_group: step.matches_per_group,
                     advance_per_group: step.advance_per_group,
                     tiebreak: step.tiebreak,
+                    rules: step.rules,
                 },
             })
             .await

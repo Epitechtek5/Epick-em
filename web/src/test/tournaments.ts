@@ -110,6 +110,7 @@ export const STEP_POOLS: Step = {
   matches_per_group: 3,
   advance_per_group: 4,
   tiebreak: ['wins', 'best_placement'],
+  rules: { seeding: 'random', qualification: 'random', best_of: 1, best_of_by_round: {}, scoring: null },
   status: 'pending',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',

@@ -600,23 +600,6 @@ async fn a_best_of_three_ends_early_and_aggregates_the_games() {
     let one = format!("{}/{match_id}", series.matches());
     let games = format!("{one}/games");
 
-    // La série se joue en parties : pas de saisie ni de clôture directes.
-    let (status, error) = put(
-        &app,
-        &format!("{one}/results"),
-        &s.admin,
-        json!({ "results": [{ "participant_id": series.ids[0], "stats": { "kills": 1 } }] }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
-    let (status, _) = post(
-        &app,
-        &format!("{one}/status"),
-        &s.admin,
-        json!({ "status": "finished" }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
     for best_of in [0, 2, 7] {
         let (status, _) = patch(&app, &one, &s.admin, json!({ "best_of": best_of })).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{best_of}");
@@ -654,6 +637,24 @@ async fn a_best_of_three_ends_early_and_aggregates_the_games() {
     assert_eq!(game["participants"].as_array().unwrap().len(), 2);
     let (_, current) = get(&app, &one, &s.admin).await;
     assert_eq!(current["status"], "ongoing");
+    // Une partie est saisie : la série se joue en parties, plus de saisie ni de clôture
+    // directes.
+    let (status, error) = put(
+        &app,
+        &format!("{one}/results"),
+        &s.admin,
+        json!({ "results": [{ "participant_id": series.ids[0], "stats": { "kills": 1 } }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    let (status, _) = post(
+        &app,
+        &format!("{one}/status"),
+        &s.admin,
+        json!({ "status": "finished" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     // Une seule partie ouverte à la fois.
     let (status, _) = post(&app, &games, &s.admin, json!({})).await;
     assert_eq!(status, StatusCode::CONFLICT);

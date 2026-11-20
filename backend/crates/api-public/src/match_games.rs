@@ -16,7 +16,7 @@
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
 use crate::matches::{
-    MatchDetail, StatSchema, close_if_complete, commit_finish, detail_of, find_match, match_error,
+    MatchDetail, StatSchema, close_if_complete, detail_of, find_match, finish_series, match_error,
     match_participants, participants_problem, players_of, points_of, require_ongoing, scoring_of,
     settle,
 };
@@ -302,6 +302,8 @@ async fn save_game_results(
                 stats: entry.stats,
                 rank: entry.rank,
                 result: entry.result,
+                games_won: None,
+                slot: None,
             }),
             Err(problem) => errors.push(("results", format!("{id} : {problem}"))),
         }
@@ -397,6 +399,8 @@ async fn finish_game(
             points: p.points,
             rank: p.rank,
             result: p.result,
+            games_won: None,
+            slot: None,
         })
         .collect();
     let scores =
@@ -433,10 +437,17 @@ async fn finish_game(
         .map(|s| (s.key.clone(), s.kind))
         .collect();
     let ids: Vec<Uuid> = members.iter().map(|m| m.participant_id).collect();
-    let totals = aggregate(&games, &ids, &kinds);
-    let aggregated =
-        settle(&totals).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
-    let finished = commit_finish(&state, &step, &current, aggregated, Some(finish)).await?;
+    // Le match se termine comme un match saisi directement : manches gagnées comptées sur les
+    // parties, emplacements repris du match pour la progression dans le tableau.
+    let seated = match_participants(&state, &step, current.id).await?;
+    let mut totals = aggregate(&games, &ids, &kinds);
+    for total in &mut totals {
+        total.slot = seated
+            .iter()
+            .find(|m| m.participant_id == total.participant_id)
+            .and_then(|m| m.slot);
+    }
+    let finished = finish_series(&state, &step, &current, &totals, Some(finish)).await?;
     let step_closed = close_if_complete(&state, &tournament, &step).await;
     let step = match &step_closed {
         Some(closed) => closed.step.clone(),
@@ -569,12 +580,14 @@ fn game_participant(score: MatchScore) -> MatchGameParticipant {
     }
 }
 
-/// Ce qui interdit de saisir directement les résultats du match : il se joue en parties.
+/// Ce qui interdit de saisir directement les résultats du match : des parties ont été saisies,
+/// le résultat s'en déduit. Sans partie, une série se saisit directement avec les manches
+/// gagnées (`games_won`) de chaque participant.
 pub(crate) async fn games_problem(
     state: &AppState,
     current: &Match,
 ) -> Result<Option<String>, ApiError> {
-    if current.best_of > 1 || !games_of(state, current.id).await?.is_empty() {
+    if !games_of(state, current.id).await?.is_empty() {
         return Ok(Some(
             "Ce match se joue en parties : saisissez et terminez chaque partie (`.../games`), le résultat du match en est déduit."
                 .to_string(),
@@ -628,7 +641,7 @@ pub(crate) fn series_problem(best_of: i32, games: &[MatchGame]) -> Option<String
 }
 
 /// Résultat du match déduit des parties terminées : statistiques numériques cumulées (moyenne
-/// pour un pourcentage), points cumulés et rang d'après les parties gagnées. Le résultat
+/// pour un pourcentage), points cumulés, parties gagnées (`games_won`) et rang d'après elles. Le résultat
 /// (`win`, `loss`, `draw`) en est déduit à la clôture (voir `settle`).
 pub(crate) fn aggregate(
     games: &[MatchGame],
@@ -684,6 +697,10 @@ pub(crate) fn aggregate(
                 points,
                 rank: ranks.get(id).copied(),
                 result: None,
+                games_won: Some(
+                    i32::try_from(won.get(id).copied().unwrap_or(0)).unwrap_or(i32::MAX),
+                ),
+                slot: None,
             }
         })
         .collect()

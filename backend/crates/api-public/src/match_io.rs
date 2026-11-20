@@ -3,19 +3,22 @@
 //!
 //! Le niveau des étapes les traite comme des valeurs opaques ; ce module est le seul à connaître
 //! leur structure : un tableau de
-//! `{ "group", "round", "bracket", "next", "best_of", "scheduled_at", "started_at", "ended_at",
-//!   "status", "participants": [{ "user" | "team", "stats", "points", "rank", "result" }],
+//! `{ "group", "round", "number", "bracket", "best_of", "next", "next_slot", "loser_next",
+//!   "loser_next_slot", "scheduled_at", "started_at", "ended_at", "status",
+//!   "participants": [{ "user" | "team", "stats", "points", "rank", "result", "slot",
+//!   "games_won" }],
 //!   "games": [{ "status", "attributes", "started_at", "ended_at", "participants": [...] }] }`.
 //!
 //! `best_of` (1, 3 ou 5, 1 s'il est absent) et `games` (les parties de la série, dans l'ordre :
 //! la n-ième est la partie n° n) sont facultatifs : un fichier antérieur aux parties s'importe
-//! tel quel. Les participants d'une partie se désignent comme ceux du match ; dans
+//! tel quel, et une série terminée sans ses parties donne les manches gagnées (`games_won`) de
+//! chaque participant. Les participants d'une partie se désignent comme ceux du match ; dans
 //! `attributes`, un MVP désigné par un participant du match s'écrit `{ "user": "<nom>" }` ou
 //! `{ "team": <rang> }` plutôt que par identifiant, pour survivre à la copie d'un environnement
 //! à l'autre.
 //!
-//! Le groupe est désigné par son rang dans l'étape, le match suivant (`next`) par son rang (à
-//! partir de 0) dans le tableau des matchs de la même étape, et un participant comme dans le
+//! Le groupe est désigné par son rang dans l'étape, le match suivant (`next`) et celui du perdant
+//! (`loser_next`) par leur rang (à partir de 0) dans le tableau des matchs de la même étape, et un participant comme dans le
 //! fichier des étapes : `user` (nom d'utilisateur) ou `team` (rang dans `teams`). `stats` est le
 //! JSON de `match_participant.stats`. Les matchs voyagent avec leur étape : le niveau des
 //! tournois, lui, refuse un tableau `matches` non vide ([`InSteps`]).
@@ -72,19 +75,33 @@ impl TournamentChild for InSteps {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MatchItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schedule: Option<crate::store::MatchSchedule>,
     /// Rang du groupe dans l'étape, à partir de 1.
     #[serde(default)]
     group: Option<i32>,
+    /// Ronde de compétition (à ne pas confondre avec les manches d'une série).
     #[serde(default)]
     round: Option<i32>,
+    /// Rang du match dans sa ronde, pour les matchs générés.
+    #[serde(default)]
+    number: Option<i32>,
     #[serde(default)]
     bracket: Option<Bracket>,
-    /// Rang (à partir de 0), dans les matchs de l'étape, du match où va le vainqueur.
-    #[serde(default)]
-    next: Option<usize>,
     /// Longueur de la série : 1, 3 ou 5 parties ; 1 s'il est absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     best_of: Option<i32>,
+    /// Rang (à partir de 0), dans les matchs de l'étape, du match où va le vainqueur.
+    #[serde(default)]
+    next: Option<usize>,
+    /// Emplacement (1 ou 2) du vainqueur dans le match suivant.
+    #[serde(default)]
+    next_slot: Option<i32>,
+    /// Rang (à partir de 0) du match où va le perdant, en double élimination.
+    #[serde(default)]
+    loser_next: Option<usize>,
+    #[serde(default)]
+    loser_next_slot: Option<i32>,
     /// Horodatages RFC 3339 en UTC (suffixe `Z`).
     #[serde(default)]
     scheduled_at: Option<String>,
@@ -141,6 +158,12 @@ pub(crate) struct MatchParticipantItem {
     rank: Option<i32>,
     #[serde(default)]
     result: Option<MatchResult>,
+    /// Emplacement (1 ou 2) dans le match.
+    #[serde(default)]
+    slot: Option<i32>,
+    /// Manches gagnées dans une série.
+    #[serde(default)]
+    games_won: Option<i32>,
 }
 
 impl MatchParticipantItem {
@@ -185,6 +208,35 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
     for (index, item) in matches.iter().enumerate() {
         let mut reasons = Vec::new();
         let label = index + 1;
+        if let Some(schedule) = &item.schedule {
+            let invalid = schedule
+                .duration_minutes
+                .is_some_and(|n| !(1..=1440).contains(&n))
+                || !(0..=1440).contains(&schedule.delay_minutes)
+                || schedule
+                    .venue
+                    .as_ref()
+                    .is_some_and(|s| s.chars().count() > 160)
+                || schedule
+                    .station
+                    .as_ref()
+                    .is_some_and(|s| s.chars().count() > 160)
+                || schedule
+                    .called_at
+                    .as_ref()
+                    .is_some_and(|s| normalize_timestamp(s).is_none())
+                || schedule
+                    .scheduled_at
+                    .as_ref()
+                    .is_some_and(|s| normalize_timestamp(s).is_none())
+                || schedule.scheduled_at != item.scheduled_at;
+            if invalid {
+                reasons.push(
+                    "schedule: invalid duration, venue, timestamp or conflicting scheduled_at."
+                        .into(),
+                );
+            }
+        }
         let allowed = match item.group {
             Some(group) => match scope.groups.get(&group) {
                 Some(members) => Some(members.iter().collect::<HashSet<&Who>>()),
@@ -202,6 +254,26 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
         }
         if item.bracket.is_some() && scope.format != StepFormat::DoubleElim {
             reasons.push("bracket : seulement en double élimination.".into());
+        }
+        if let Some(number) = item.number
+            && number < 1
+        {
+            reasons.push("number : un entier à partir de 1 est attendu.".into());
+        }
+        for (field, slot) in [
+            ("next_slot", item.next_slot),
+            ("loser_next_slot", item.loser_next_slot),
+        ] {
+            if slot.is_some_and(|s| !matches!(s, 1 | 2)) {
+                reasons.push(format!("{field} : 1 ou 2 est attendu."));
+            }
+        }
+        if let Some(next) = item.loser_next {
+            if !eliminating {
+                reasons.push("loser_next : le perdant ne se propage qu'en élimination.".into());
+            } else if next >= matches.len() || next == index {
+                reasons.push(format!("loser_next : le match {} est invalide.", next + 1));
+            }
         }
         if let Some(next) = item.next {
             if !eliminating {
@@ -249,7 +321,12 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
                 capacity_of(scope.match_type, scope.group_size)
             ));
         }
-        if matches!(status, MatchStatus::Ongoing | MatchStatus::Finished)
+        // Un match exempt (bye) : un seul participant, terminé, qui gagne.
+        let bye = status == MatchStatus::Finished
+            && count == 1
+            && item.participants[0].result == Some(MatchResult::Win);
+        if !bye
+            && matches!(status, MatchStatus::Ongoing | MatchStatus::Finished)
             && let Some(problem) = playable_problem(scope.match_type, scope.group_size, count)
         {
             reasons.push(format!("participants : {problem}"));
@@ -276,6 +353,12 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
             if !participant.points.is_none_or(f64::is_finite) {
                 reasons.push("participants : `points` doit être un nombre fini.".into());
             }
+            if participant.slot.is_some_and(|s| !matches!(s, 1 | 2)) {
+                reasons.push("participants : `slot` vaut 1 ou 2.".into());
+            }
+            if participant.games_won.is_some_and(|g| g < 0) {
+                reasons.push("participants : `games_won` est positif.".into());
+            }
             if let Some(rank) = participant.rank
                 && !(1..=i32::try_from(count).unwrap_or(i32::MAX)).contains(&rank)
             {
@@ -293,6 +376,8 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
                 points: participant.points.unwrap_or(0.0),
                 rank: participant.rank,
                 result: participant.result,
+                slot: participant.slot,
+                games_won: participant.games_won,
             });
         }
         let settled = if status == MatchStatus::Finished {
@@ -343,9 +428,13 @@ fn game_problems(
         reasons.push("best_of : la série compte 1, 3 ou 5 parties.".to_string());
     }
     if item.games.is_empty() {
-        if status == MatchStatus::Finished && best_of > 1 {
+        // Sans ses parties, une série terminée donne les manches gagnées de chacun.
+        if status == MatchStatus::Finished
+            && best_of > 1
+            && item.participants.iter().any(|p| p.games_won.is_none())
+        {
             reasons.push(format!(
-                "games : un match terminé en série de {best_of} a ses parties."
+                "games : un match terminé en série de {best_of} a ses parties, ou les manches gagnées (`games_won`) de chaque participant."
             ));
         }
         return (reasons, games);
@@ -443,6 +532,8 @@ fn game_problems(
                 points: participant.points.unwrap_or(0.0),
                 rank: participant.rank,
                 result: participant.result,
+                games_won: None,
+                slot: None,
             });
         }
         let mut settled = Vec::new();
@@ -684,6 +775,8 @@ impl StepMatches for StoreMatches {
                         points: Some(member.points),
                         rank: member.rank,
                         result: member.result,
+                        games_won: None,
+                        slot: None,
                     });
                 }
                 game_participants.sort_by(|a, b| {
@@ -717,6 +810,8 @@ impl StepMatches for StoreMatches {
                     points: Some(member.points),
                     rank: member.rank,
                     result: member.result,
+                    slot: member.slot,
+                    games_won: member.games_won,
                 });
             }
             // Ordre indépendant des identifiants : deux exports du même contenu sont identiques.
@@ -724,12 +819,18 @@ impl StepMatches for StoreMatches {
                 (a.user.as_ref().map(|u| u.to_lowercase()), a.team)
                     .cmp(&(b.user.as_ref().map(|u| u.to_lowercase()), b.team))
             });
+            let workflow = self.0.match_workflow(found.id).await?;
             let item = MatchItem {
+                schedule: (workflow.revision > 0).then_some(workflow.schedule),
                 group: found.group_id.and_then(|id| groups.get(&id).copied()),
                 round: found.round,
+                number: found.number,
                 bracket: found.bracket,
-                next: None,
                 best_of: (found.best_of != 1).then_some(found.best_of),
+                next: None,
+                next_slot: found.next_slot,
+                loser_next: None,
+                loser_next_slot: found.loser_next_slot,
                 scheduled_at: found.scheduled_at.clone(),
                 started_at: found.started_at.clone(),
                 ended_at: found.ended_at.clone(),
@@ -737,7 +838,11 @@ impl StepMatches for StoreMatches {
                 participants,
                 games: game_items,
             };
-            entries.push((found.id, found.next_match_id, item));
+            entries.push((
+                found.id,
+                (found.next_match_id, found.loser_next_match_id),
+                item,
+            ));
         }
         entries.sort_by_cached_key(|(_, _, item)| {
             let who: Vec<(Option<String>, Option<usize>)> = item
@@ -749,6 +854,7 @@ impl StepMatches for StoreMatches {
                 item.group,
                 item.round,
                 item.bracket.map(Bracket::as_str),
+                item.number,
                 item.scheduled_at.clone(),
                 item.status.map(MatchStatus::as_str),
                 who,
@@ -761,8 +867,9 @@ impl StepMatches for StoreMatches {
             .collect();
         entries
             .into_iter()
-            .map(|(_, next, mut item)| {
+            .map(|(_, (next, loser_next), mut item)| {
                 item.next = next.and_then(|id| position.get(&id).copied());
+                item.loser_next = loser_next.and_then(|id| position.get(&id).copied());
                 serde_json::to_value(item).map_err(other)
             })
             .collect()
@@ -830,6 +937,8 @@ impl StepMatches for StoreMatches {
                     points,
                     rank: participant.rank,
                     result: participant.result,
+                    games_won: participant.games_won,
+                    slot: participant.slot,
                 });
             }
             if status == MatchStatus::Finished {
@@ -843,6 +952,8 @@ impl StepMatches for StoreMatches {
                         points: s.points,
                         rank: s.rank,
                         result: s.result,
+                        slot: s.slot,
+                        games_won: s.games_won,
                     })
                     .collect();
                 scores = settle(&members).map_err(other)?;
@@ -872,6 +983,8 @@ impl StepMatches for StoreMatches {
                         points,
                         rank: participant.rank,
                         result: participant.result,
+                        games_won: None,
+                        slot: None,
                     });
                 }
                 let game_status = game.status.unwrap_or(MatchStatus::Ongoing);
@@ -885,6 +998,8 @@ impl StepMatches for StoreMatches {
                             points: s.points,
                             rank: s.rank,
                             result: s.result,
+                            games_won: None,
+                            slot: None,
                         })
                         .collect();
                     game_scores = settle(&members).map_err(other)?;
@@ -910,10 +1025,15 @@ impl StepMatches for StoreMatches {
                 });
             }
             imports.push(MatchImport {
+                schedule: item.schedule.clone(),
                 group_id: item.group.and_then(|index| groups.get(&index).copied()),
                 round: item.round,
                 bracket: item.bracket,
                 next: item.next,
+                next_slot: item.next_slot,
+                loser_next: item.loser_next,
+                loser_next_slot: item.loser_next_slot,
+                number: item.number,
                 best_of: item.best_of.unwrap_or(1),
                 games,
                 scheduled_at: normalized(&item.scheduled_at),

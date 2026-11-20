@@ -12,27 +12,36 @@
 //! calculés sur `total`. Les points viennent du barème du tournoi (`scoring_rule`) ; une
 //! statistique sans règle ne rapporte rien.
 //!
-//! Un match se joue en une seule partie (`best_of` = 1, résultats saisis directement ici, comme
-//! pour les matchs historiques) ou en série de 1, 3 ou 5 parties (voir [`crate::match_games`]) :
-//! ses résultats se déduisent alors des parties, et le match se termine tout seul quand un
-//! vainqueur est connu. `round` reste la ronde du tournoi, jamais le numéro de partie.
+//! Les matchs d'une étape se génèrent automatiquement (module `generation`) ou se créent à la
+//! main avec `POST .../matches`. Un match porte sa série (`best_of` : 1, 3 ou 5) et se joue de
+//! deux façons :
 //!
-//! Le lancement d'une étape ne génère pas encore ses matchs (calendrier des manches, rondes
-//! suisses, tableau d'élimination) : un administrateur les crée avec `POST .../matches`.
+//! - ses parties sont saisies une à une (voir [`crate::match_games`]) : les résultats du match
+//!   s'en déduisent, chaque participant compte ses parties gagnées (`games_won`), et le match se
+//!   termine tout seul quand un vainqueur est connu ;
+//! - ou ses résultats sont saisis directement ici : en duel au meilleur de 3 ou 5, chaque
+//!   participant déclare alors ses manches gagnées (`games_won`).
+//!
+//! Dans les deux cas, le vainqueur d'une série est celui qui atteint la majorité des manches.
+//! `round` reste la ronde de compétition, jamais le numéro de partie. Le barème de l'étape
+//! (`rules.scoring`), s'il existe, remplace les points issus des statistiques pour cette étape.
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::generation::generate_next_round;
 use crate::match_games::{games_problem, series_problem};
 use crate::steps::{CloseResponse, close_step_of, find_step};
 use crate::store::{
     Bracket, GameFinish, Match, MatchFinish, MatchGame, MatchInput, MatchParticipant, MatchResult,
-    MatchScore, MatchStatus, MatchType, MatchUpdate, ScoringRule, Stat, StatScope, StatType, Step,
-    StepFormat, StepStatus, StoreError, Tournament,
+    MatchScore, MatchStatus, MatchType, MatchUpdate, Placement, ScoringRule, Stat, StatScope,
+    StatType, Step, StepFormat, StepStatus, StoreError, Tournament,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournament_access::{require_manage, require_referee};
 use crate::tournaments::{find_tournament, nullable, visible_tournament};
 use actix_web::{HttpResponse, delete, get, patch, post, put, web};
+use domain::bracket::grand_final_ends_tournament;
+use domain::seeding::{games_to_win, series_is_decided};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -126,6 +135,10 @@ struct ResultEntry {
     /// fin du match si aucun participant n'en a.
     #[schema(minimum = 1)]
     rank: Option<i32>,
+    /// Manches gagnées dans une série (BO3, BO5), de 0 au nombre à gagner ; exigé pour terminer
+    /// un duel au meilleur de 3 ou 5.
+    #[schema(minimum = 0)]
+    games_won: Option<i32>,
     /// `win` pour la première place, `loss` sinon, `draw` en cas d'égalité en tête, si absent à
     /// la fin du match.
     result: Option<MatchResult>,
@@ -543,6 +556,19 @@ async fn save_results(
             ));
             continue;
         }
+        if let Some(games) = entry.games_won
+            && !(0..=games_to_win(current.best_of)).contains(&games)
+        {
+            errors.push((
+                "results",
+                format!(
+                    "Les manches gagnées de {id} vont de 0 à {} (série au meilleur de {}).",
+                    games_to_win(current.best_of),
+                    current.best_of
+                ),
+            ));
+            continue;
+        }
         match schema.parse(&entry.stats) {
             Ok(totals) => scores.push(MatchScore {
                 participant_id: id,
@@ -550,6 +576,8 @@ async fn save_results(
                 stats: entry.stats,
                 rank: entry.rank,
                 result: entry.result,
+                games_won: entry.games_won,
+                slot: None,
             }),
             Err(problem) => errors.push(("results", format!("{id} : {problem}"))),
         }
@@ -655,6 +683,15 @@ async fn set_status(
                     return Err(ApiError::Validation(vec![("results", problem)]));
                 }
                 let finished = finish(&state, &step, &current, &members).await?;
+                // Ronde suisse terminée : la suivante se génère seule (sans revanche). Si elle
+                // est impossible, l'étape attend `POST .../rounds`.
+                if step.format == StepFormat::Swiss
+                    && current.number.is_some()
+                    && let Err(err) = generate_next_round(&state, &tournament, &step, false).await
+                    && !matches!(err, ApiError::InvalidTransition)
+                {
+                    eprintln!("api-public : ronde suivante de l'étape {} : {err}", step.id);
+                }
                 step_closed = close_if_complete(&state, &tournament, &step).await;
                 finished
             };
@@ -681,54 +718,51 @@ async fn set_status(
     }))
 }
 
-/// Termine le match : rangs et résultats déduits, points de l'étape recalculés, vainqueur placé
-/// dans le match suivant.
+/// Termine un match saisi directement (sans parties) : voir [`finish_series`].
 async fn finish(
     state: &AppState,
     step: &Step,
     current: &Match,
     members: &[MatchParticipant],
 ) -> Result<Match, ApiError> {
-    let scores =
-        settle(members).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
-    commit_finish(state, step, current, scores, None).await
+    finish_series(state, step, current, members, None).await
 }
 
-/// Termine le match avec ces résultats définitifs (et la dernière partie, s'il y en a une) : le
-/// vainqueur est vérifié et placé dans le match suivant, les points de l'étape recalculés, le
-/// tout en une seule opération du store.
-pub(crate) async fn commit_finish(
+/// Termine le match avec ses résultats (et la dernière partie de la série, s'il y en a une) :
+/// la série est décidée aux manches, les rangs et résultats sont déduits, le barème de l'étape
+/// appliqué, les participants placés dans les matchs suivants (avec l'annulation éventuelle du
+/// « reset » de grande finale) et les points de l'étape recalculés, le tout en une seule
+/// opération du store.
+pub(crate) async fn finish_series(
     state: &AppState,
     step: &Step,
     current: &Match,
-    scores: Vec<MatchScore>,
+    members: &[MatchParticipant],
     game: Option<GameFinish>,
 ) -> Result<Match, ApiError> {
-    let advance = match current.next_match_id {
-        None => None,
-        Some(next_id) => {
-            let winners: Vec<Uuid> = scores
-                .iter()
-                .filter(|s| s.result == Some(MatchResult::Win))
-                .map(|s| s.participant_id)
-                .collect();
-            let [winner] = winners[..] else {
-                return Err(ApiError::Validation(vec![(
-                    "results",
-                    "Un match d'élimination a un seul vainqueur (`win`).".to_string(),
-                )]));
-            };
-            let next = find_match(state, step, next_id).await?;
-            let waiting = match_participants(state, step, next.id).await?;
-            if next.status != MatchStatus::Scheduled
-                || waiting.len() >= capacity(step)
-                || waiting.iter().any(|p| p.participant_id == winner)
-            {
-                return Err(ApiError::InvalidTransition);
-            }
-            Some((next_id, winner))
-        }
-    };
+    let finish = prepare_series_finish(state, step, current, members, game).await?;
+    state
+        .store
+        .finish_match(finish)
+        .await
+        .map_err(match_error)?
+        .ok_or(ApiError::NotFound)
+}
+
+/// Build the same authoritative finalization for administrator and participant workflows.
+pub(crate) async fn prepare_series_finish(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+    game: Option<GameFinish>,
+) -> Result<MatchFinish, ApiError> {
+    // Une série se décide aux manches : ses rangs en viennent, avant toute autre validation.
+    let members = series_members(step, current, members)?;
+    let mut scores =
+        settle(&members).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
+    apply_step_scoring(step, &mut scores);
+    let (placements, cancel) = progression(state, step, current, &members, &scores).await?;
 
     // Total de l'étape : les matchs déjà terminés plus celui-ci.
     let finished_ids: HashSet<Uuid> = state
@@ -757,18 +791,176 @@ pub(crate) async fn commit_finish(
         })
         .collect();
 
-    state
-        .store
-        .finish_match(MatchFinish {
-            match_id: current.id,
-            scores,
-            advance,
-            step_points,
-            game,
-        })
-        .await
-        .map_err(match_error)?
-        .ok_or(ApiError::NotFound)
+    Ok(MatchFinish {
+        match_id: current.id,
+        scores,
+        placements,
+        cancel,
+        step_points,
+        game,
+    })
+}
+
+/// Série au meilleur de 3 ou 5 : le vainqueur est celui qui atteint la majorité des manches.
+/// Les rangs et résultats en sont déduits (ils remplacent ceux déduits des points), si bien
+/// qu'une série saisie avec ses seuls `games_won`, sans statistiques ni rang, se termine.
+fn series_members(
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+) -> Result<Vec<MatchParticipant>, ApiError> {
+    let mut scores = members.to_vec();
+    if current.best_of <= 1 || step.match_type != MatchType::Duel || scores.len() != 2 {
+        return Ok(scores);
+    }
+    let invalid = |message: String| ApiError::Validation(vec![("results", message)]);
+    let (Some(a), Some(b)) = (scores[0].games_won, scores[1].games_won) else {
+        return Err(invalid(format!(
+            "Une série au meilleur de {} exige `games_won` pour chaque participant.",
+            current.best_of
+        )));
+    };
+    let (winner, loser) = if a > b { (0, 1) } else { (1, 0) };
+    let (won, lost) = (
+        scores[winner].games_won.unwrap_or(0),
+        scores[loser].games_won.unwrap_or(0),
+    );
+    if !series_is_decided(current.best_of, won, lost) {
+        return Err(invalid(format!(
+            "Au meilleur de {}, le vainqueur compte {} manches et le perdant moins ({won}-{lost} reçu).",
+            current.best_of,
+            games_to_win(current.best_of)
+        )));
+    }
+    scores[winner].rank = Some(1);
+    scores[winner].result = Some(MatchResult::Win);
+    scores[loser].rank = Some(2);
+    scores[loser].result = Some(MatchResult::Loss);
+    Ok(scores)
+}
+
+/// Barème de l'étape : remplace les points issus des statistiques, sans les additionner (pas de
+/// double comptage dans le total de l'étape ni du tournoi).
+fn apply_step_scoring(step: &Step, scores: &mut [MatchScore]) {
+    let Some(scoring) = &step.rules.scoring else {
+        return;
+    };
+    for score in scores {
+        let points = match step.match_type {
+            MatchType::Duel => match score.result {
+                Some(MatchResult::Win) => Some(scoring.win),
+                Some(MatchResult::Draw) => Some(scoring.draw),
+                Some(MatchResult::Loss) => Some(scoring.loss),
+                None => None,
+            },
+            MatchType::Ffa => score.rank.map(|rank| {
+                usize::try_from(rank - 1)
+                    .ok()
+                    .and_then(|i| scoring.placement.get(i))
+                    .copied()
+                    .unwrap_or(0.0)
+            }),
+        };
+        if let Some(points) = points {
+            score.points = points;
+        }
+    }
+}
+
+/// Participants à placer dans les matchs suivants et matchs à annuler quand `current` se termine
+/// (vainqueur, et perdant en double élimination). À la grande finale, la manche de « reset » est
+/// annulée si le vainqueur du tableau des vainqueurs gagne ; sinon les deux finalistes y jouent.
+async fn progression(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    members: &[MatchParticipant],
+    scores: &[MatchScore],
+) -> Result<(Vec<Placement>, Vec<Uuid>), ApiError> {
+    let Some(next_id) = current.next_match_id else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let winners: Vec<Uuid> = scores
+        .iter()
+        .filter(|s| s.result == Some(MatchResult::Win))
+        .map(|s| s.participant_id)
+        .collect();
+    let [winner] = winners[..] else {
+        return Err(ApiError::Validation(vec![(
+            "results",
+            "Un match d'élimination a un seul vainqueur (`win`).".to_string(),
+        )]));
+    };
+    let loser = scores
+        .iter()
+        .map(|s| s.participant_id)
+        .find(|id| *id != winner);
+    let slot_of = |id: Uuid| {
+        members
+            .iter()
+            .find(|m| m.participant_id == id)
+            .and_then(|m| m.slot)
+    };
+
+    if current.bracket == Some(Bracket::GrandFinal) && current.loser_next_match_id == Some(next_id)
+    {
+        let reset = find_match(state, step, next_id).await?;
+        if reset.status != MatchStatus::Scheduled {
+            return Err(ApiError::InvalidTransition);
+        }
+        let winner_slot = usize::try_from(slot_of(winner).unwrap_or(1) - 1).unwrap_or(0);
+        if grand_final_ends_tournament(winner_slot) {
+            return Ok((Vec::new(), vec![next_id]));
+        }
+        let mut placements = vec![Placement {
+            match_id: next_id,
+            participant_id: winner,
+            slot: slot_of(winner).or(Some(2)),
+        }];
+        if let Some(loser) = loser {
+            placements.push(Placement {
+                match_id: next_id,
+                participant_id: loser,
+                slot: slot_of(loser).or(Some(1)),
+            });
+        }
+        return Ok((placements, Vec::new()));
+    }
+
+    let mut placements = Vec::new();
+    check_open_slot(state, step, next_id, winner).await?;
+    placements.push(Placement {
+        match_id: next_id,
+        participant_id: winner,
+        slot: current.next_slot,
+    });
+    if let (Some(loser_next), Some(loser)) = (current.loser_next_match_id, loser) {
+        check_open_slot(state, step, loser_next, loser).await?;
+        placements.push(Placement {
+            match_id: loser_next,
+            participant_id: loser,
+            slot: current.loser_next_slot,
+        });
+    }
+    Ok((placements, Vec::new()))
+}
+
+/// Le match d'arrivée attend encore des participants et ne contient pas déjà celui-ci.
+async fn check_open_slot(
+    state: &AppState,
+    step: &Step,
+    next_id: Uuid,
+    participant: Uuid,
+) -> Result<(), ApiError> {
+    let next = find_match(state, step, next_id).await?;
+    let waiting = match_participants(state, step, next.id).await?;
+    if next.status != MatchStatus::Scheduled
+        || waiting.len() >= capacity(step)
+        || waiting.iter().any(|p| p.participant_id == participant)
+    {
+        return Err(ApiError::InvalidTransition);
+    }
+    Ok(())
 }
 
 /// Clôture l'étape si tous ses matchs sont terminés ou annulés, avec au moins un match terminé
@@ -783,6 +975,7 @@ pub(crate) async fn close_if_complete(
         let groups = state.store.list_step_groups(step.id).await?;
         let matches = state.store.list_matches(step.id, None, None).await?;
         Ok::<_, StoreError>(is_complete(
+            step,
             &groups.iter().map(|g| g.id).collect::<Vec<_>>(),
             &matches,
         ))
@@ -811,7 +1004,14 @@ pub(crate) async fn close_if_complete(
 }
 
 /// Chaque groupe a au moins un match terminé et aucun match n'est encore à jouer.
-fn is_complete(groups: &[Uuid], matches: &[Match]) -> bool {
+pub(crate) fn is_complete(step: &Step, groups: &[Uuid], matches: &[Match]) -> bool {
+    // Une étape suisse générée n'est terminée qu'après sa dernière ronde.
+    if step.format == StepFormat::Swiss
+        && matches.iter().any(|m| m.number.is_some())
+        && matches.iter().filter_map(|m| m.round).max().unwrap_or(0) < step.matches_per_group
+    {
+        return false;
+    }
     !groups.is_empty()
         && matches
             .iter()
@@ -869,6 +1069,24 @@ pub(crate) async fn match_participants(
         .await?
         .into_iter()
         .filter(|p| p.match_id == match_id)
+        .collect())
+}
+
+/// Les matchs donnés avec leurs participants.
+pub(crate) async fn details_of(
+    state: &AppState,
+    step: &Step,
+    found: Vec<Match>,
+) -> Result<Vec<MatchDetail>, ApiError> {
+    let mut by_match = participants_by_match(state, step).await?;
+    Ok(found
+        .into_iter()
+        .map(|m| MatchDetail {
+            participants: by_match.remove(&m.id).unwrap_or_default(),
+            // Un match tout juste généré n'a pas encore de partie.
+            games: Vec::new(),
+            r#match: m,
+        })
         .collect())
 }
 
@@ -1417,6 +1635,8 @@ pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, St
                 points: m.points,
                 rank,
                 result: Some(derived(rank)),
+                games_won: m.games_won,
+                slot: m.slot,
             }
         })
         .collect())
@@ -1444,6 +1664,8 @@ mod tests {
             points,
             rank,
             result: None,
+            slot: None,
+            games_won: None,
         }
     }
 
@@ -1610,6 +1832,7 @@ mod tests {
             matches_per_group: 1,
             advance_per_group: 1,
             tiebreak: json!([]),
+            rules: crate::store::StepRules::default(),
             status: StepStatus::Ongoing,
             created_at: String::new(),
             updated_at: String::new(),
@@ -1629,6 +1852,10 @@ mod tests {
         assert!(participants_problem(&ffa, 9).is_some());
     }
 
+    fn pool() -> Step {
+        step(MatchType::Duel, 8)
+    }
+
     fn scheduled(group: Uuid, status: MatchStatus) -> Match {
         Match {
             id: Uuid::new_v4(),
@@ -1638,6 +1865,10 @@ mod tests {
             round: None,
             bracket: None,
             next_match_id: None,
+            number: None,
+            next_slot: None,
+            loser_next_match_id: None,
+            loser_next_slot: None,
             best_of: 1,
             scheduled_at: None,
             started_at: None,
@@ -1652,22 +1883,29 @@ mod tests {
     fn a_step_is_complete_when_every_group_has_finished_all_its_matches() {
         let (g1, g2) = (Uuid::new_v4(), Uuid::new_v4());
         let finished = |g| scheduled(g, MatchStatus::Finished);
-        assert!(is_complete(&[g1, g2], &[finished(g1), finished(g2)]));
+        assert!(is_complete(
+            &pool(),
+            &[g1, g2],
+            &[finished(g1), finished(g2)]
+        ));
         // Un match annulé ne bloque pas, un match à jouer si.
         assert!(is_complete(
+            &pool(),
             &[g1],
             &[finished(g1), scheduled(g1, MatchStatus::Cancelled)]
         ));
         assert!(!is_complete(
+            &pool(),
             &[g1],
             &[finished(g1), scheduled(g1, MatchStatus::Ongoing)]
         ));
         // Un groupe sans match terminé n'est pas joué.
-        assert!(!is_complete(&[g1, g2], &[finished(g1)]));
+        assert!(!is_complete(&pool(), &[g1, g2], &[finished(g1)]));
         assert!(!is_complete(
+            &pool(),
             &[g1],
             &[scheduled(g1, MatchStatus::Cancelled)]
         ));
-        assert!(!is_complete(&[], &[]));
+        assert!(!is_complete(&pool(), &[], &[]));
     }
 }

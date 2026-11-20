@@ -2,7 +2,10 @@ import { render, waitFor } from '@testing-library/react-native';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
-import { PushNotificationsProvider } from '../src/features/notifications/provider';
+import {
+  PushNotificationsProvider,
+  notificationPath,
+} from '../src/features/notifications/provider';
 import {
   rememberPushToken,
   revokeCurrentPushToken,
@@ -180,4 +183,15 @@ it('opens invitation notifications on cold start and foreground taps', async () 
     pathname: '/invite/[token]',
     params: { token },
   });
+});
+
+it('accepts match workflow links and rejects external or malformed destinations', () => {
+  const base =
+    '/tournaments/11111111-1111-4111-8111-111111111111/steps/22222222-2222-4222-8222-222222222222/matches/33333333-3333-4333-8333-333333333333';
+  expect(notificationPath({ path: base })).toBe(base);
+  expect(notificationPath({ path: base + '/workflow' })).toBe(
+    base + '/workflow',
+  );
+  expect(notificationPath({ path: 'https://example.com' + base })).toBeNull();
+  expect(notificationPath({ path: base + '/../settings' })).toBeNull();
 });
