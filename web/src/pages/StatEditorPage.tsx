@@ -7,7 +7,7 @@ import { StateMessage } from '@/components/games/StateMessage'
 import { StatForm } from '@/components/stats/StatForm'
 import { Button } from '@/components/ui/button'
 import { createStat, getStat, updateStat } from '@/features/stats/api'
-import { isKeyTaken, statErrorKey } from '@/features/stats/errors'
+import { isKeyTaken, statErrorKey, statFieldErrors } from '@/features/stats/errors'
 import type { StatField, StatInput } from '@/features/stats/types'
 import { changedStatFields, statId } from '@/features/stats/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -75,7 +75,9 @@ export default function StatEditorPage() {
         })
       }
     } catch (error) {
+      const fields = statFieldErrors(error)
       if (isKeyTaken(error)) setServerErrors({ key: 'stats.errors.keyTaken' })
+      else if (fields) setServerErrors(fields)
       else {
         // Un 403 laisse penser que le rôle a changé : on relit la session.
         if (error instanceof ApiError && error.status === 403) void refreshRole()
@@ -136,9 +138,10 @@ export default function StatEditorPage() {
           key={state.data?.id ?? 'new'}
           initial={
             state.data
-              ? { name: state.data.name, key: state.data.key, type: state.data.type }
+              ? { name: state.data.name, key: state.data.key, type: state.data.type, scope: state.data.scope }
               : undefined
           }
+          editing={editing}
           submitLabel={editing ? t('common.save') : t('stats.create')}
           busy={busy}
           serverErrors={serverErrors}

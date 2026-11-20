@@ -4,20 +4,34 @@ import { ErrorSummary, type ErrorSummaryItem } from '@/components/form/ErrorSumm
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { STAT_TYPES, type StatField, type StatFieldErrors, type StatInput } from '@/features/stats/types'
-import { validateStat } from '@/features/stats/validation'
+import { statScopeLabelKey, statTypeLabelKey } from '@/features/stats/labels'
+import { STAT_TYPES, type StatField, type StatFieldErrors, type StatInput, type StatScope, type StatType } from '@/features/stats/types'
+import { allowedScopes, isNumericType, validateStat, withType } from '@/features/stats/validation'
 import { useI18n, type MessageKey } from '@/i18n/context'
 
-const EMPTY_VALUES: StatInput = { name: '', key: '', type: 'flat' }
+const EMPTY_VALUES: StatInput = { name: '', key: '', type: 'flat', scope: 'participant' }
+
+const SELECT_CLASS =
+  'h-8 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:border-destructive dark:bg-input/30'
+
+const TYPE_HINT: Record<StatType, MessageKey> = {
+  flat: 'stats.typeHintFlat',
+  percent: 'stats.typeHintPercent',
+  select: 'stats.typeHintSelect',
+  mvp: 'stats.typeHintMvp',
+}
 
 const IDS: Record<StatField, string> = {
   name: 'stat-name',
   key: 'stat-key',
   type: 'stat-type',
+  scope: 'stat-scope',
 }
 
 interface StatFormProps {
   initial?: StatInput
+  // Modification : une statistique numérique ne devient pas un choix ou un MVP (ni l'inverse).
+  editing?: boolean
   submitLabel: string
   busy: boolean
   // Erreurs renvoyées par le serveur (ex. 409 sur la clé) et message global.
@@ -29,6 +43,7 @@ interface StatFormProps {
 
 export function StatForm({
   initial = EMPTY_VALUES,
+  editing = false,
   submitLabel,
   busy,
   serverErrors,
@@ -59,7 +74,7 @@ export function StatForm({
   function submit(event: FormEvent) {
     event.preventDefault()
     if (busy) return
-    const found = validateStat(values)
+    const found = validateStat(values, editing ? initial : undefined)
     setErrors(found)
     if (Object.keys(found).length > 0) {
       focusSummary.current = true
@@ -135,19 +150,43 @@ export function StatForm({
           id={IDS.type}
           value={values.type}
           aria-invalid={messages.type ? true : undefined}
-          aria-describedby={describe('type')}
-          onChange={(event) =>
-            setValues({ ...values, type: event.target.value as StatInput['type'] })
-          }
-          className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive dark:bg-input/30"
+          aria-describedby={describe('type', 'stat-type-hint')}
+          onChange={(event) => setValues(withType(values, event.target.value as StatType))}
+          className={SELECT_CLASS}
         >
           {STAT_TYPES.map((type) => (
-            <option key={type} value={type}>
-              {type === 'flat' ? t('stats.typeFlat') : t('stats.typePercent')} ({type})
+            <option key={type} value={type} disabled={editing && isNumericType(type) !== isNumericType(initial.type)}>
+              {t(statTypeLabelKey(type))} ({type})
             </option>
           ))}
         </select>
+        <p id="stat-type-hint" className="text-sm text-muted-foreground">
+          {t(TYPE_HINT[values.type])} {editing ? t('stats.typeLocked') : null}
+        </p>
         {fieldError('type')}
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor={IDS.scope}>{t('stats.scope')}</Label>
+        <select
+          id={IDS.scope}
+          value={values.scope}
+          disabled={allowedScopes(values.type).length < 2}
+          aria-invalid={messages.scope ? true : undefined}
+          aria-describedby={describe('scope', 'stat-scope-hint')}
+          onChange={(event) => setValues({ ...values, scope: event.target.value as StatScope })}
+          className={SELECT_CLASS}
+        >
+          {allowedScopes(values.type).map((scope) => (
+            <option key={scope} value={scope}>
+              {t(statScopeLabelKey(scope))}
+            </option>
+          ))}
+        </select>
+        <p id="stat-scope-hint" className="text-sm text-muted-foreground">
+          {t(values.type === 'select' ? 'stats.scopeHintSelect' : 'stats.scopeHintFixed')}
+        </p>
+        {fieldError('scope')}
       </div>
 
       <div className="flex flex-wrap gap-3">

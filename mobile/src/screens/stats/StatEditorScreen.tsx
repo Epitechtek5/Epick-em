@@ -107,7 +107,7 @@ function Editor({ initial, id }: { initial: StatValues; id?: string }) {
         contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
       >
         {message ? <FormMessage success>{t(message)}</FormMessage> : null}
-        <StatForm initial={initial} onSave={save} />
+        <StatForm initial={initial} onSave={save} editing={Boolean(id)} />
         {id ? (
           <View className="gap-3 border-t border-border pt-5">
             {deleteError ? <FormMessage>{t(deleteError)}</FormMessage> : null}

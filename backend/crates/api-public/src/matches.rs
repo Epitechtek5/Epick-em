@@ -12,16 +12,22 @@
 //! calculés sur `total`. Les points viennent du barème du tournoi (`scoring_rule`) ; une
 //! statistique sans règle ne rapporte rien.
 //!
+//! Un match se joue en une seule partie (`best_of` = 1, résultats saisis directement ici, comme
+//! pour les matchs historiques) ou en série de 1, 3 ou 5 parties (voir [`crate::match_games`]) :
+//! ses résultats se déduisent alors des parties, et le match se termine tout seul quand un
+//! vainqueur est connu. `round` reste la ronde du tournoi, jamais le numéro de partie.
+//!
 //! Le lancement d'une étape ne génère pas encore ses matchs (calendrier des manches, rondes
 //! suisses, tableau d'élimination) : un administrateur les crée avec `POST .../matches`.
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
+use crate::match_games::{games_problem, series_problem};
 use crate::steps::{CloseResponse, close_step_of, find_step};
 use crate::store::{
-    Bracket, Match, MatchFinish, MatchInput, MatchParticipant, MatchResult, MatchScore,
-    MatchStatus, MatchType, MatchUpdate, ScoringRule, Stat, StatType, Step, StepFormat, StepStatus,
-    StoreError, Tournament,
+    Bracket, GameFinish, Match, MatchFinish, MatchGame, MatchInput, MatchParticipant, MatchResult,
+    MatchScore, MatchStatus, MatchType, MatchUpdate, ScoringRule, Stat, StatScope, StatType, Step,
+    StepFormat, StepStatus, StoreError, Tournament,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournament_access::{require_manage, require_referee};
@@ -29,12 +35,14 @@ use crate::tournaments::{find_tournament, nullable, visible_tournament};
 use actix_web::{HttpResponse, delete, get, patch, post, put, web};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
 
 pub(crate) const ROUND_MAX: i32 = 1_000;
+/// Longueurs de série autorisées.
+pub(crate) const BEST_OF: [i32; 3] = [1, 3, 5];
 const STAT_VALUE_MAX: f64 = 1_000_000_000.0;
 
 /// Routes des matchs, avec leur documentation OpenAPI.
@@ -59,6 +67,9 @@ struct CreateMatchRequest {
     bracket: Option<Bracket>,
     /// Match de la même étape où va le vainqueur, en élimination seulement.
     next_match_id: Option<Uuid>,
+    /// Longueur de la série : 1 (par défaut), 3 ou 5 parties.
+    #[schema(minimum = 1, maximum = 5, example = 3)]
+    best_of: Option<i32>,
     /// Horodatage RFC 3339 en UTC (suffixe `Z`).
     #[schema(example = "2026-11-14T18:00:00Z")]
     scheduled_at: Option<String>,
@@ -79,6 +90,9 @@ struct UpdateMatchRequest {
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<Uuid>)]
     next_match_id: Option<Option<Uuid>>,
+    /// 1, 3 ou 5 ; pas moins que le nombre de parties déjà ouvertes.
+    #[schema(minimum = 1, maximum = 5)]
+    best_of: Option<i32>,
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<String>)]
     scheduled_at: Option<Option<String>>,
@@ -123,23 +137,27 @@ struct StatusRequest {
     status: MatchStatus,
 }
 
-/// Un match avec ses participants.
+/// Un match avec ses participants et ses parties.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct MatchDetail {
     #[serde(flatten)]
     #[schema(inline)]
     pub(crate) r#match: Match,
+    /// Résultats du match : saisis directement (`best_of` = 1 sans partie) ou agrégés depuis les
+    /// parties terminées.
     pub(crate) participants: Vec<MatchParticipant>,
+    /// Parties de la série, par numéro ; vide pour un match saisi directement.
+    pub(crate) games: Vec<MatchGame>,
 }
 
 /// Résultat d'un changement de statut.
 #[derive(Serialize, ToSchema)]
-struct MatchOutcome {
+pub(crate) struct MatchOutcome {
     #[serde(flatten)]
     #[schema(inline)]
-    detail: MatchDetail,
+    pub(crate) detail: MatchDetail,
     /// Renseigné quand ce match était le dernier de l'étape, qui s'est alors clôturée.
-    step_closed: Option<CloseResponse>,
+    pub(crate) step_closed: Option<CloseResponse>,
 }
 
 /// Matchs de l'étape, par groupe puis par manche, avec leurs participants.
@@ -186,10 +204,20 @@ pub(crate) async fn load_details(
         .await
         .map_err(ApiError::internal)?;
     let mut participants = participants_by_match(state, step).await?;
+    let mut games: HashMap<Uuid, Vec<MatchGame>> = HashMap::new();
+    for game in state
+        .store
+        .list_step_match_games(step.id)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        games.entry(game.match_id).or_default().push(game);
+    }
     Ok(matches
         .into_iter()
         .map(|m| MatchDetail {
             participants: participants.remove(&m.id).unwrap_or_default(),
+            games: games.remove(&m.id).unwrap_or_default(),
             r#match: m,
         })
         .collect())
@@ -260,6 +288,7 @@ async fn create_match(
     let mut errors = Vec::new();
     let round = check_round(request.round, &mut errors);
     let scheduled_at = check_scheduled_at(request.scheduled_at, &mut errors);
+    let best_of = check_best_of(request.best_of.unwrap_or(1), &mut errors);
     check_bracket(&step, request.bracket, &mut errors);
     let participants = request.participant_ids.unwrap_or_default();
     if let Some(next) = request.next_match_id {
@@ -288,6 +317,7 @@ async fn create_match(
             round,
             bracket: request.bracket,
             next_match_id: request.next_match_id,
+            best_of,
             scheduled_at,
             participants,
         })
@@ -341,6 +371,18 @@ async fn update_match(
     }
     if let Some(scheduled_at) = request.scheduled_at {
         update.scheduled_at = Some(check_scheduled_at(scheduled_at, &mut errors));
+    }
+    if let Some(best_of) = request.best_of {
+        let best_of = check_best_of(best_of, &mut errors);
+        let games = state
+            .store
+            .list_match_games(current.id)
+            .await
+            .map_err(ApiError::internal)?;
+        if let Some(problem) = series_problem(best_of, &games) {
+            errors.push(("best_of", problem));
+        }
+        update.best_of = Some(best_of);
     }
     if let Some(next) = request.next_match_id {
         if let Some(next) = next {
@@ -466,9 +508,12 @@ async fn save_results(
         return Err(ApiError::InvalidTransition);
     }
     let request = body.into_inner();
+    if let Some(problem) = games_problem(&state, &current).await? {
+        return Err(ApiError::Validation(vec![("results", problem)]));
+    }
     let members = match_participants(&state, &step, current.id).await?;
     let (stats, rules) = scoring_of(&state, &tournament).await?;
-    let known: HashMap<String, StatType> = stats.iter().map(|s| (s.key.clone(), s.kind)).collect();
+    let schema = StatSchema::new(&stats);
 
     let mut errors = Vec::new();
     let mut seen = HashSet::new();
@@ -498,7 +543,7 @@ async fn save_results(
             ));
             continue;
         }
-        match parse_stats(&entry.stats, &known) {
+        match schema.parse(&entry.stats) {
             Ok(totals) => scores.push(MatchScore {
                 participant_id: id,
                 points: points_of(&totals, &rules, &stats),
@@ -606,6 +651,9 @@ async fn set_status(
                     .map_err(match_error)?
                     .ok_or(ApiError::NotFound)?
             } else {
+                if let Some(problem) = games_problem(&state, &current).await? {
+                    return Err(ApiError::Validation(vec![("results", problem)]));
+                }
                 let finished = finish(&state, &step, &current, &members).await?;
                 step_closed = close_if_complete(&state, &tournament, &step).await;
                 finished
@@ -643,7 +691,19 @@ async fn finish(
 ) -> Result<Match, ApiError> {
     let scores =
         settle(members).map_err(|problem| ApiError::Validation(vec![("results", problem)]))?;
+    commit_finish(state, step, current, scores, None).await
+}
 
+/// Termine le match avec ces résultats définitifs (et la dernière partie, s'il y en a une) : le
+/// vainqueur est vérifié et placé dans le match suivant, les points de l'étape recalculés, le
+/// tout en une seule opération du store.
+pub(crate) async fn commit_finish(
+    state: &AppState,
+    step: &Step,
+    current: &Match,
+    scores: Vec<MatchScore>,
+    game: Option<GameFinish>,
+) -> Result<Match, ApiError> {
     let advance = match current.next_match_id {
         None => None,
         Some(next_id) => {
@@ -704,6 +764,7 @@ async fn finish(
             scores,
             advance,
             step_points,
+            game,
         })
         .await
         .map_err(match_error)?
@@ -713,7 +774,7 @@ async fn finish(
 /// Clôture l'étape si tous ses matchs sont terminés ou annulés, avec au moins un match terminé
 /// par groupe. Le match est déjà enregistré : un échec ici se journalise et l'étape se clôture
 /// alors par `POST .../close`.
-async fn close_if_complete(
+pub(crate) async fn close_if_complete(
     state: &AppState,
     tournament: &Tournament,
     step: &Step,
@@ -762,7 +823,11 @@ fn is_complete(groups: &[Uuid], matches: &[Match]) -> bool {
         })
 }
 
-async fn find_match(state: &AppState, step: &Step, match_id: Uuid) -> Result<Match, ApiError> {
+pub(crate) async fn find_match(
+    state: &AppState,
+    step: &Step,
+    match_id: Uuid,
+) -> Result<Match, ApiError> {
     state
         .store
         .find_match(match_id)
@@ -795,7 +860,7 @@ async fn participants_by_match(
     Ok(grouped)
 }
 
-async fn match_participants(
+pub(crate) async fn match_participants(
     state: &AppState,
     step: &Step,
     match_id: Uuid,
@@ -807,15 +872,24 @@ async fn match_participants(
         .collect())
 }
 
-async fn detail_of(state: &AppState, step: &Step, found: Match) -> Result<MatchDetail, ApiError> {
+pub(crate) async fn detail_of(
+    state: &AppState,
+    step: &Step,
+    found: Match,
+) -> Result<MatchDetail, ApiError> {
     Ok(MatchDetail {
         participants: match_participants(state, step, found.id).await?,
+        games: state
+            .store
+            .list_match_games(found.id)
+            .await
+            .map_err(ApiError::internal)?,
         r#match: found,
     })
 }
 
 /// Statistiques du jeu du tournoi et barème du tournoi.
-async fn scoring_of(
+pub(crate) async fn scoring_of(
     state: &AppState,
     tournament: &Tournament,
 ) -> Result<(Vec<Stat>, Vec<ScoringRule>), ApiError> {
@@ -833,7 +907,7 @@ async fn scoring_of(
     Ok((stats, rules))
 }
 
-fn require_ongoing(step: &Step) -> Result<(), ApiError> {
+pub(crate) fn require_ongoing(step: &Step) -> Result<(), ApiError> {
     if step.status == StepStatus::Ongoing {
         Ok(())
     } else {
@@ -841,7 +915,7 @@ fn require_ongoing(step: &Step) -> Result<(), ApiError> {
     }
 }
 
-fn match_error(err: StoreError) -> ApiError {
+pub(crate) fn match_error(err: StoreError) -> ApiError {
     match err {
         StoreError::MatchState => ApiError::InvalidTransition,
         other => ApiError::internal(other),
@@ -861,7 +935,7 @@ pub(crate) fn capacity_of(match_type: MatchType, group_size: i32) -> usize {
 }
 
 /// Ce qui empêche de jouer un match de `count` participants.
-fn participants_problem(step: &Step, count: usize) -> Option<String> {
+pub(crate) fn participants_problem(step: &Step, count: usize) -> Option<String> {
     playable_problem(step.match_type, step.group_size, count)
 }
 
@@ -882,6 +956,13 @@ pub(crate) fn playable_problem(
         )),
         _ => None,
     }
+}
+
+fn check_best_of(best_of: i32, errors: &mut Vec<(&'static str, String)>) -> i32 {
+    if !BEST_OF.contains(&best_of) {
+        errors.push(("best_of", "La série compte 1, 3 ou 5 parties.".to_string()));
+    }
+    best_of
 }
 
 fn check_round(round: Option<i32>, errors: &mut Vec<(&'static str, String)>) -> Option<i32> {
@@ -1009,6 +1090,174 @@ async fn check_participants(
     Ok(())
 }
 
+/// Ce que le jeu autorise comme valeurs : statistiques numériques (seules à entrer dans le
+/// barème), choix des participants et attributs de la partie (carte, MVP...).
+#[derive(Debug, Default)]
+pub(crate) struct StatSchema {
+    numeric: HashMap<String, StatType>,
+    /// Statistiques `select` de portée `participant`, avec les clés d'options autorisées.
+    selects: HashMap<String, HashSet<String>>,
+    /// Attributs de la partie, de portée `match`.
+    attributes: HashMap<String, Attribute>,
+}
+
+#[derive(Debug)]
+enum Attribute {
+    Select(HashSet<String>),
+    Mvp,
+}
+
+impl StatSchema {
+    pub(crate) fn new(stats: &[Stat]) -> Self {
+        let mut schema = StatSchema::default();
+        for stat in stats {
+            let options = || stat.options.iter().map(|o| o.key.clone()).collect();
+            match (stat.kind, stat.scope) {
+                (StatType::Flat | StatType::Percent, _) => {
+                    schema.numeric.insert(stat.key.clone(), stat.kind);
+                }
+                (StatType::Select, StatScope::Participant) => {
+                    schema.selects.insert(stat.key.clone(), options());
+                }
+                (StatType::Select, StatScope::Match) => {
+                    schema
+                        .attributes
+                        .insert(stat.key.clone(), Attribute::Select(options()));
+                }
+                (StatType::Mvp, _) => {
+                    schema.attributes.insert(stat.key.clone(), Attribute::Mvp);
+                }
+            }
+        }
+        schema
+    }
+
+    fn knows(&self, key: &str) -> bool {
+        self.numeric.contains_key(key)
+            || self.selects.contains_key(key)
+            || self.attributes.contains_key(key)
+    }
+
+    /// Valide les statistiques d'un participant (voir [`parse_stats`]) et leurs choix : une
+    /// statistique `select` de participant porte la clé d'une option du jeu. Seules les valeurs
+    /// numériques sont renvoyées, donc seules elles peuvent entrer dans le barème.
+    pub(crate) fn parse(&self, value: &Value) -> Result<HashMap<String, f64>, String> {
+        let Some(object) = value.as_object() else {
+            return Err("`stats` doit être un objet.".to_string());
+        };
+        let detailed = object.contains_key("total") && !self.knows("total");
+        let mut numeric = object.clone();
+        if detailed {
+            if let Some(Value::Object(total)) = object.get("total") {
+                numeric.insert("total".into(), Value::Object(self.split(total)?));
+            }
+            if let Some(Value::Object(players)) = object.get("players") {
+                let mut cleaned = serde_json::Map::new();
+                for (player, stats) in players {
+                    let stats = match stats {
+                        Value::Object(stats) => Value::Object(
+                            self.split(stats)
+                                .map_err(|e| format!("players {player} : {e}"))?,
+                        ),
+                        other => other.clone(),
+                    };
+                    cleaned.insert(player.clone(), stats);
+                }
+                numeric.insert("players".into(), Value::Object(cleaned));
+            }
+        } else {
+            numeric = self.split(object)?;
+        }
+        parse_stats(&Value::Object(numeric), &self.numeric)
+    }
+
+    /// Retire les choix (après les avoir vérifiés) pour ne garder que le numérique.
+    fn split(
+        &self,
+        object: &serde_json::Map<String, Value>,
+    ) -> Result<serde_json::Map<String, Value>, String> {
+        let mut numeric = serde_json::Map::new();
+        for (key, value) in object {
+            if let Some(options) = self.selects.get(key) {
+                if !value.as_str().is_some_and(|v| options.contains(v)) {
+                    let allowed: BTreeSet<&String> = options.iter().collect();
+                    return Err(format!(
+                        "« {key} » doit être l'une des options du jeu : {}.",
+                        allowed
+                            .into_iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            } else if self.attributes.contains_key(key) {
+                return Err(format!(
+                    "« {key} » est un attribut de la partie, pas une statistique de participant."
+                ));
+            } else {
+                numeric.insert(key.clone(), value.clone());
+            }
+        }
+        Ok(numeric)
+    }
+
+    /// Valide les attributs d'une partie : un objet dont les clés sont des statistiques de
+    /// portée `match` du jeu. Un `select` porte la clé d'une option, un MVP l'identifiant d'un
+    /// participant du match ou d'un joueur d'un participant (`designated`).
+    pub(crate) fn check_attributes(
+        &self,
+        value: &Value,
+        designated: &HashSet<Uuid>,
+    ) -> Result<(), String> {
+        let Some(object) = value.as_object() else {
+            return Err("`attributes` doit être un objet.".to_string());
+        };
+        for (key, value) in object {
+            match self.attributes.get(key) {
+                None => {
+                    return Err(format!(
+                        "« {key} » n'est pas un attribut de partie de ce jeu."
+                    ));
+                }
+                Some(Attribute::Select(options)) => {
+                    if !value.as_str().is_some_and(|v| options.contains(v)) {
+                        let allowed: BTreeSet<&String> = options.iter().collect();
+                        return Err(format!(
+                            "« {key} » doit être l'une des options du jeu : {}.",
+                            allowed
+                                .into_iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+                Some(Attribute::Mvp) => {
+                    let valid = value
+                        .as_str()
+                        .and_then(|v| v.parse::<Uuid>().ok())
+                        .is_some_and(|id| designated.contains(&id));
+                    if !valid {
+                        return Err(format!(
+                            "« {key} » doit désigner un participant de ce match ou l'un de ses joueurs."
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Identifiants des joueurs détaillés dans `stats` (`{"players": {"<user_id>": ...}}`).
+pub(crate) fn players_of(stats: &Value) -> HashSet<Uuid> {
+    stats
+        .get("players")
+        .and_then(Value::as_object)
+        .map(|players| players.keys().filter_map(|k| k.parse().ok()).collect())
+        .unwrap_or_default()
+}
+
 /// Valide les statistiques d'un participant et renvoie la valeur de chacune par clé (le `total`
 /// d'une équipe détaillée par joueur).
 ///
@@ -1095,7 +1344,8 @@ pub(crate) fn points_of(
 
 /// Résultats définitifs d'un match qui se termine : chaque participant a des statistiques ou un
 /// rang ; sans aucun rang, ils sont déduits des points (les égalités le partagent) ; un résultat
-/// absent vaut `win` pour la première place, `draw` si elle est partagée, `loss` sinon.
+/// absent vaut `win` pour la première place, `draw` si elle est partagée, `loss` sinon. Un
+/// résultat fourni doit être celui-là : sinon, le match est refusé.
 pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, String> {
     let empty =
         |m: &MatchParticipant| m.rank.is_none() && m.stats.as_object().is_none_or(|o| o.is_empty());
@@ -1130,21 +1380,43 @@ pub(crate) fn settle(members: &[MatchParticipant]) -> Result<Vec<MatchScore>, St
         return Err("Tous les participants ont un rang, ou aucun.".to_string());
     };
     let leaders = ranks.values().filter(|rank| **rank == 1).count();
+    let derived = |rank: Option<i32>| match rank {
+        Some(1) if leaders == 1 => MatchResult::Win,
+        Some(1) => MatchResult::Draw,
+        _ => MatchResult::Loss,
+    };
+    // Le résultat découle du rang : un résultat explicite qui le contredit (premier mais
+    // `loss`, deuxième mais `win`) ferait gagner le mauvais participant.
+    let contradictions: Vec<String> = members
+        .iter()
+        .filter_map(|m| {
+            let expected = derived(ranks.get(&m.participant_id).copied());
+            m.result.filter(|result| *result != expected).map(|result| {
+                format!(
+                    "{} : `{}` contredit son rang (`{}` attendu)",
+                    m.participant_id,
+                    result.as_str(),
+                    expected.as_str()
+                )
+            })
+        })
+        .collect();
+    if !contradictions.is_empty() {
+        return Err(format!(
+            "Résultats contradictoires : {}.",
+            contradictions.join(", ")
+        ));
+    }
     Ok(members
         .iter()
         .map(|m| {
             let rank = ranks.get(&m.participant_id).copied();
-            let derived = match rank {
-                Some(1) if leaders == 1 => MatchResult::Win,
-                Some(1) => MatchResult::Draw,
-                _ => MatchResult::Loss,
-            };
             MatchScore {
                 participant_id: m.participant_id,
                 stats: m.stats.clone(),
                 points: m.points,
                 rank,
-                result: Some(m.result.unwrap_or(derived)),
+                result: Some(derived(rank)),
             }
         })
         .collect())
@@ -1173,6 +1445,21 @@ mod tests {
             rank,
             result: None,
         }
+    }
+
+    #[test]
+    fn a_result_that_contradicts_the_rank_is_refused() {
+        let mut first = member(json!({ "kills": 3 }), 0.0, Some(1));
+        let mut second = member(json!({ "kills": 1 }), 0.0, Some(2));
+        first.result = Some(MatchResult::Loss);
+        second.result = Some(MatchResult::Win);
+        let error = settle(&[first.clone(), second.clone()]).unwrap_err();
+        assert!(error.contains("contredit"), "{error}");
+        // Les mêmes résultats, cohérents avec les rangs, passent.
+        first.result = Some(MatchResult::Win);
+        second.result = Some(MatchResult::Loss);
+        let scores = settle(&[first, second]).unwrap();
+        assert_eq!(scores[0].result, Some(MatchResult::Win));
     }
 
     #[test]
@@ -1221,12 +1508,16 @@ mod tests {
                 name: "Placement".into(),
                 key: "placement".into(),
                 kind: StatType::Flat,
+                scope: StatScope::Participant,
+                options: Vec::new(),
             },
             Stat {
                 id: Uuid::new_v4(),
                 name: "Éliminations".into(),
                 key: "kills".into(),
                 kind: StatType::Flat,
+                scope: StatScope::Participant,
+                options: Vec::new(),
             },
         ];
         let rule = |stat: &Stat, mode, coefficient, table| ScoringRule {
@@ -1347,6 +1638,7 @@ mod tests {
             round: None,
             bracket: None,
             next_match_id: None,
+            best_of: 1,
             scheduled_at: None,
             started_at: None,
             ended_at: None,

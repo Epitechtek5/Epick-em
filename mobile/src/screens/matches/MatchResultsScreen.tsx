@@ -41,6 +41,8 @@ export default function MatchResultsScreen() {
   const match = data?.match;
   if (!data || !match) return <MatchState {...state} />;
   if (
+    (match.best_of ?? 1) > 1 ||
+    Boolean(match.games?.length) ||
     !token ||
     !canReferee ||
     data.step.status !== 'ongoing' ||
@@ -95,25 +97,45 @@ function ResultEditor({
     set: (value: Values) => void,
     person: string,
   ) {
-    return stats.map((stat: Stat) => {
-      const label = stat.name + (stat.type === 'percent' ? ' (%)' : '');
-      return (
-        <View key={stat.id} className="gap-1">
-          <Text>
-            {label}
-            {rules.some((rule) => rule.stat_id === stat.id)
-              ? ' · ' + t('matches.scored')
-              : ''}
-          </Text>
-          <Input
-            accessibilityLabel={person + ' · ' + label}
-            keyboardType="numbers-and-punctuation"
-            value={values[stat.key] ?? ''}
-            onChangeText={(value) => set({ ...values, [stat.key]: value })}
-          />
-        </View>
-      );
-    });
+    return stats
+      .filter((stat) => stat.scope !== 'match' && stat.type !== 'mvp')
+      .map((stat: Stat) => {
+        const label = stat.name + (stat.type === 'percent' ? ' (%)' : '');
+        return (
+          <View key={stat.id} className="gap-1">
+            <Text>
+              {label}
+              {rules.some((rule) => rule.stat_id === stat.id)
+                ? ' · ' + t('matches.scored')
+                : ''}
+            </Text>
+            {stat.type === 'select' ? (
+              <StepOptionSelect
+                label={person + ' · ' + label}
+                value={values[stat.key] ?? ''}
+                options={[
+                  '',
+                  ...(stat.options ?? []).map((option) => option.key),
+                ]}
+                labelFor={(key) =>
+                  key
+                    ? (stat.options?.find((option) => option.key === key)
+                        ?.label ?? key)
+                    : t('matches.unset')
+                }
+                onSelect={(value) => set({ ...values, [stat.key]: value })}
+              />
+            ) : (
+              <Input
+                accessibilityLabel={person + ' · ' + label}
+                keyboardType="numbers-and-punctuation"
+                value={values[stat.key] ?? ''}
+                onChangeText={(value) => set({ ...values, [stat.key]: value })}
+              />
+            )}
+          </View>
+        );
+      });
   }
   function save() {
     let scores: Score[];

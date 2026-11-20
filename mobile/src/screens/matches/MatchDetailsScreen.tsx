@@ -1,3 +1,4 @@
+import { MatchGames } from '@/components/matches/MatchGames';
 import { useState } from 'react';
 import { Alert, View } from 'react-native';
 import { router } from 'expo-router';
@@ -21,7 +22,7 @@ import { useTournamentAccess } from '@/features/tournaments/use-tournament-acces
 
 export default function MatchDetailsScreen() {
   const { t } = useTranslation();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const state = useMatchContext();
   const action = useMatchAction();
   const [showManagement, setShowManagement] = useState(false);
@@ -40,6 +41,13 @@ export default function MatchDetailsScreen() {
   const api = matchApi(token, tournamentId, stepId);
   const canManage = canReferee && data.step.status === 'ongoing';
   const isOpen = match.status === 'scheduled' || match.status === 'ongoing';
+  const hasSeries = (match.best_of ?? 1) > 1 || Boolean(match.games?.length);
+  const hasLegacyResults = match.participants.some(
+    (participant) =>
+      participant.rank !== null || Object.keys(participant.stats).length > 0,
+  );
+  const showLegacyControls =
+    !hasSeries && (hasLegacyResults || user?.role !== 'admin');
   const canPlay = playable(data.step, match.participants.length);
 
   function openDetails(matchId: string) {
@@ -91,6 +99,7 @@ export default function MatchDetailsScreen() {
       {notice ? <FormMessage success>{t(notice)}</FormMessage> : null}
 
       <MatchScoreboard match={match} data={data} />
+      <MatchGames match={match} data={data} onCreated={state.reload} />
 
       {match.next_match_id ? (
         <Button
@@ -124,11 +133,11 @@ export default function MatchDetailsScreen() {
         </Button>
       ) : null}
 
-      {canManage && isOpen ? (
+      {canManage && isOpen && showLegacyControls ? (
         <View className="gap-3 rounded-xl border border-border bg-card p-4">
           <Text className="text-base font-semibold">{t('matches.manage')}</Text>
 
-          {match.status === 'scheduled' ? (
+          {match.status === 'scheduled' && !hasSeries ? (
             <Button
               disabled={action.busy || !canPlay}
               onPress={() => confirm('ongoing')}
@@ -208,7 +217,7 @@ export default function MatchDetailsScreen() {
                 </Button>
               ) : null}
 
-              {match.status === 'scheduled' ? (
+              {match.status === 'scheduled' && !hasSeries ? (
                 <Button
                   variant="outline"
                   disabled={action.busy || !canPlay}

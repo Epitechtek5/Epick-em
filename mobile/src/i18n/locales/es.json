@@ -264,8 +264,10 @@
     "key": "clave",
     "type": "Tipo",
     "types": {
-      "flat": "Piso",
-      "percent": "Porcentaje"
+      "flat": "Número",
+      "percent": "Porcentaje",
+      "select": "Selección",
+      "mvp": "MVP"
     },
     "information": "Definición estadística",
     "formHint": "Nombre, clave única y tipo",
@@ -297,10 +299,12 @@
     "validation": {
       "name": "El nombre debe contener entre 1 y 64 caracteres después del recorte.",
       "key": "La clave debe tener como máximo 64 letras minúsculas, dígitos o segmentos separados por guiones bajos.",
-      "type": "Elija Plano o Porcentaje.",
+      "type": "Elige un tipo de estadística.",
       "fileFormat": "Elija un archivo .json o .csv.",
       "fileSize": "El archivo debe tener entre 1 byte y 256 KiB.",
-      "fileContent": "El archivo debe contener UTF-8 válido; Los archivos JSON deben ser JSON válidos."
+      "fileContent": "El archivo debe contener UTF-8 válido; Los archivos JSON deben ser JSON válidos.",
+      "scope": "Elige un ámbito compatible con esta estadística.",
+      "options": "Usa entre 1 y 64 caracteres por valor, con un máximo de 500 valores."
     },
     "errors": {
       "keyTaken": "Esta clave estadística ya está en uso.",
@@ -310,7 +314,22 @@
       "readFile": "No se puede leer el archivo seleccionado.",
       "saveFile": "No se puede guardar el archivo.",
       "sharing": "No se puede compartir el archivo."
-    }
+    },
+    "scope": "Se aplica a",
+    "scopes": {
+      "participant": "Participante o jugador",
+      "match": "Cada partida"
+    },
+    "typeHelp": "Las estadísticas numéricas siguen siendo numéricas para conservar los resultados existentes.",
+    "configureOptions": "Configurar valores",
+    "noOptions": "No hay valores configurados para este juego.",
+    "optionsHelp": "Estas opciones solo se aplican a este juego. Cambiar un nombre conserva los resultados existentes.",
+    "optionLabel": "Valor {{number}}",
+    "removeOption": "Quitar {{name}}",
+    "removeOptionHelp": "Los resultados existentes conservan este valor, pero dejará de estar disponible para nuevas entradas. Guarda para aplicar el cambio.",
+    "newOption": "Nuevo valor",
+    "addOption": "Añadir valor",
+    "addBeforeSave": "Añade el nuevo valor o vacía el campo antes de guardar."
   },
   "tournaments": {
     "title": "Torneos",
@@ -765,7 +784,8 @@
       "date": "Elija una fecha y hora válidas.",
       "bracket": "Las regiones entre corchetes requieren una doble eliminación.",
       "next": "Selecciona otro partido en esta etapa eliminatoria.",
-      "participants": "Elija distintos miembros del grupo dentro de la capacidad del partido."
+      "participants": "Elija distintos miembros del grupo dentro de la capacidad del partido.",
+      "bestOf": "Elige BO1, BO3 o BO5."
     },
     "manage": "Opciones de partido",
     "entryScope": "Introduzca estadísticas para",
@@ -997,5 +1017,46 @@
     "badgeLabel": "Invitaciones, {{count}} invitaciones pendientes o nuevas respuestas",
     "newResponses": "Ver nuevas respuestas ({{count}})",
     "markRead": "Marcar respuestas como leídas"
+  },
+  "matchGames": {
+    "format": "Formato del encuentro",
+    "bestOf": "BO{{count}} · Al mejor de {{count}} partidas",
+    "formatHelp": "La serie termina cuando un participante gana la mayoría de las partidas o se han jugado todas.",
+    "formatLocked": "El formato se bloquea al comenzar la primera partida.",
+    "series": "Serie",
+    "seriesHelp": "BO{{count}} · Se necesitan {{wins}} victorias",
+    "wins": "Partidas ganadas",
+    "empty": "Aún no ha comenzado ninguna partida.",
+    "legacy": "Este encuentro tiene resultados introducidos directamente.",
+    "number": "Partida {{number}}",
+    "wonBy": "Victoria de {{name}}",
+    "enter": "Introducir resultados",
+    "view": "Ver partida",
+    "start": "Comenzar partida {{number}}",
+    "detail": "Detalles de la partida",
+    "winner": "Ganador",
+    "fromPoints": "Calcular a partir de los puntos",
+    "totalsHelp": "Introduce los totales del equipo por separado de las estadísticas individuales. Solo los totales determinan los puntos.",
+    "noStats": "No hay estadísticas de participantes configuradas. Elige un ganador o introduce las posiciones para finalizar la partida.",
+    "save": "Guardar resultados",
+    "finish": "Finalizar partida",
+    "confirmFinish": "Los resultados serán definitivos. Esto puede finalizar la serie, clasificar al ganador y cerrar la fase. ¿Continuar?",
+    "finishHelp": "Al finalizar, los resultados serán de solo lectura. Los totales de la serie se calculan automáticamente.",
+    "saveFirst": "Guarda los cambios antes de finalizar esta partida.",
+    "finished": "Partida finalizada.",
+    "seriesFinished": "Serie finalizada. Se han actualizado los resultados.",
+    "readOnly": "Esta partida ha terminado. Sus resultados no se pueden modificar.",
+    "adminOnly": "Solo un administrador puede introducir resultados mientras la partida está en curso.",
+    "delete": "Eliminar esta partida",
+    "confirmDelete": "¿Eliminar esta partida en curso y sus resultados guardados? Esta acción no se puede deshacer.",
+    "invalidAttributes": "Elige un valor configurado y un MVP que participe en esta partida.",
+    "invalidPlayer": "Un jugador ya no pertenece a este equipo. Vuelve a cargar la partida antes de introducir resultados.",
+    "unavailableOption": "Valor ya no disponible",
+    "incompleteRanks": "Introduce una posición para cada participante o déjalas todas vacías para calcularlas a partir de los puntos.",
+    "aggregatePending": "Tras la serie",
+    "bestOf_one": "BO1 · Una partida",
+    "bestOf_other": "BO{{count}} · Al mejor de {{count}} partidas",
+    "seriesHelp_one": "BO1 · Se necesita 1 victoria",
+    "seriesHelp_other": "BO{{count}} · Se necesitan {{wins}} victorias"
   }
 }

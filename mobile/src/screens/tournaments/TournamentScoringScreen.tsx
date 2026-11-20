@@ -133,11 +133,13 @@ export default function TournamentScoringScreen() {
   const editable =
     canManage && ['draft', 'registration'].includes(data.tournament.status);
   const statById = new Map(data.stats.map((stat) => [stat.id, stat]));
-  const available = data.stats.filter(
-    (stat) =>
-      !data.rules.some((rule) => rule.stat_id === stat.id) &&
-      stat.name.toLowerCase().includes(search.toLowerCase()),
-  );
+  const available = data.stats
+    .filter((stat) => stat.type === 'flat' || stat.type === 'percent')
+    .filter(
+      (stat) =>
+        !data.rules.some((rule) => rule.stat_id === stat.id) &&
+        stat.name.toLowerCase().includes(search.toLowerCase()),
+    );
 
   return (
     <KeyboardAvoidingView

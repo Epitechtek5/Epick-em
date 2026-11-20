@@ -21,8 +21,9 @@ pub use self::invitations::{
 };
 pub(crate) use self::invitations::{registration_open, role_of};
 pub use self::matches::{
-    Bracket, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchResult,
-    MatchScore, MatchStatus, MatchUpdate,
+    Bracket, GameFinish, GameImport, GameScores, Match, MatchFinish, MatchGame,
+    MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchResult, MatchScore,
+    MatchStatus, MatchUpdate,
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
@@ -30,7 +31,7 @@ pub use self::settings::{
     Category, Channel, ChannelPreferences, Language, MAX_PUSH_TOKENS, Platform, PushToken,
     SettingsUpdate as UserSettingsUpdate, Theme, UserSettings, override_key,
 };
-pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
+pub use self::stats::{Stat, StatInput, StatOption, StatScope, StatType, StatUpdate};
 pub use self::steps::{
     MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
     StepParticipant, StepParticipantStatus, StepStart, StepStatus,
@@ -175,6 +176,9 @@ pub enum StoreError {
     MatchState,
     /// L'adresse e-mail est déjà utilisée par un autre compte.
     EmailTaken,
+    /// L'import changerait une statistique numérique (`flat`, `percent`) en `select` ou `mvp`,
+    /// ou l'inverse (clé de la statistique).
+    StatKindChanged(String),
     /// Une invitation en attente existe déjà pour ce compte et cette ressource.
     InvitationDuplicate,
     /// L'invitation n'est plus en attente (acceptée, refusée ou révoquée).
@@ -212,6 +216,10 @@ impl fmt::Display for StoreError {
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
+            StoreError::StatKindChanged(key) => write!(
+                f,
+                "la statistique {key} ne peut pas passer de numérique à `select`/`mvp`, ni l'inverse"
+            ),
             StoreError::InvitationDuplicate => f.write_str("invitation déjà en attente"),
             StoreError::InvitationNotPending => f.write_str("invitation plus en attente"),
             StoreError::InvitationExpired => f.write_str("invitation expirée"),
@@ -420,12 +428,24 @@ pub trait AuthStore: Send + Sync {
 
     /// Crée ou met à jour (par clé) les statistiques données, en une seule opération : en cas
     /// d'erreur, aucune n'est modifiée. Chacune est renvoyée avec `true` si elle vient d'être
-    /// créée. Les clés de `stats` sont distinctes.
+    /// créée. Les clés de `stats` sont distinctes. [`StoreError::StatKindChanged`] si une
+    /// statistique existante passerait de numérique à `select`/`mvp` ou l'inverse, comme le
+    /// refuse `PATCH /stats/{id}`.
     async fn upsert_stats(&self, stats: Vec<StatInput>) -> Result<Vec<(Stat, bool)>, StoreError>;
 
     /// Remplace les statistiques liées au jeu par `stat_ids`, en une seule opération. `false`
     /// si le jeu ou l'une des statistiques n'existe pas (rien n'est alors modifié).
     async fn set_game_stats(&self, game_id: Uuid, stat_ids: Vec<Uuid>) -> Result<bool, StoreError>;
+
+    /// Remplace les options de la statistique `select` pour le jeu, en une seule opération ;
+    /// `false` si la statistique n'est pas une statistique `select` liée à ce jeu. L'ordre de
+    /// `options` est conservé.
+    async fn set_stat_options(
+        &self,
+        game_id: Uuid,
+        stat_id: Uuid,
+        options: Vec<StatOption>,
+    ) -> Result<bool, StoreError>;
 
     /// Remplace les jeux liés à la statistique par `game_ids`, en une seule opération. `false`
     /// si la statistique ou l'un des jeux n'existe pas (rien n'est alors modifié).
@@ -761,8 +781,7 @@ pub trait AuthStore: Send + Sync {
 
     async fn has_invitation(&self, tournament_id: Uuid, user_id: Uuid) -> Result<bool, StoreError>;
 
-    /// Points de chaque inscrit (par identifiant d'inscription), somme de ses points dans les
-    /// étapes du tournoi ; un inscrit absent d'une étape n'a aucun point.
+    /// Points per participant, summed across tournament steps.
     async fn participant_points(
         &self,
         tournament_id: Uuid,
@@ -868,6 +887,33 @@ pub trait AuthStore: Send + Sync {
     /// Termine le match en une seule opération (voir [`MatchFinish`]) ; `None` s'il n'existe pas,
     /// [`StoreError::MatchState`] s'il est déjà `finished` ou `cancelled`.
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError>;
+
+    /// Parties du match, par numéro, avec leurs participants.
+    async fn list_match_games(&self, match_id: Uuid) -> Result<Vec<MatchGame>, StoreError>;
+
+    /// Parties des matchs de l'étape, par match puis par numéro.
+    async fn list_step_match_games(&self, step_id: Uuid) -> Result<Vec<MatchGame>, StoreError>;
+
+    /// Ouvre la partie suivante du match (numéro = nombre de parties + 1, statut `ongoing`) avec
+    /// les participants du match et passe le match en `ongoing` s'il est `scheduled`, en une
+    /// seule opération. `None` si le match n'existe pas, [`StoreError::MatchState`] s'il est
+    /// `finished` ou `cancelled`, ou si la partie précédente n'est pas terminée.
+    async fn create_match_game(
+        &self,
+        match_id: Uuid,
+        attributes: serde_json::Value,
+    ) -> Result<Option<MatchGame>, StoreError>;
+
+    /// Enregistre les attributs et les résultats d'une partie `ongoing` ; `None` si elle n'existe
+    /// pas, [`StoreError::MatchState`] si elle est terminée ou si son match n'est plus ouvert.
+    async fn save_game_scores(&self, scores: GameScores) -> Result<Option<MatchGame>, StoreError>;
+
+    /// Termine la partie en une seule opération ; mêmes erreurs que `save_game_scores`.
+    async fn finish_game(&self, finish: GameFinish) -> Result<Option<MatchGame>, StoreError>;
+
+    /// Supprime une partie `ongoing` ; `false` si elle n'existe pas, [`StoreError::MatchState`]
+    /// si elle est terminée ou si son match n'est plus ouvert.
+    async fn delete_match_game(&self, game_id: Uuid) -> Result<bool, StoreError>;
 
     /// Remplace les matchs de l'étape (et leurs participants) par `matches`, en une seule
     /// opération ; `false` si l'étape n'existe pas. Les groupes et les inscrits appartiennent à

@@ -108,6 +108,10 @@ export default function AuthenticatedLayout() {
         options={{ title: t('matches.edit') }}
       />
       <Stack.Screen
+        name="tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/games/[number]"
+        options={{ title: t('matchGames.detail') }}
+      />
+      <Stack.Screen
         name="tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/results"
         options={{ title: t('matches.results') }}
       />
@@ -176,6 +180,10 @@ export default function AuthenticatedLayout() {
       <Stack.Screen
         name="games/[id]/stats"
         options={{ title: t('stats.manageGame') }}
+      />
+      <Stack.Screen
+        name="games/[id]/stat-options/[statId]"
+        options={{ title: t('stats.configureOptions') }}
       />
       <Stack.Screen name="stats/index" options={{ title: t('stats.title') }} />
       <Stack.Screen

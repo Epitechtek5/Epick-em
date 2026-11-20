@@ -54,13 +54,10 @@ async function acquirePushToken(): Promise<string | null> {
   if (!Device.isDevice || (Platform.OS !== 'ios' && Platform.OS !== 'android'))
     return null;
 
-  const existing = await Notifications.getPermissionsAsync();
-  const permission =
-    existing.status === 'undetermined'
-      ? await Notifications.requestPermissionsAsync()
-      : existing;
-  if (permission.status !== 'granted') return null;
+  const id = projectId();
+  if (!id) return null;
 
+  // Android must create its channel before requesting notification permission.
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('default', {
       name: 'Epick’em',
@@ -68,8 +65,13 @@ async function acquirePushToken(): Promise<string | null> {
     });
   }
 
-  const id = projectId();
-  if (!id) return null;
+  const existing = await Notifications.getPermissionsAsync();
+  const permission =
+    existing.status === 'undetermined'
+      ? await Notifications.requestPermissionsAsync()
+      : existing;
+  if (permission.status !== 'granted') return null;
+
   return (await Notifications.getExpoPushTokenAsync({ projectId: id })).data;
 }
 

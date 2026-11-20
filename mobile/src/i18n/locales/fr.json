@@ -264,8 +264,10 @@
     "key": "Clé",
     "type": "Type",
     "types": {
-      "flat": "Valeur brute",
-      "percent": "Pourcentage"
+      "flat": "Nombre",
+      "percent": "Pourcentage",
+      "select": "Sélection",
+      "mvp": "MVP"
     },
     "information": "Définition de statistique",
     "formHint": "Nom, clé unique et type",
@@ -297,10 +299,12 @@
     "validation": {
       "name": "Le nom doit contenir de 1 à 64 caractères après suppression des espaces.",
       "key": "La clé doit compter 64 caractères maximum : lettres minuscules, chiffres et segments séparés par _.",
-      "type": "Choisissez Valeur brute ou Pourcentage.",
+      "type": "Choisissez un type de statistique.",
       "fileFormat": "Choisissez un fichier .json ou .csv.",
       "fileSize": "Le fichier doit faire entre 1 octet et 256 Kio.",
-      "fileContent": "Le fichier doit être en UTF-8 valide ; le JSON doit être valide."
+      "fileContent": "Le fichier doit être en UTF-8 valide ; le JSON doit être valide.",
+      "scope": "Choisissez une portée compatible avec cette statistique.",
+      "options": "Utilisez de 1 à 64 caractères par valeur, avec un maximum de 500 valeurs."
     },
     "errors": {
       "keyTaken": "Cette clé de statistique est déjà utilisée.",
@@ -310,7 +314,22 @@
       "readFile": "Impossible de lire le fichier sélectionné.",
       "saveFile": "Impossible d’enregistrer le fichier.",
       "sharing": "Impossible de partager le fichier."
-    }
+    },
+    "scope": "S’applique à",
+    "scopes": {
+      "participant": "Participant ou joueur",
+      "match": "Chaque partie"
+    },
+    "typeHelp": "Les statistiques numériques restent numériques pour préserver les résultats existants.",
+    "configureOptions": "Configurer les valeurs",
+    "noOptions": "Aucune valeur configurée pour ce jeu.",
+    "optionsHelp": "Ces choix s’appliquent uniquement à ce jeu. Renommer une valeur conserve ses résultats existants.",
+    "optionLabel": "Valeur {{number}}",
+    "removeOption": "Retirer {{name}}",
+    "removeOptionHelp": "Les résultats existants conservent cette valeur, mais elle ne sera plus proposée pour les nouvelles saisies. Enregistrez pour appliquer le changement.",
+    "newOption": "Nouvelle valeur",
+    "addOption": "Ajouter la valeur",
+    "addBeforeSave": "Ajoutez la nouvelle valeur ou videz le champ avant d’enregistrer."
   },
   "tournaments": {
     "title": "Tournois",
@@ -516,7 +535,10 @@
       "in_person": "Sur place",
       "hybrid": "Hybride"
     },
-    "visibility": { "public": "Public", "invitation_only": "Sur invitation" },
+    "visibility": {
+      "public": "Public",
+      "invitation_only": "Sur invitation"
+    },
     "registrationPolicy": {
       "open": "Inscription ouverte",
       "approval_required": "Approbation administrateur"
@@ -527,7 +549,10 @@
       "select": "Choix",
       "boolean": "Oui / Non"
     },
-    "role": { "admin": "Administrateur", "referee": "Arbitre" },
+    "role": {
+      "admin": "Administrateur",
+      "referee": "Arbitre"
+    },
     "management": {
       "title": "Gestion du tournoi",
       "team": "Propriétaire et équipe de gestion",
@@ -759,7 +784,8 @@
       "date": "Choisissez une date et une heure valides.",
       "bracket": "Les tableaux distincts nécessitent une double élimination.",
       "next": "Choisissez un autre match de cette étape éliminatoire.",
-      "participants": "Sélectionnez des membres distincts du groupe dans la limite de capacité du match."
+      "participants": "Sélectionnez des membres distincts du groupe dans la limite de capacité du match.",
+      "bestOf": "Choisissez BO1, BO3 ou BO5."
     },
     "manage": "Options du match",
     "entryScope": "Saisir les statistiques de",
@@ -991,5 +1017,46 @@
     "badgeLabel": "Invitations, {{count}} invitations en attente ou nouvelles réponses",
     "newResponses": "Voir les nouvelles réponses ({{count}})",
     "markRead": "Marquer les réponses comme lues"
+  },
+  "matchGames": {
+    "format": "Format du match",
+    "bestOf": "BO{{count}} · Au meilleur des {{count}} parties",
+    "formatHelp": "La série se termine lorsqu’un participant remporte la majorité des parties, ou que toutes les parties ont été jouées.",
+    "formatLocked": "Le format est verrouillé dès le début de la première partie.",
+    "series": "Série",
+    "seriesHelp": "BO{{count}} · {{wins}} victoires nécessaires",
+    "wins": "Parties gagnées",
+    "empty": "Aucune partie commencée.",
+    "legacy": "Ce match possède des résultats saisis directement.",
+    "number": "Partie {{number}}",
+    "wonBy": "Victoire de {{name}}",
+    "enter": "Saisir les résultats",
+    "view": "Voir la partie",
+    "start": "Commencer la partie {{number}}",
+    "detail": "Détail de la partie",
+    "winner": "Vainqueur",
+    "fromPoints": "Calculer à partir des points",
+    "totalsHelp": "Saisissez les totaux de l’équipe séparément des statistiques individuelles. Seuls les totaux déterminent les points.",
+    "noStats": "Aucune statistique de participant configurée. Choisissez un vainqueur ou saisissez les rangs pour terminer cette partie.",
+    "save": "Enregistrer les résultats",
+    "finish": "Terminer la partie",
+    "confirmFinish": "Les résultats deviendront définitifs. Cela peut terminer la série, qualifier le vainqueur et clôturer l’étape. Continuer ?",
+    "finishHelp": "Terminer rend les résultats définitifs. Les totaux de la série sont calculés automatiquement.",
+    "saveFirst": "Enregistrez vos modifications avant de terminer cette partie.",
+    "finished": "Partie terminée.",
+    "seriesFinished": "Série terminée. Les résultats ont été mis à jour.",
+    "readOnly": "Cette partie est terminée. Ses résultats ne peuvent plus être modifiés.",
+    "adminOnly": "Seul un administrateur peut saisir les résultats pendant que la partie est en cours.",
+    "delete": "Supprimer cette partie",
+    "confirmDelete": "Supprimer cette partie en cours et ses résultats enregistrés ? Cette action est irréversible.",
+    "invalidAttributes": "Choisissez une valeur configurée et un MVP qui participe à cette partie.",
+    "invalidPlayer": "Un joueur ne fait plus partie de cette équipe. Rechargez la partie avant de saisir les résultats.",
+    "unavailableOption": "Valeur devenue indisponible",
+    "incompleteRanks": "Saisissez un rang pour chaque participant, ou laissez tous les rangs vides pour les calculer à partir des points.",
+    "aggregatePending": "Après la série",
+    "bestOf_one": "BO1 · Une seule partie",
+    "bestOf_other": "BO{{count}} · Au meilleur des {{count}} parties",
+    "seriesHelp_one": "BO1 · 1 victoire nécessaire",
+    "seriesHelp_other": "BO{{count}} · {{wins}} victoires nécessaires"
   }
 }

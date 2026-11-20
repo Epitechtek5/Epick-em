@@ -264,8 +264,10 @@
     "key": "Key",
     "type": "Type",
     "types": {
-      "flat": "Flat",
-      "percent": "Percent"
+      "flat": "Number",
+      "percent": "Percent",
+      "select": "Selection",
+      "mvp": "MVP"
     },
     "information": "Statistic definition",
     "formHint": "Name, unique key and type",
@@ -297,10 +299,12 @@
     "validation": {
       "name": "Name must contain 1–64 characters after trimming.",
       "key": "Key must be at most 64 lowercase letters, digits or underscore-separated segments.",
-      "type": "Choose Flat or Percent.",
+      "type": "Choose a statistic type.",
       "fileFormat": "Choose a .json or .csv file.",
       "fileSize": "File must be between 1 byte and 256 KiB.",
-      "fileContent": "File must contain valid UTF-8; JSON files must be valid JSON."
+      "fileContent": "File must contain valid UTF-8; JSON files must be valid JSON.",
+      "scope": "Choose a scope compatible with this statistic.",
+      "options": "Use 1 to 64 characters per value, with at most 500 values."
     },
     "errors": {
       "keyTaken": "This statistic key is already in use.",
@@ -310,7 +314,22 @@
       "readFile": "Unable to read the selected file.",
       "saveFile": "Unable to save the file.",
       "sharing": "Unable to share the file."
-    }
+    },
+    "scope": "Applies to",
+    "scopes": {
+      "participant": "Participant or player",
+      "match": "Each game"
+    },
+    "typeHelp": "Numeric statistics remain numeric to preserve existing results.",
+    "configureOptions": "Configure values",
+    "noOptions": "No values configured for this game.",
+    "optionsHelp": "These choices apply only to this game. Renaming a value preserves its existing results.",
+    "optionLabel": "Value {{number}}",
+    "removeOption": "Remove {{name}}",
+    "removeOptionHelp": "Existing results keep this value, but it will no longer be available for new entries. Save to apply the change.",
+    "newOption": "New value",
+    "addOption": "Add value",
+    "addBeforeSave": "Add the new value or clear the field before saving."
   },
   "tournaments": {
     "title": "Tournaments",
@@ -516,7 +535,10 @@
       "in_person": "In person",
       "hybrid": "Hybrid"
     },
-    "visibility": { "public": "Public", "invitation_only": "Invitation only" },
+    "visibility": {
+      "public": "Public",
+      "invitation_only": "Invitation only"
+    },
     "registrationPolicy": {
       "open": "Open registration",
       "approval_required": "Administrator approval"
@@ -527,7 +549,10 @@
       "select": "Choice",
       "boolean": "Yes / No"
     },
-    "role": { "admin": "Administrator", "referee": "Referee" },
+    "role": {
+      "admin": "Administrator",
+      "referee": "Referee"
+    },
     "management": {
       "title": "Tournament management",
       "team": "Owner and management team",
@@ -759,7 +784,8 @@
       "date": "Choose a valid date and time.",
       "bracket": "Bracket regions require double elimination.",
       "next": "Select another match in this elimination stage.",
-      "participants": "Choose distinct group members within the match capacity."
+      "participants": "Choose distinct group members within the match capacity.",
+      "bestOf": "Choose BO1, BO3 or BO5."
     },
     "manage": "Match options",
     "entryScope": "Enter statistics for",
@@ -991,5 +1017,46 @@
     "badgeLabel": "Invitations, {{count}} pending invitations or new responses",
     "newResponses": "View new responses ({{count}})",
     "markRead": "Mark responses as read"
+  },
+  "matchGames": {
+    "format": "Match format",
+    "bestOf": "BO{{count}} · Best of {{count}}",
+    "formatHelp": "The series ends when a participant wins a majority of games, or all games have been played.",
+    "formatLocked": "The format is locked once the first game has started.",
+    "series": "Series",
+    "seriesHelp": "BO{{count}} · {{wins}} wins needed",
+    "wins": "Games won",
+    "empty": "No games started yet.",
+    "legacy": "This match has results entered directly.",
+    "number": "Game {{number}}",
+    "wonBy": "Won by {{name}}",
+    "enter": "Enter results",
+    "view": "View game",
+    "start": "Start game {{number}}",
+    "detail": "Game details",
+    "winner": "Winner",
+    "fromPoints": "Calculate from points",
+    "totalsHelp": "Enter team totals separately from individual player statistics. Only team totals determine the points.",
+    "noStats": "No participant statistics configured. Choose a winner or enter ranks to finish this game.",
+    "save": "Save results",
+    "finish": "Finish game",
+    "confirmFinish": "Results will become final. This may finish the series, advance the winner and close the stage. Continue?",
+    "finishHelp": "Finishing makes the results read-only. Series totals are calculated automatically.",
+    "saveFirst": "Save your changes before finishing this game.",
+    "finished": "Game finished.",
+    "seriesFinished": "Series finished. Results have been updated.",
+    "readOnly": "This game is finished. Its results cannot be changed.",
+    "adminOnly": "Results can only be entered by an administrator while the game is in progress.",
+    "delete": "Delete this game",
+    "confirmDelete": "Delete this unfinished game and its saved results? This cannot be undone.",
+    "invalidAttributes": "Choose a configured value and an MVP who participates in this game.",
+    "invalidPlayer": "A player is no longer on this team. Reload the game before entering results.",
+    "unavailableOption": "Value no longer available",
+    "incompleteRanks": "Enter a rank for every participant, or leave all ranks empty to calculate them from points.",
+    "aggregatePending": "After the series",
+    "bestOf_one": "BO1 · One game",
+    "bestOf_other": "BO{{count}} · Best of {{count}}",
+    "seriesHelp_one": "BO1 · 1 win needed",
+    "seriesHelp_other": "BO{{count}} · {{wins}} wins needed"
   }
 }

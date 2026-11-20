@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { listGameStats } from '@/features/stats/api'
 import type { Stat } from '@/features/stats/types'
+import { isNumericType } from '@/features/stats/validation'
 import {
   createScoringRule,
   deleteScoringRule,
@@ -180,7 +181,7 @@ export function ScoringRulesSection({ tournament, canManage }: { tournament: Tou
 
       {editable && state.status === 'success' ? (
         <AddRuleForm
-          stats={stats}
+          stats={stats.filter((stat) => isNumericType(stat.type))}
           statsState={statsState.state.status}
           onRetryStats={statsState.reload}
           takenIds={rules.map((rule) => rule.stat_id)}

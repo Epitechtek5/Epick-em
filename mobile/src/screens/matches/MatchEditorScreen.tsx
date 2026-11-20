@@ -46,6 +46,9 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
   const [group, setGroup] = useState(
     match ? (match.group_id ?? '') : (groups[0]?.group_id ?? ''),
   );
+  const [bestOf, setBestOf] = useState<'1' | '3' | '5'>(
+    String(match?.best_of ?? 1) as '1' | '3' | '5',
+  );
   const [round, setRound] = useState(match?.round?.toString() ?? '');
   const [bracket, setBracket] = useState<Bracket | ''>(match?.bracket ?? '');
   const [next, setNext] = useState(match?.next_match_id ?? '');
@@ -65,6 +68,7 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
   function save() {
     const input = {
       group_id: group,
+      best_of: Number(bestOf) as 1 | 3 | 5,
       round: round.trim() ? Number(round) : null,
       bracket: bracket || null,
       next_match_id: next || null,
@@ -97,6 +101,9 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
                 ),
             ));
         const changes = {
+          ...(input.best_of !== (match.best_of ?? 1) && {
+            best_of: input.best_of,
+          }),
           ...(input.round !== match.round && { round: input.round }),
           ...(input.bracket !== match.bracket && { bracket: input.bracket }),
           ...(input.next_match_id !== match.next_match_id && {
@@ -131,6 +138,19 @@ function ScheduleForm({ data, token }: { data: MatchContext; token: string }) {
       <View className="gap-4 rounded-xl border border-border bg-card p-4">
         <Text className="text-lg font-semibold">{t('matches.detail')}</Text>
 
+        <StepOptionSelect
+          label={t('matchGames.format')}
+          value={bestOf}
+          options={['1', '3', '5']}
+          labelFor={(value) => t('matchGames.bestOf', { count: Number(value) })}
+          description={t(
+            match?.games?.length
+              ? 'matchGames.formatLocked'
+              : 'matchGames.formatHelp',
+          )}
+          disabled={Boolean(match?.games?.length) || action.busy}
+          onSelect={setBestOf}
+        />
         <StepOptionSelect
           label={t('matches.group')}
           disabled={!!match}
