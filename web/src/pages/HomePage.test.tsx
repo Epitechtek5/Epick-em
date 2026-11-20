@@ -39,7 +39,7 @@ describe('HomePage', () => {
       'aria-current',
       'page',
     )
-    expect(screen.getByText('Connecté en tant que')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Mon compte' })).toHaveAttribute('title', 'Connecté en tant que alice')
   })
 
   it("n'affiche ni navigation ni déconnexion aux visiteurs", () => {

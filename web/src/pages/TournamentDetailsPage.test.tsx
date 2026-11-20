@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import type { ScoringRule, Tournament, TournamentParticipant } from '@/features/tournaments/types'
 import {
   BOB,
+  CAROL,
   GAME_A,
   jsonResponse,
   ME,
@@ -14,6 +15,7 @@ import {
   STAT_B,
   TT_MINE,
   USERS,
+  noInvitations,
   userResponse,
 } from '@/test/render'
 import { fullText, P_BOB, P_ME, RULE_LINEAR, SOLO, TEAM_CUP } from '@/test/tournaments'
@@ -37,6 +39,8 @@ function server(initial: Partial<ServerState> = {}) {
     if (custom) return custom
     const user = userResponse(path)
     if (user) return user
+    const noInvites = noInvitations(path)
+    if (noInvites) return noInvites
     const t = state.tournament
     const base = `/tournaments/${t.id}`
     if (path.startsWith('/users?')) return jsonResponse(200, USERS)
@@ -453,5 +457,47 @@ describe('TournamentDetailsPage', () => {
     renderApp(`/tournaments/${SOLO.id}`)
     expect(await screen.findByRole('alert')).toHaveTextContent('introuvable')
     expect(screen.getByRole('button', { name: 'Réessayer' })).toBeInTheDocument()
+  })
+  describe('invitations au tournoi', () => {
+    it('un administrateur invite un joueur à un tournoi solo ouvert, sans rôle', async () => {
+      signInAs('admin')
+      const user = userEvent.setup()
+      const { fetchMock } = server({ tournament: { ...SOLO, status: 'registration' } })
+      renderApp(`/tournaments/${SOLO.id}`)
+      const form = await screen.findByRole('form', { name: 'Nouvelle invitation' })
+      expect(within(form).queryByLabelText('Rôle proposé')).not.toBeInTheDocument()
+      // Les inscrits (alice, bob) ne sont pas proposés.
+      const recipient = within(form).getByRole('combobox', { name: 'Compte à inviter' })
+      await waitFor(() => expect(recipient).toBeEnabled())
+      await user.click(recipient)
+      await waitFor(() => expect(screen.queryByRole('option', { name: 'bob' })).not.toBeInTheDocument())
+      await user.click(await screen.findByRole('option', { name: 'carol' }))
+      await user.click(within(form).getByRole('button', { name: 'Inviter' }))
+      const post = await waitFor(() => {
+        const found = fetchMock.mock.calls.find(([url, init]) => url === '/api/invitations' && init?.method === 'POST')
+        expect(found).toBeDefined()
+        return found!
+      })
+      expect(JSON.parse(post[1].body as string)).toEqual({
+        type: 'tournament',
+        resource_id: SOLO.id,
+        recipient_id: CAROL.id,
+      })
+    })
+
+    it('ni un joueur, ni un tournoi par équipes, ni un tournoi démarré ne proposent d’inviter', async () => {
+      for (const [role, tournament] of [
+        ['user', SOLO],
+        ['admin', TEAM_CUP],
+        ['admin', { ...SOLO, status: 'ongoing' }],
+      ] as const) {
+        signInAs(role)
+        server({ tournament })
+        const view = renderApp(`/tournaments/${tournament.id}`)
+        await screen.findByRole('heading', { level: 1, name: tournament.name })
+        expect(screen.queryByRole('form', { name: 'Nouvelle invitation' })).not.toBeInTheDocument()
+        view.unmount()
+      }
+    })
   })
 })

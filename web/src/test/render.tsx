@@ -7,17 +7,26 @@ import App from '@/App'
 import type { Team, TournamentTeam } from '@/features/teams/types'
 import { I18nProvider } from '@/i18n/I18nProvider'
 import { AuthProvider } from '@/lib/auth/AuthProvider'
+import { SettingsProvider } from '@/features/settings/SettingsProvider'
 import type { Role } from '@/lib/auth/jwt'
 import { tokenStore } from '@/lib/auth/token-store'
 import { makeJwt } from './jwt'
 
-export function renderApp(route = '/') {
+// `settings` monte SettingsProvider comme main.tsx : les réglages du compte sont alors
+// chargés à l'ouverture de session (GET /me/settings et GET /me). Désactivé par défaut pour
+// que les tests qui simulent une suite précise de réponses n'aient pas à les prévoir.
+export function renderApp(route = '/', options: { settings?: boolean } = {}) {
+  const app = options.settings ? (
+    <SettingsProvider>
+      <App />
+    </SettingsProvider>
+  ) : (
+    <App />
+  )
   return render(
     <I18nProvider>
       <MemoryRouter initialEntries={[route]}>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
+        <AuthProvider>{app}</AuthProvider>
       </MemoryRouter>
     </I18nProvider>,
   )
@@ -136,6 +145,11 @@ export const TT_MINE: TournamentTeam = {
   picture_url: null,
   owner_id: ME.id,
   created_at: '2026-01-01T00:00:00Z',
+}
+
+// Réponse GET /invitations?… : aucune invitation (serveurs simulés des fiches équipe/tournoi).
+export function noInvitations(path: string): Response | null {
+  return path.startsWith('/invitations?') ? jsonResponse(200, { items: [], total: 0, limit: 100, offset: 0 }) : null
 }
 
 // Réponse GET /user/{id} à partir des comptes connus.

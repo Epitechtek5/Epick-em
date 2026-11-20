@@ -74,10 +74,10 @@ export function MatchResultsForm({
       return [
         ...Object.entries(found.stats ?? {}).map(([key, message]) => ({
           fieldId: cellId(row.participant_id, key),
-          message: `${name} · ${stats.find((stat) => stat.key === key)?.name ?? key} : ${t(message)}`,
+          message: `${name} · ${stats.find((stat) => stat.key === key)?.name ?? key}${t('common.colon')} ${t(message)}`,
         })),
         ...(found.rank
-          ? [{ fieldId: cellId(row.participant_id, 'rank'), message: `${name} : ${t(found.rank, { max: rows.length })}` }]
+          ? [{ fieldId: cellId(row.participant_id, 'rank'), message: `${name}${t('common.colon')} ${t(found.rank, { max: rows.length })}` }]
           : []),
       ]
     }),
