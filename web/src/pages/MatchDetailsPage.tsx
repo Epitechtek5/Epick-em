@@ -25,6 +25,8 @@ import { StateMessage } from '@/components/games/StateMessage'
 import { BracketChip, MatchStatusBadge, ResultBadge } from '@/components/matches/MatchBadges'
 import { SlotLabel } from '@/components/matches/MatchCard'
 import { MatchResultsForm } from '@/components/matches/MatchResultsForm'
+import { MatchSeriesSection } from '@/components/matches/MatchSeriesSection'
+import { StatsCell } from '@/components/matches/StatsCell'
 import { StepStatusBadge } from '@/components/steps/StepBadges'
 import { Avatar, FactTile, PageHero, SectionCard } from '@/components/tournaments/ui'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -32,14 +34,16 @@ import { Icon } from '@/components/ui/icon'
 import { readNotice } from '@/features/games/notice'
 import { deleteMatch, getMatch, listMatches, saveResults, setMatchStatus } from '@/features/matches/api'
 import { isConflict, matchErrorDetail, matchErrorKey } from '@/features/matches/errors'
+import { startProblem } from '@/features/matches/games'
 import { groupIndexes, matchesPath, matchNumbers, openSlots, orderedParticipants, predecessors } from '@/features/matches/organize'
-import type { Match, MatchParticipant, MatchTransition, ResultRow } from '@/features/matches/types'
+import type { Match, MatchTransition, ResultRow } from '@/features/matches/types'
 import {
   canDeleteMatch,
   canEditMatch,
   canEnterResults,
-  isTeamStats,
+  isSeries,
   matchCapacity,
+  participantStatsOf,
   playableProblem,
   toResultEntries,
   totalsOf,
@@ -75,49 +79,14 @@ const STATUS_ACTIONS: Record<MatchTransition, { label: MessageKey; busy: Message
   cancelled: { label: 'matches.lifecycle.cancel', busy: 'matches.lifecycle.cancelling', done: 'matches.lifecycle.cancelled', icon: Cancel01Icon },
 }
 
-// Statistiques d'un participant, avec le détail par joueur d'une équipe s'il existe.
-function StatsCell({ participant, statName }: { participant: MatchParticipant; statName: (key: string) => string }) {
-  const { t, lang } = useI18n()
-  const totals = Object.entries(totalsOf(participant.stats))
-  const players = isTeamStats(participant.stats) ? Object.entries(participant.stats.players ?? {}) : []
-  const names = useUsernames(players.map(([id]) => id))
-  if (totals.length === 0) return <span className="text-muted-foreground">{t('matches.noStatsEntered')}</span>
-  return (
-    <div className="grid gap-1">
-      <dl className="flex flex-wrap gap-x-3 gap-y-1">
-        {totals.map(([key, value]) => (
-          <div key={key} className="flex gap-1">
-            <dt className="text-muted-foreground">{statName(key)}</dt>
-            <dd className="font-mono tabular-nums">{formatPoints(lang, value)}</dd>
-          </div>
-        ))}
-      </dl>
-      {players.length > 0 ? (
-        <details className="text-xs">
-          <summary className="cursor-pointer text-muted-foreground underline-offset-4 hover:underline">{t('matches.playerStats')}</summary>
-          <ul className="mt-1 grid gap-1">
-            {players.map(([id, stats]) => (
-              <li key={id}>
-                <span className="font-medium">{names[id] ?? t('teams.unknownUser')}</span>{' '}
-                {Object.entries(stats)
-                  .map(([key, value]) => `${statName(key)} ${formatPoints(lang, value)}`)
-                  .join(' · ')}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-    </div>
-  )
-}
-
 // Détail d'un match (/tournaments/:tournamentId/steps/:stepId/matches/:matchId) : participants,
 // statistiques, points, rangs, résultats et dates tels que renvoyés par le serveur ; pour les
 // administrateurs, saisie des résultats, changements de statut, modification et suppression.
 export default function MatchDetailsPage() {
   const { tournamentId = '', stepId = '', matchId = '' } = useParams()
   const { t, lang } = useI18n()
-  const { refreshRole } = useAuth()
+  // Les parties ne s'écrivent que par un administrateur global (api-public/match_games.rs).
+  const { refreshRole, isAdmin: globalAdmin } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(tournamentId) && isUuid(stepId) && isUuid(matchId)
@@ -175,7 +144,7 @@ export default function MatchDetailsPage() {
 
   const stepPath = `/tournaments/${tournamentId}/steps/${stepId}`
   const matchPath = (target: Pick<Match, 'id'>) => `${matchesPath(tournamentId, stepId)}/${target.id}`
-  const statName = (key: string) => stats.find((stat) => stat.key === key)?.name ?? key
+  const statOf = (key: string) => stats.find((stat) => stat.key === key)
 
   function failed(error: unknown) {
     if (error instanceof ApiError && error.status === 403) void refreshRole()
@@ -206,7 +175,7 @@ export default function MatchDetailsPage() {
     setFeedback(null)
     setResultsError(null)
     try {
-      const saved = await saveResults(tournamentId, stepId, match.id, toResultEntries(rows, match.participants))
+      const saved = await saveResults(tournamentId, stepId, match.id, toResultEntries(rows, match.participants, stats))
       setLocal({ base: loaded, match: saved, step: step ?? undefined })
       setFeedback({ kind: 'success', key: 'matches.resultsSaved', params: { number } })
     } catch (error) {
@@ -232,6 +201,15 @@ export default function MatchDetailsPage() {
   }
 
   const identity = (id: string): Identity => people.identity(id)
+  const mvpIds = (match?.games ?? []).flatMap((game) =>
+    Object.entries(game.attributes).flatMap(([key, value]) =>
+      statOf(key)?.type === 'mvp' && !people.participants.some((candidate) => candidate.id === value) ? [value] : [],
+    ),
+  )
+  const players = useUsernames(mvpIds)
+  // MVP : un participant du match, sinon un joueur d'une équipe.
+  const nameOf = (id: string) =>
+    people.participants.some((candidate) => candidate.id === id) ? people.identity(id).name : (people.names[id] ?? players[id] ?? t('teams.unknownUser'))
   const groupIndex = match?.group_id && loaded ? groupIndexes(loaded.groups).get(match.group_id) : undefined
   const feeding = match && loaded ? (predecessors(loaded.matches).get(match.id) ?? []) : []
   const next = match?.next_match_id ? loaded?.matches.find((candidate) => candidate.id === match.next_match_id) : undefined
@@ -459,7 +437,7 @@ export default function MatchDetailsPage() {
                             {participant.result ? <ResultBadge result={participant.result} /> : <span className="text-muted-foreground">–</span>}
                           </td>
                           <td className="px-3 py-2">
-                            <StatsCell participant={participant} statName={statName} />
+                            <StatsCell stats={participant.stats} statOf={statOf} />
                           </td>
                         </tr>
                       )
@@ -542,6 +520,20 @@ export default function MatchDetailsPage() {
             ) : null}
           </SectionCard>
 
+          {isSeries(match) || (globalAdmin && startProblem(step, match) === null) ? (
+            <MatchSeriesSection
+              match={match}
+              step={step}
+              stats={stats}
+              identity={identity}
+              nameOf={nameOf}
+              canWrite={globalAdmin}
+              gamePath={(gameNumber) => `${matchPath(match)}/games/${gameNumber}`}
+              onStarted={(game) => navigate(`${matchPath(match)}/games/${game.number}`)}
+              onConflict={failed}
+            />
+          ) : null}
+
           {canReferee && canEnterResults(step, match) ? (
             <SectionCard id="match-results-title" icon={RankingIcon} title={t('matches.resultsTitle')}>
               {scoring.state.status === 'loading' ? <StateMessage kind="loading">{t('matches.loadingStats')}</StateMessage> : null}
@@ -561,7 +553,7 @@ export default function MatchDetailsPage() {
                 <MatchResultsForm
                   key={match.updated_at}
                   match={match}
-                  stats={stats}
+                  stats={participantStatsOf(stats)}
                   scored={scored}
                   identity={identity}
                   busy={busy === 'results'}

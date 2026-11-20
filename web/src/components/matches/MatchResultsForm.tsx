@@ -2,6 +2,7 @@ import { FloppyDiskIcon, InformationCircleIcon } from '@hugeicons/core-free-icon
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { ErrorSummary, type ErrorSummaryItem } from '@/components/form/ErrorSummary'
+import { StatInput } from '@/components/matches/StatInput'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
@@ -143,16 +144,14 @@ export function MatchResultsForm({
                     const message = found?.stats?.[stat.key]
                     return (
                       <td key={stat.id} className="px-3 py-2">
-                        <Input
+                        <StatInput
                           id={cellId(row.participant_id, stat.key)}
-                          inputMode="decimal"
-                          className="w-28"
-                          aria-label={t('matches.statFor', { stat: stat.name, name: who.name })}
+                          stat={stat}
+                          label={t('matches.statFor', { stat: stat.name, name: who.name })}
                           value={row.stats[stat.key] ?? ''}
-                          aria-invalid={message ? true : undefined}
-                          aria-describedby={message ? `${cellId(row.participant_id, stat.key)}-error` : undefined}
-                          onChange={(event) =>
-                            update(row.participant_id, (current) => ({ ...current, stats: { ...current.stats, [stat.key]: event.target.value } }))
+                          invalid={message !== undefined}
+                          onChange={(value) =>
+                            update(row.participant_id, (current) => ({ ...current, stats: { ...current.stats, [stat.key]: value } }))
                           }
                         />
                         {errorText(row.participant_id, stat.key, message ? t(message) : undefined)}

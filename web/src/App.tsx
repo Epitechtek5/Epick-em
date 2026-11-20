@@ -18,6 +18,7 @@ import InvitationPage from '@/pages/InvitationPage'
 import InvitationsPage from '@/pages/InvitationsPage'
 import MatchDetailsPage from '@/pages/MatchDetailsPage'
 import MatchEditorPage from '@/pages/MatchEditorPage'
+import MatchGamePage from '@/pages/MatchGamePage'
 import NotFoundPage from '@/pages/NotFoundPage'
 import PublicTournamentPage from '@/pages/PublicTournamentPage'
 import PublicTournamentsPage from '@/pages/PublicTournamentsPage'
@@ -102,6 +103,7 @@ export default function App() {
           <Route path="/tournaments/:tournamentId/steps/:stepId" element={<StepDetailsPage />} />
           <Route path="/tournaments/:tournamentId/steps/:stepId/bracket" element={<StepBracketPage />} />
           <Route path="/tournaments/:tournamentId/steps/:stepId/matches/:matchId" element={<MatchDetailsPage />} />
+          <Route path="/tournaments/:tournamentId/steps/:stepId/matches/:matchId/games/:number" element={<MatchGamePage />} />
           <Route path="/tournaments/:tournamentId/teams" element={<TournamentTeamsPage />} />
           <Route path="/tournaments/:tournamentId/teams/new" element={<TournamentTeamEditorPage />} />
           <Route path="/tournaments/:tournamentId/teams/copy" element={<TournamentTeamCopyPage />} />

@@ -6,6 +6,8 @@ import {
   Download04Icon,
   Edit02Icon,
   PercentCircleIcon,
+  ListViewIcon,
+  Award01Icon,
   RefreshIcon,
 } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
@@ -17,7 +19,7 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { deleteStat, listStats } from '@/features/stats/api'
 import { statErrorKey } from '@/features/stats/errors'
-import { statTypeLabelKey } from '@/features/stats/labels'
+import { statScopeLabelKey, statTypeLabelKey } from '@/features/stats/labels'
 import type { Stat } from '@/features/stats/types'
 import { readNotice, type Notice } from '@/features/games/notice'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -140,7 +142,7 @@ export default function StatsPage() {
             >
               <div className="flex min-w-0 items-start gap-3">
                 <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:bg-primary/25 dark:text-violet-200">
-                  <Icon icon={stat.type === 'percent' ? PercentCircleIcon : Analytics01Icon} size={20} />
+                  <Icon icon={stat.type === 'percent' ? PercentCircleIcon : stat.type === 'select' ? ListViewIcon : stat.type === 'mvp' ? Award01Icon : Analytics01Icon} size={20} />
                 </span>
                 <div className="grid min-w-0 gap-1">
                 <h2 className="text-base font-semibold">{stat.name}</h2>
@@ -152,6 +154,10 @@ export default function StatsPage() {
                   <span>
                     <span className="sr-only">{t('stats.type')}{t('common.colon')} </span>
                     {t(statTypeLabelKey(stat.type))} ({stat.type})
+                  </span>
+                  <span>
+                    <span className="sr-only">{t('stats.scope')}{t('common.colon')} </span>
+                    {t(statScopeLabelKey(stat.scope))}
                   </span>
                 </p>
                 </div>

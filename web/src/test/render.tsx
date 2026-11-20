@@ -101,12 +101,14 @@ export const STAT_A = {
   name: 'Éliminations',
   key: 'kills',
   type: 'flat' as const,
+  scope: 'participant' as const,
 }
 export const STAT_B = {
   id: '66666666-6666-4666-8666-666666666666',
   name: 'Précision',
   key: 'accuracy',
   type: 'percent' as const,
+  scope: 'participant' as const,
 }
 
 // Comptes : ME correspond au `sub` du faux JWT (makeJwt).
