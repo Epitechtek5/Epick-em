@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { listGameStats } from '@/features/stats/api'
 import type { Stat } from '@/features/stats/types'
+import { isNumericType } from '@/features/stats/validation'
 import {
   createScoringRule,
   deleteScoringRule,
@@ -43,9 +44,11 @@ interface Feedback {
 // Barème du tournoi (GET /tournaments/{id}/scoring-rules), une règle par statistique. Les
 // administrateurs ajoutent, modifient et retirent des règles tant que le tournoi est en
 // brouillon ou en inscription ; seules les statistiques liées au jeu du tournoi sont proposées.
-export function ScoringRulesSection({ tournament }: { tournament: Tournament }) {
+export function ScoringRulesSection({ tournament, canManage }: { tournament: Tournament; canManage?: boolean }) {
   const { t } = useI18n()
-  const { isAdmin, refreshRole } = useAuth()
+  const { isAdmin: globalAdmin, refreshRole } = useAuth()
+  // Droits fournis par le serveur (organisateurs du tournoi) ; rôle global à défaut.
+  const isAdmin = canManage ?? globalAdmin
   const { state, reload } = useAsyncResource((signal) => listScoringRules(tournament.id, signal), [tournament.id])
   const statsState = useAsyncResource((signal) => listGameStats(tournament.game_id, signal), [tournament.game_id])
   const stats = statsState.state.status === 'success' ? statsState.state.data : []
@@ -178,7 +181,7 @@ export function ScoringRulesSection({ tournament }: { tournament: Tournament }) 
 
       {editable && state.status === 'success' ? (
         <AddRuleForm
-          stats={stats}
+          stats={stats.filter((stat) => isNumericType(stat.type))}
           statsState={statsState.state.status}
           onRetryStats={statsState.reload}
           takenIds={rules.map((rule) => rule.stat_id)}

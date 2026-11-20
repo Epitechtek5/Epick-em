@@ -9,7 +9,7 @@ import {
 
 import { GameImage } from '@/components/games/GameImage'
 import { Icon } from '@/components/ui/icon'
-import { formatDateRange, formatDateTime } from '@/features/tournaments/format'
+import { formatDateRange, formatDateTime, teamFormatMessage } from '@/features/tournaments/format'
 import { participantTypeLabelKey } from '@/features/tournaments/labels'
 import type { TournamentStatus, TournamentValues } from '@/features/tournaments/types'
 import { useI18n, type MessageKey } from '@/i18n/context'
@@ -32,7 +32,7 @@ export function TournamentPreview({ values, status, game, creating }: Tournament
   const team = values.participant_type === 'team'
   const name = values.name.trim()
   const capacity = Number.parseInt(values.max_participants, 10)
-  const teamSize = Number.parseInt(values.team_size, 10)
+  const format = teamFormatMessage(Number.parseInt(values.team_min_starters, 10) || null, Number.parseInt(values.team_max_starters, 10) || null)
   const dates =
     values.start_date && values.end_date
       ? formatDateRange(lang, values.start_date, values.end_date)
@@ -46,7 +46,7 @@ export function TournamentPreview({ values, status, game, creating }: Tournament
     { key: 'tournaments.startDate', done: values.start_date !== '' },
     { key: 'tournaments.endDate', done: values.end_date !== '' },
     { key: 'tournaments.capacity', done: capacity > 0 },
-    ...(team ? [{ key: 'tournaments.teamSize' as const, done: teamSize > 0 }] : []),
+    ...(team ? [{ key: 'tournaments.minStarters' as const, done: format !== null }] : []),
   ]
   const done = checks.filter((check) => check.done).length
 
@@ -87,7 +87,7 @@ export function TournamentPreview({ values, status, game, creating }: Tournament
             <li className="flex items-center gap-2">
               <Icon icon={team ? UserGroupIcon : UserIcon} className="shrink-0 text-muted-foreground" />
               <span>
-                {team && teamSize > 0 ? t('tournaments.formatTeam', { size: teamSize }) : t(participantTypeLabelKey(values.participant_type))}
+                {team && format ? t(format.key, format.params) : t(participantTypeLabelKey(values.participant_type))}
                 {capacity > 0
                   ? ` · ${t(team ? 'tournaments.capacityTeams' : 'tournaments.capacityPlayers', { count: capacity })}`
                   : ''}

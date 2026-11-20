@@ -26,6 +26,8 @@ import { StateMessage } from '@/components/games/StateMessage'
 import { BracketChip, MatchStatusBadge, ResultBadge } from '@/components/matches/MatchBadges'
 import { SlotLabel } from '@/components/matches/MatchCard'
 import { MatchResultsForm } from '@/components/matches/MatchResultsForm'
+import { MatchSeriesSection } from '@/components/matches/MatchSeriesSection'
+import { StatsCell } from '@/components/matches/StatsCell'
 import { StepStatusBadge } from '@/components/steps/StepBadges'
 import { Avatar, FactTile, PageHero, SectionCard } from '@/components/tournaments/ui'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -33,14 +35,16 @@ import { Icon } from '@/components/ui/icon'
 import { readNotice } from '@/features/games/notice'
 import { deleteMatch, getMatch, listMatches, saveResults, setMatchStatus } from '@/features/matches/api'
 import { isConflict, matchErrorDetail, matchErrorKey } from '@/features/matches/errors'
-import { groupIndexes, matchesPath, matchNumbers, openSlots, orderedParticipants, predecessors } from '@/features/matches/organize'
-import type { Match, MatchParticipant, MatchTransition, ResultRow } from '@/features/matches/types'
+import { startProblem } from '@/features/matches/games'
+import { feeders, groupIndexes, isFinalReset, matchesPath, matchNumbers, openSlots, orderedParticipants } from '@/features/matches/organize'
+import type { Match, MatchTransition, ResultRow } from '@/features/matches/types'
 import {
   canDeleteMatch,
   canEditMatch,
   canEnterResults,
-  isTeamStats,
+  isSeries,
   matchCapacity,
+  participantStatsOf,
   playableProblem,
   toResultEntries,
   totalsOf,
@@ -54,6 +58,7 @@ import { getTournament, listScoringRules } from '@/features/tournaments/api'
 import { formatDateTime, formatPoints } from '@/features/tournaments/format'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { useTournamentAccess } from '@/hooks/use-tournament-access'
 import { useParticipantIdentities, type Identity } from '@/hooks/use-participant-identities'
 import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n, type MessageKey, type Params } from '@/i18n/context'
@@ -75,49 +80,14 @@ const STATUS_ACTIONS: Record<MatchTransition, { label: MessageKey; busy: Message
   cancelled: { label: 'matches.lifecycle.cancel', busy: 'matches.lifecycle.cancelling', done: 'matches.lifecycle.cancelled', icon: Cancel01Icon },
 }
 
-// Statistiques d'un participant, avec le détail par joueur d'une équipe s'il existe.
-function StatsCell({ participant, statName }: { participant: MatchParticipant; statName: (key: string) => string }) {
-  const { t, lang } = useI18n()
-  const totals = Object.entries(totalsOf(participant.stats))
-  const players = isTeamStats(participant.stats) ? Object.entries(participant.stats.players ?? {}) : []
-  const names = useUsernames(players.map(([id]) => id))
-  if (totals.length === 0) return <span className="text-muted-foreground">{t('matches.noStatsEntered')}</span>
-  return (
-    <div className="grid gap-1">
-      <dl className="flex flex-wrap gap-x-3 gap-y-1">
-        {totals.map(([key, value]) => (
-          <div key={key} className="flex gap-1">
-            <dt className="text-muted-foreground">{statName(key)}</dt>
-            <dd className="font-mono tabular-nums">{formatPoints(lang, value)}</dd>
-          </div>
-        ))}
-      </dl>
-      {players.length > 0 ? (
-        <details className="text-xs">
-          <summary className="cursor-pointer text-muted-foreground underline-offset-4 hover:underline">{t('matches.playerStats')}</summary>
-          <ul className="mt-1 grid gap-1">
-            {players.map(([id, stats]) => (
-              <li key={id}>
-                <span className="font-medium">{names[id] ?? t('teams.unknownUser')}</span>{' '}
-                {Object.entries(stats)
-                  .map(([key, value]) => `${statName(key)} ${formatPoints(lang, value)}`)
-                  .join(' · ')}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-    </div>
-  )
-}
-
 // Détail d'un match (/tournaments/:tournamentId/steps/:stepId/matches/:matchId) : participants,
 // statistiques, points, rangs, résultats et dates tels que renvoyés par le serveur ; pour les
 // administrateurs, saisie des résultats, changements de statut, modification et suppression.
 export default function MatchDetailsPage() {
   const { tournamentId = '', stepId = '', matchId = '' } = useParams()
   const { t, lang } = useI18n()
-  const { isAdmin, refreshRole } = useAuth()
+  // Les parties ne s'écrivent que par un administrateur global (api-public/match_games.rs).
+  const { refreshRole, isAdmin: globalAdmin } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(tournamentId) && isUuid(stepId) && isUuid(matchId)
@@ -146,6 +116,11 @@ export default function MatchDetailsPage() {
   const match = current?.match ?? loaded?.match ?? null
   const step = current?.step ?? loaded?.step ?? null
   const tournament = loaded?.tournament ?? null
+  // Droits fournis par le serveur : organisation (modifier, supprimer) et arbitrage (statut,
+  // résultats).
+  const { access } = useTournamentAccess(tournament)
+  const isAdmin = access.can_manage
+  const canReferee = access.can_referee
 
   const scoring = useAsyncResource(
     async (signal) => {
@@ -170,7 +145,7 @@ export default function MatchDetailsPage() {
 
   const stepPath = `/tournaments/${tournamentId}/steps/${stepId}`
   const matchPath = (target: Pick<Match, 'id'>) => `${matchesPath(tournamentId, stepId)}/${target.id}`
-  const statName = (key: string) => stats.find((stat) => stat.key === key)?.name ?? key
+  const statOf = (key: string) => stats.find((stat) => stat.key === key)
 
   function failed(error: unknown) {
     if (error instanceof ApiError && error.status === 403) void refreshRole()
@@ -201,7 +176,7 @@ export default function MatchDetailsPage() {
     setFeedback(null)
     setResultsError(null)
     try {
-      const saved = await saveResults(tournamentId, stepId, match.id, toResultEntries(rows, match.participants))
+      const saved = await saveResults(tournamentId, stepId, match.id, toResultEntries(rows, match.participants, stats))
       setLocal({ base: loaded, match: saved, step: step ?? undefined })
       setFeedback({ kind: 'success', key: 'matches.resultsSaved', params: { number } })
     } catch (error) {
@@ -227,9 +202,21 @@ export default function MatchDetailsPage() {
   }
 
   const identity = (id: string): Identity => people.identity(id)
+  const mvpIds = (match?.games ?? []).flatMap((game) =>
+    Object.entries(game.attributes).flatMap(([key, value]) =>
+      statOf(key)?.type === 'mvp' && !people.participants.some((candidate) => candidate.id === value) ? [value] : [],
+    ),
+  )
+  const players = useUsernames(mvpIds)
+  // MVP : un participant du match, sinon un joueur d'une équipe.
+  const nameOf = (id: string) =>
+    people.participants.some((candidate) => candidate.id === id) ? people.identity(id).name : (people.names[id] ?? players[id] ?? t('teams.unknownUser'))
   const groupIndex = match?.group_id && loaded ? groupIndexes(loaded.groups).get(match.group_id) : undefined
-  const feeding = match && loaded ? (predecessors(loaded.matches).get(match.id) ?? []) : []
+  const feeding = match && loaded ? (feeders(loaded.matches).get(match.id) ?? []) : []
   const next = match?.next_match_id ? loaded?.matches.find((candidate) => candidate.id === match.next_match_id) : undefined
+  const loserNext = match?.loser_next_match_id
+    ? loaded?.matches.find((candidate) => candidate.id === match.loser_next_match_id)
+    : undefined
   const slots = match && step ? openSlots(match, feeding, matchCapacity(step)) : []
   const transitions = match && step ? transitionsOf(step, match) : []
   const problem = match && step ? playableProblem(step, match.participants.length) : null
@@ -333,26 +320,26 @@ export default function MatchDetailsPage() {
               </FactTile>
               <FactTile icon={Flag02Icon} label={t('matches.timeline')}>
                 <span className="block font-normal">
-                  {t('matches.startedAt')} :{' '}
+                  {t('matches.startedAt')}{t('common.colon')}{' '}
                   {match.started_at ? <time dateTime={match.started_at}>{formatDateTime(lang, match.started_at)}</time> : '–'}
                 </span>
                 <span className="block font-normal">
-                  {t('matches.endedAt')} :{' '}
+                  {t('matches.endedAt')}{t('common.colon')}{' '}
                   {match.ended_at ? <time dateTime={match.ended_at}>{formatDateTime(lang, match.ended_at)}</time> : '–'}
                 </span>
               </FactTile>
             </dl>
 
-            {next || feeding.length > 0 ? (
+            {next || loserNext || feeding.length > 0 ? (
               <div className="grid gap-1 rounded-xl bg-card p-4 text-sm shadow-sm ring-1 ring-foreground/10">
                 {feeding.length > 0 ? (
                   <p>
                     {t('matches.fedBy')}{' '}
-                    {feeding.map((previous, index) => (
-                      <span key={previous.id}>
+                    {feeding.map(({ match: previous, kind }, index) => (
+                      <span key={`${previous.id}-${kind}`}>
                         {index > 0 ? ', ' : null}
                         <Link to={matchPath(previous)} className="font-medium text-primary underline underline-offset-4 dark:text-violet-300">
-                          {t('matches.number', { number: numbers.get(previous.id) ?? 0 })}
+                          {t(kind === 'winner' ? 'matches.winnerOf' : 'matches.loserOf', { number: numbers.get(previous.id) ?? 0 })}
                         </Link>
                       </span>
                     ))}
@@ -366,6 +353,15 @@ export default function MatchDetailsPage() {
                     </Link>
                   </p>
                 ) : null}
+                {loserNext ? (
+                  <p>
+                    {t('matches.loserGoesToLabel')}{' '}
+                    <Link to={matchPath(loserNext)} className="font-medium text-primary underline underline-offset-4 dark:text-violet-300">
+                      {t('matches.number', { number: numbers.get(loserNext.id) ?? 0 })}
+                    </Link>
+                  </p>
+                ) : null}
+                {isFinalReset(match) ? <p className="text-muted-foreground">{t('matches.resetHint')}</p> : null}
               </div>
             ) : null}
 
@@ -455,7 +451,7 @@ export default function MatchDetailsPage() {
                             {participant.result ? <ResultBadge result={participant.result} /> : <span className="text-muted-foreground">–</span>}
                           </td>
                           <td className="px-3 py-2">
-                            <StatsCell participant={participant} statName={statName} />
+                            <StatsCell stats={participant.stats} statOf={statOf} />
                           </td>
                         </tr>
                       )
@@ -483,7 +479,7 @@ export default function MatchDetailsPage() {
             id="match-lifecycle-title"
             icon={Flag02Icon}
             title={t('matches.lifecycle.title')}
-            subtitle={isAdmin ? t('matches.lifecycle.hint') : undefined}
+            subtitle={canReferee ? t('matches.lifecycle.hint') : undefined}
           >
             {match.status === 'finished' ? (
               <p className="flex items-start gap-2 rounded-xl bg-sky-50 px-4 py-3 text-sm font-medium text-sky-900 dark:bg-sky-500/15 dark:text-sky-100">
@@ -498,7 +494,7 @@ export default function MatchDetailsPage() {
             ) : (
               <p className="text-sm text-muted-foreground">{t('matches.lifecycle.flow')}</p>
             )}
-            {isAdmin && transitions.length > 0 ? (
+            {canReferee && transitions.length > 0 ? (
               <div className="grid gap-3 border-t pt-4">
                 {problem && transitions.some((target) => target !== 'cancelled') ? (
                   <p className="flex items-start gap-2 text-sm text-muted-foreground">
@@ -538,7 +534,21 @@ export default function MatchDetailsPage() {
             ) : null}
           </SectionCard>
 
-          {isAdmin && canEnterResults(step, match) ? (
+          {isSeries(match) || (globalAdmin && startProblem(step, match) === null) ? (
+            <MatchSeriesSection
+              match={match}
+              step={step}
+              stats={stats}
+              identity={identity}
+              nameOf={nameOf}
+              canWrite={globalAdmin}
+              gamePath={(gameNumber) => `${matchPath(match)}/games/${gameNumber}`}
+              onStarted={(game) => navigate(`${matchPath(match)}/games/${game.number}`)}
+              onConflict={failed}
+            />
+          ) : null}
+
+          {canReferee && canEnterResults(step, match) ? (
             <SectionCard id="match-results-title" icon={RankingIcon} title={t('matches.resultsTitle')}>
               {scoring.state.status === 'loading' ? <StateMessage kind="loading">{t('matches.loadingStats')}</StateMessage> : null}
               {scoring.state.status === 'error' ? (
@@ -557,7 +567,7 @@ export default function MatchDetailsPage() {
                 <MatchResultsForm
                   key={match.updated_at}
                   match={match}
-                  stats={stats}
+                  stats={participantStatsOf(stats)}
                   scored={scored}
                   identity={identity}
                   busy={busy === 'results'}

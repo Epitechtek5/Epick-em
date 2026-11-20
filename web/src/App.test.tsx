@@ -1,6 +1,7 @@
 import { screen } from '@testing-library/react'
 
 import { tokenStore } from '@/lib/auth/token-store'
+import { makeJwt } from '@/test/jwt'
 import { renderApp } from '@/test/render'
 
 describe('App', () => {
@@ -11,7 +12,7 @@ describe('App', () => {
   })
 
   it('renvoie un utilisateur déjà connecté de /login vers la page principale', async () => {
-    tokenStore.set({ accessToken: 'jwt' })
+    tokenStore.set({ accessToken: makeJwt() })
     renderApp('/login')
 
     expect(await screen.findByRole('heading', { level: 1, name: /Bonjour/ })).toBeInTheDocument()

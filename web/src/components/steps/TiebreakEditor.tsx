@@ -1,15 +1,17 @@
 import { Add01Icon, ArrowDown01Icon, ArrowUp01Icon, Cancel01Icon } from '@hugeicons/core-free-icons'
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { TIEBREAK_KEY_MAX, TIEBREAK_MAX, validTiebreakKey } from '@/features/steps/validation'
+import { NativeSelect } from '@/components/ui/native-select'
+import { tiebreakDescKey, tiebreakLabel } from '@/features/steps/labels'
+import { TIEBREAK_CRITERIA } from '@/features/steps/types'
+import { isSupportedCriterion, TIEBREAK_MAX } from '@/features/steps/validation'
 import { useI18n } from '@/i18n/context'
 
 interface TiebreakEditorProps {
-  // Identifiant du champ de saisie (cible du résumé d'erreurs).
+  // Identifiant de la liste de choix (cible du résumé d'erreurs).
   id: string
   value: string[]
   onChange: (value: string[]) => void
@@ -17,16 +19,18 @@ interface TiebreakEditorProps {
   invalid?: boolean
 }
 
-// Critères de départage ordonnés : ajout, retrait et réordonnancement au clavier (boutons
+// Critères de départage ordonnés, choisis parmi ceux que le serveur évalue (confrontation directe,
+// différentiel de manches, Buchholz) : ajout, retrait et réordonnancement au clavier (boutons
 // Monter / Descendre), chaque changement annoncé dans une région live ; le focus suit le critère
-// déplacé.
+// déplacé. Une clé historique non évaluée reste affichée, signalée, et peut être retirée.
 export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: TiebreakEditorProps) {
   const { t } = useI18n()
-  const [draft, setDraft] = useState('')
-  const [draftError, setDraftError] = useState<string | null>(null)
+  const available = TIEBREAK_CRITERIA.filter((criterion) => !value.includes(criterion))
+  const [draft, setDraft] = useState<string>('')
   const [announcement, setAnnouncement] = useState('')
   // Élément à cibler après le prochain rendu (la liste vient d'être réordonnée).
   const focusTarget = useRef<string | null>(null)
+  const choice = available.includes(draft as (typeof available)[number]) ? draft : (available[0] ?? '')
 
   useEffect(() => {
     if (!focusTarget.current) return
@@ -35,16 +39,13 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
   })
 
   const buttonId = (key: string, action: 'up' | 'down' | 'remove') => `${id}-${key}-${action}`
+  const label = (key: string) => tiebreakLabel(t, key)
 
   function add() {
-    const key = draft.trim()
-    if (!validTiebreakKey(key)) return setDraftError(t('steps.tiebreakInvalid', { max: TIEBREAK_KEY_MAX }))
-    if (value.includes(key)) return setDraftError(t('steps.tiebreakDuplicate'))
-    if (value.length >= TIEBREAK_MAX) return setDraftError(t('steps.tiebreakFull', { max: TIEBREAK_MAX }))
-    onChange([...value, key])
+    if (!choice || value.length >= TIEBREAK_MAX) return
+    onChange([...value, choice])
     setDraft('')
-    setDraftError(null)
-    setAnnouncement(t('steps.tiebreakAdded', { key, n: value.length + 1 }))
+    setAnnouncement(t('steps.tiebreakAdded', { key: label(choice), n: value.length + 1 }))
   }
 
   function move(index: number, delta: -1 | 1) {
@@ -54,7 +55,7 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
     ;[next[index], next[target]] = [next[target], next[index]]
     onChange(next)
     const key = value[index]
-    setAnnouncement(t('steps.tiebreakMoved', { key, n: target + 1 }))
+    setAnnouncement(t('steps.tiebreakMoved', { key: label(key), n: target + 1 }))
     // Le bouton utilisé reste ciblé ; en bout de liste (bouton désactivé), l'autre sens prend le relais.
     const atEdge = delta === -1 ? target === 0 : target === value.length - 1
     focusTarget.current = buttonId(key, atEdge ? (delta === -1 ? 'down' : 'up') : delta === -1 ? 'up' : 'down')
@@ -64,51 +65,38 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
     const key = value[index]
     const next = value.filter((_, i) => i !== index)
     onChange(next)
-    setAnnouncement(t('steps.tiebreakRemoved', { key }))
+    setAnnouncement(t('steps.tiebreakRemoved', { key: label(key) }))
     const neighbour = next[index] ?? next[index - 1]
     focusTarget.current = neighbour ? buttonId(neighbour, 'remove') : id
   }
-
-  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      add()
-    }
-  }
-
-  const errorId = `${id}-draft-error`
 
   return (
     <div className="grid gap-3">
       <div className="grid gap-2">
         <Label htmlFor={id}>{t('steps.tiebreakNew')}</Label>
         <div className="flex flex-wrap gap-2">
-          <Input
+          <NativeSelect
             id={id}
-            value={draft}
-            autoComplete="off"
-            spellCheck={false}
-            maxLength={TIEBREAK_KEY_MAX}
-            placeholder="wins"
-            className="min-w-0 flex-1 font-mono sm:max-w-xs"
-            aria-invalid={draftError || invalid ? true : undefined}
-            aria-describedby={[describedBy, draftError ? errorId : null].filter(Boolean).join(' ') || undefined}
-            onChange={(event) => {
-              setDraft(event.target.value)
-              setDraftError(null)
-            }}
-            onKeyDown={onKeyDown}
-          />
-          <Button type="button" variant="outline" onClick={add} disabled={value.length >= TIEBREAK_MAX}>
+            value={choice}
+            disabled={available.length === 0}
+            className="h-9 min-w-0 flex-1 sm:max-w-xs"
+            aria-invalid={invalid ? true : undefined}
+            aria-describedby={describedBy}
+            onChange={(event) => setDraft(event.target.value)}
+          >
+            {available.length === 0 ? <option value="">{t('steps.tiebreakAllChosen')}</option> : null}
+            {available.map((criterion) => (
+              <option key={criterion} value={criterion}>
+                {label(criterion)}
+              </option>
+            ))}
+          </NativeSelect>
+          <Button type="button" variant="outline" onClick={add} disabled={!choice || value.length >= TIEBREAK_MAX}>
             <Icon icon={Add01Icon} />
             {t('steps.tiebreakAdd')}
           </Button>
         </div>
-        {draftError ? (
-          <p id={errorId} className="text-sm text-destructive">
-            <span className="font-medium">{t('common.error')}</span> {draftError}
-          </p>
-        ) : null}
+        {choice ? <p className="text-sm text-muted-foreground">{t(tiebreakDescKey(choice as (typeof available)[number]))}</p> : null}
       </div>
 
       {value.length === 0 ? (
@@ -126,9 +114,14 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
               >
                 {index + 1}
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })} : </span>
-                <code className="font-mono text-sm font-semibold break-all">{key}</code>
+              <span className="grid min-w-0 flex-1">
+                <span>
+                  <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })}{t('common.colon')} </span>
+                  <span className="font-semibold">{label(key)}</span>
+                </span>
+                {isSupportedCriterion(key) ? null : (
+                  <span className="text-xs text-amber-800 dark:text-amber-200">{t('steps.tiebreakLegacy')}</span>
+                )}
               </span>
               <span className="flex gap-1">
                 <Button
@@ -136,7 +129,7 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={t('steps.tiebreakUp', { key })}
+                  aria-label={t('steps.tiebreakUp', { key: label(key) })}
                   disabled={index === 0}
                   onClick={() => move(index, -1)}
                 >
@@ -147,7 +140,7 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={t('steps.tiebreakDown', { key })}
+                  aria-label={t('steps.tiebreakDown', { key: label(key) })}
                   disabled={index === value.length - 1}
                   onClick={() => move(index, 1)}
                 >
@@ -158,7 +151,7 @@ export function TiebreakEditor({ id, value, onChange, describedBy, invalid }: Ti
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={t('steps.tiebreakRemove', { key })}
+                  aria-label={t('steps.tiebreakRemove', { key: label(key) })}
                   onClick={() => remove(index)}
                 >
                   <Icon icon={Cancel01Icon} />

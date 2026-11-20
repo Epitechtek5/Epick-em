@@ -50,7 +50,7 @@ export async function apiRequest<T = unknown>(
         accessToken: tokenStore.get()?.accessToken,
       })
     } catch (retryError) {
-      if (retryError instanceof ApiError && retryError.status === 401) endSession()
+      if (retryError instanceof ApiError && retryError.status === 401) endSession('expired')
       throw retryError
     }
   }

@@ -1,4 +1,4 @@
-import { byGroupAndRound, byRegion, byRound, openSlots, predecessors, type RoundBlock } from '@/features/matches/organize'
+import { byGroupAndRound, byRegion, byRound, feeders, openSlots, type RoundBlock } from '@/features/matches/organize'
 import { bracketLabelKey } from '@/features/matches/labels'
 import type { Match } from '@/features/matches/types'
 import { isElimination, matchCapacity } from '@/features/matches/validation'
@@ -64,7 +64,7 @@ export function MatchBoard({
   const { t } = useI18n()
 
   if (isElimination(step)) {
-    const incoming = predecessors(all)
+    const incoming = feeders(all)
     const capacity = matchCapacity(step)
     const slotsOf = (match: Match) => openSlots(match, incoming.get(match.id) ?? [], capacity)
     const regions = byRegion(matches)

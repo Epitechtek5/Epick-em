@@ -16,7 +16,9 @@ import { MatchesSection } from '@/components/matches/MatchesSection'
 import { StateMessage } from '@/components/games/StateMessage'
 import { StepStatusBadge } from '@/components/steps/StepBadges'
 import { StepGroups } from '@/components/steps/StepGroups'
+import { StepGeneration } from '@/components/steps/StepGeneration'
 import { StepLifecycle } from '@/components/steps/StepLifecycle'
+import { StepRulesSummary } from '@/components/steps/StepRulesSummary'
 import { TournamentStatusBadge } from '@/components/tournaments/TournamentStatusBadge'
 import { Chip, FactTile, PageHero } from '@/components/tournaments/ui'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -24,13 +26,14 @@ import { Icon } from '@/components/ui/icon'
 import { readNotice } from '@/features/games/notice'
 import { deleteStep, listSteps } from '@/features/steps/api'
 import { stepErrorKey } from '@/features/steps/errors'
-import { formatDescKey, formatLabelKey, matchTypeDescKey, matchTypeLabelKey } from '@/features/steps/labels'
+import { formatDescKey, formatLabelKey, matchTypeDescKey, matchTypeLabelKey, tiebreakLabel } from '@/features/steps/labels'
 import type { Step } from '@/features/steps/types'
-import { capacityOf, qualifiedOf, stepsEditable } from '@/features/steps/validation'
+import { capacityOf, isSupportedCriterion, qualifiedOf, stepsEditable } from '@/features/steps/validation'
 import { isUuid } from '@/features/teams/validation'
 import { getTournament } from '@/features/tournaments/api'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { useTournamentAccess } from '@/hooks/use-tournament-access'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -40,7 +43,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 export default function StepDetailsPage() {
   const { tournamentId = '', stepId = '' } = useParams()
   const { t } = useI18n()
-  const { isAdmin, refreshRole } = useAuth()
+  const { refreshRole } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(tournamentId) && isUuid(stepId)
@@ -60,6 +63,8 @@ export default function StepDetailsPage() {
   const [local, setLocal] = useState<{ base: typeof loaded; steps: Step[] } | null>(null)
   const steps = local && local.base === loaded ? local.steps : (loaded?.steps ?? [])
   const tournament = loaded?.tournament ?? null
+  // Organisateurs du tournoi (droits fournis par le serveur).
+  const isAdmin = useTournamentAccess(tournament).access.can_manage
   const step = steps.find((candidate) => candidate.id === stepId) ?? null
   const [version, setVersion] = useState(0)
   const [deleting, setDeleting] = useState(false)
@@ -161,7 +166,7 @@ export default function StepDetailsPage() {
                   {t('steps.summary', { groups: step.group_count, size: step.group_size, advance: step.advance_per_group })}
                 </span>
                 <span className="block font-normal text-muted-foreground">
-                  {t('steps.matchesPerGroup')} : {step.matches_per_group}
+                  {t('steps.matchesPerGroup')}{t('common.colon')} {step.matches_per_group}
                 </span>
               </FactTile>
               <FactTile icon={RankingIcon} label={t('steps.chain.title')}>
@@ -181,14 +186,16 @@ export default function StepDetailsPage() {
                         <span className="font-mono font-bold" aria-hidden="true">
                           {index + 1}.
                         </span>
-                        <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })} : </span>
-                        <code className="font-mono">{key}</code>
+                        <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })}{t('common.colon')} </span>
+                        {isSupportedCriterion(key) ? tiebreakLabel(t, key) : <code className="font-mono">{key}</code>}
                       </Chip>
                     </li>
                   ))}
                 </ol>
               )}
             </div>
+
+            <StepRulesSummary step={step} />
 
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" onClick={reload}>
@@ -222,6 +229,9 @@ export default function StepDetailsPage() {
           </article>
 
           <StepLifecycle key={step.id} tournament={tournament} step={step} steps={steps} canManage={isAdmin} onChanged={applyChanges} />
+          {isAdmin && step.status === 'ongoing' ? (
+            <StepGeneration tournament={tournament} step={step} version={version} onGenerated={() => setVersion((v) => v + 1)} />
+          ) : null}
           <StepGroups tournament={tournament} step={step} version={version} />
           <MatchesSection tournament={tournament} step={step} version={version} canManage={isAdmin} />
         </>
