@@ -15,13 +15,6 @@ server {
         return 200 "ok\n";
     }
 
-    # Serve deployment-provided app association files as JSON, never the SPA.
-    location ^~ /.well-known/ {
-        default_type application/json;
-        add_header Cache-Control "no-cache";
-        try_files $uri =404;
-    }
-
     # /api/* -> api-public, sans le préfixe /api (même origine : pas de CORS).
     # Le nom est résolu à la requête : le front démarre même si l'API est absente.
     location /api/ {
@@ -32,26 +25,6 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # Invitation tokens must not appear in access logs or referrers.
-    location ^~ /api/invitation-links/ {
-        access_log off;
-        add_header Cache-Control no-store always;
-        resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
-        set $api_upstream "${API_UPSTREAM}";
-        rewrite ^/api/(.*)$ /$1 break;
-        proxy_pass http://$api_upstream;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location ~ ^/(invite|invitations)/ {
-        access_log off;
-        add_header Referrer-Policy no-referrer always;
-        add_header Cache-Control no-store always;
-        try_files /index.html =404;
     }
 
     # Liens reçus par e-mail (<PUBLIC_URL>/reset-password?token=…, /verify-email?token=…) et

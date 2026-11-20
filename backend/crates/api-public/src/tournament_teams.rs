@@ -19,7 +19,6 @@ use crate::teams::{
     require_owner, team_update_parts, validate,
 };
 use crate::tournament_access::require_visible;
-use crate::users::require_admin;
 use actix_web::{HttpResponse, delete, get, patch, post, web};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -324,7 +323,7 @@ async fn list_members(
     Ok(HttpResponse::Ok().json(members))
 }
 
-/// Ajoute directement un compte à l'équipe de tournoi (administrateur uniquement).
+/// Ajoute un compte à l'équipe de tournoi (propriétaire). Le rôle `owner` n'est pas attribuable.
 #[utoipa::path(
     post,
     path = "/tournament-teams/{id}/members",
@@ -336,7 +335,7 @@ async fn list_members(
         (status = 201, description = "Membre ajouté", body = TournamentTeamMember),
         (status = 400, description = "Requête invalide ou compte introuvable", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
-        (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
+        (status = 403, description = "Réservé au propriétaire", body = ErrorResponse),
         (status = 404, description = "Équipe introuvable", body = ErrorResponse),
         (status = 409, description = "Joueur déjà dans une équipe de ce tournoi", body = ErrorResponse),
     ),
@@ -349,7 +348,7 @@ async fn add_member(
     body: web::Json<AddMemberRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let team = find(&state, id.into_inner()).await?;
-    require_admin(&state, &claims).await?;
+    require_owner(&claims, team.owner_id)?;
     let AddMemberRequest { user_id, role } = body.into_inner();
     require_assignable(role)?;
     // L'effectif est vérifié par le store, sous le verrou de l'équipe, avec l'ajout.

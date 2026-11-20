@@ -5,15 +5,12 @@ import Settings01Icon from '@hugeicons/core-free-icons/Settings01Icon';
 import TeamWorkIcon from '@hugeicons/core-free-icons/TeamWorkIcon';
 import GameController03Icon from '@hugeicons/core-free-icons/GameController03Icon';
 import TrophyIcon from '@hugeicons/core-free-icons/TrophyIcon';
-import Mail01Icon from '@hugeicons/core-free-icons/Mail01Icon';
-import { useInvitationActivity } from '@/features/invitations/activity';
 import { useReducedMotionPreference } from '@/lib/motion';
 import { useTheme } from '@react-navigation/native';
 import { useTranslation } from '@/i18n';
 
 export default function TabsLayout() {
   const { t } = useTranslation();
-  const { count } = useInvitationActivity();
   const reducedMotion = useReducedMotionPreference();
   const { colors, dark } = useTheme();
   const palette = dark ? themeColors.dark : themeColors.light;
@@ -81,26 +78,6 @@ export default function TabsLayout() {
               size={size}
               focused={focused}
               testID="teams-tab-icon"
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="invitations"
-        options={{
-          title: t('invitations.title'),
-          tabBarBadge: count > 0 ? (count > 99 ? '99+' : count) : undefined,
-          tabBarBadgeStyle: {
-            backgroundColor: palette.primary,
-            color: palette['primary-foreground'],
-          },
-          tabBarAccessibilityLabel: t('invitations.badgeLabel', { count }),
-          tabBarIcon: ({ focused, size }) => (
-            <TabIcon
-              icon={Mail01Icon}
-              size={size}
-              focused={focused}
-              testID="invitations-tab-icon"
             />
           ),
         }}

@@ -390,7 +390,7 @@ async fn team_composition_limits_apply_to_members_and_substitutes() {
     let (status, _) = post(
         &app,
         &members,
-        &s.admin,
+        &s.alice,
         json!({ "user_id": s.bob.id, "role": "member" }),
     )
     .await;
@@ -399,7 +399,7 @@ async fn team_composition_limits_apply_to_members_and_substitutes() {
     let (status, _) = post(
         &app,
         &members,
-        &s.admin,
+        &s.alice,
         json!({ "user_id": s.carol.id, "role": "member" }),
     )
     .await;
@@ -408,7 +408,7 @@ async fn team_composition_limits_apply_to_members_and_substitutes() {
     let (status, _) = post(
         &app,
         &members,
-        &s.admin,
+        &s.alice,
         json!({ "user_id": s.carol.id, "role": "substitute" }),
     )
     .await;
@@ -416,7 +416,7 @@ async fn team_composition_limits_apply_to_members_and_substitutes() {
     let (status, _) = post(
         &app,
         &members,
-        &s.admin,
+        &s.alice,
         json!({ "user_id": s.dave.id, "role": "substitute" }),
     )
     .await;

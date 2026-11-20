@@ -870,7 +870,6 @@ async fn the_registration_window_is_enforced() {
 async fn team_of(
     app: &app_type!(),
     tid: &str,
-    admin: &str,
     owner: &Account,
     name: &str,
     members: &[&Account],
@@ -888,7 +887,7 @@ async fn team_of(
         let (status, added) = post(
             app,
             &format!("/tournament-teams/{team}/members"),
-            admin,
+            &owner.token,
             json!({ "user_id": member.id, "role": "member" }),
         )
         .await;
@@ -907,7 +906,7 @@ async fn teams_register_with_exactly_team_size_starters() {
     )
     .await;
     let participants = format!("/tournaments/{tid}/participants");
-    let team = team_of(&app, &tid, &s.admin, &s.alice, "Alpha", &[]).await;
+    let team = team_of(&app, &tid, &s.alice, "Alpha", &[]).await;
 
     // Un titulaire pour deux attendus ; un remplaçant ne compte pas.
     let (status, error) = post(
@@ -921,7 +920,7 @@ async fn teams_register_with_exactly_team_size_starters() {
     let (status, _) = post(
         &app,
         &format!("/tournament-teams/{team}/members"),
-        &s.admin,
+        &s.alice.token,
         json!({ "user_id": s.carol.id, "role": "substitute" }),
     )
     .await;
@@ -937,7 +936,7 @@ async fn teams_register_with_exactly_team_size_starters() {
     let (status, _) = post(
         &app,
         &format!("/tournament-teams/{team}/members"),
-        &s.admin,
+        &s.alice.token,
         json!({ "user_id": s.bob.id, "role": "member" }),
     )
     .await;
@@ -988,7 +987,7 @@ async fn teams_register_with_exactly_team_size_starters() {
         json!({ "participant_type": "team", "team_size": 1 }),
     )
     .await;
-    let foreign = team_of(&app, &other, &s.admin, &s.carol, "Ailleurs", &[]).await;
+    let foreign = team_of(&app, &other, &s.carol, "Ailleurs", &[]).await;
     let (status, _) = post(
         &app,
         &participants,
@@ -1028,8 +1027,8 @@ async fn solo_players_can_score_for_a_tournament_team() {
     )
     .await;
     let participants = format!("/tournaments/{tid}/participants");
-    let team = team_of(&app, &tid, &s.admin, &s.alice, "Alpha", &[&s.bob]).await;
-    let other = team_of(&app, &tid, &s.admin, &s.carol, "Beta", &[]).await;
+    let team = team_of(&app, &tid, &s.alice, "Alpha", &[&s.bob]).await;
+    let other = team_of(&app, &tid, &s.carol, "Beta", &[]).await;
 
     // Carol n'est pas dans l'équipe Alpha.
     let (status, _) = post(
@@ -1130,7 +1129,7 @@ async fn team_scoring_modes_aggregate_the_players() {
     for (mode, expected) in [("sum", 14.0), ("best", 10.0), ("none", 0.0)] {
         let tid = open_tournament(&app, &s, json!({ "team_scoring_mode": mode })).await;
         let participants = format!("/tournaments/{tid}/participants");
-        let team = team_of(&app, &tid, &s.admin, &s.alice, "Alpha", &[&s.bob]).await;
+        let team = team_of(&app, &tid, &s.alice, "Alpha", &[&s.bob]).await;
         let mut ids = Vec::new();
         for account in [&s.alice, &s.bob] {
             let (_, participant) = post(
@@ -1171,7 +1170,7 @@ async fn team_tournaments_rank_their_teams() {
     let participants = format!("/tournaments/{tid}/participants");
     let mut ids = Vec::new();
     for (account, name) in [(&s.alice, "Alpha"), (&s.bob, "Beta"), (&s.carol, "Gamma")] {
-        let team = team_of(&app, &tid, &s.admin, account, name, &[]).await;
+        let team = team_of(&app, &tid, account, name, &[]).await;
         let (status, participant) = post(
             &app,
             &participants,
@@ -1223,7 +1222,7 @@ async fn team_tournaments_rank_their_teams() {
     let (status, error) = post(
         &app,
         &format!("/tournament-teams/{alpha}/members"),
-        &s.admin,
+        &s.alice.token,
         json!({ "user_id": dave.id, "role": "member" }),
     )
     .await;
@@ -1237,7 +1236,7 @@ async fn team_tournaments_rank_their_teams() {
     let (status, _) = post(
         &app,
         &format!("/tournament-teams/{alpha}/members"),
-        &s.admin,
+        &s.alice.token,
         json!({ "user_id": dave.id, "role": "substitute" }),
     )
     .await;
@@ -1333,7 +1332,7 @@ async fn deleting_a_user_keeps_the_store_consistent() {
         json!({}),
     )
     .await;
-    team_of(&app, &tid, &s.admin, &s.bob, "Alpha", &[]).await;
+    team_of(&app, &tid, &s.bob, "Alpha", &[]).await;
     let (status, _) = send(
         &app,
         TestRequest::delete(),
@@ -1413,7 +1412,7 @@ async fn populate(app: &app_type!(), s: &Setup) {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{rule}");
     }
-    let team = team_of(app, &solo, &s.admin, &s.alice, "Alpha", &[&s.bob]).await;
+    let team = team_of(app, &solo, &s.alice, "Alpha", &[&s.bob]).await;
     let participants = format!("/tournaments/{solo}/participants");
     for (account, with_team) in [(&s.alice, true), (&s.bob, true), (&s.carol, false)] {
         let body = if with_team {
@@ -1447,7 +1446,7 @@ async fn populate(app: &app_type!(), s: &Setup) {
     )
     .await;
     for (account, name) in [(&s.alice, "Rouge"), (&s.bob, "Bleue")] {
-        let team = team_of(app, &teams, &s.admin, account, name, &[]).await;
+        let team = team_of(app, &teams, account, name, &[]).await;
         let (status, _) = post(
             app,
             &format!("/tournaments/{teams}/participants"),

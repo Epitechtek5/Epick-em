@@ -225,20 +225,6 @@ function Details({ tournament }: { tournament: boolean }) {
       {canManage ? (
         <View className="gap-3 border-t border-border pt-5">
           <Button
-            onPress={() =>
-              router.push({
-                pathname: '/(authenticated)/invitations/create',
-                params: {
-                  type: tournament ? 'tournament_team' : 'team',
-                  resourceId: team.id,
-                },
-              })
-            }
-          >
-            <Icon icon={UserGroupIcon} tone="primary-foreground" size={18} />
-            <Text>{t('invitations.inviteMembers')}</Text>
-          </Button>
-          <Button
             variant="secondary"
             onPress={() =>
               router.push(

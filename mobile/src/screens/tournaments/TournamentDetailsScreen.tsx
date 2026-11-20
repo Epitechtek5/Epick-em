@@ -271,21 +271,6 @@ export default function TournamentDetailsScreen() {
       contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
     >
       {message ? <FormMessage>{t(message)}</FormMessage> : null}
-      {user?.role === 'admin' &&
-      tournament.participant_type === 'solo' &&
-      ['draft', 'registration'].includes(tournament.status) ? (
-        <Button
-          onPress={() =>
-            router.push({
-              pathname: '/(authenticated)/invitations/create',
-              params: { type: 'tournament', resourceId: tournament.id },
-            })
-          }
-        >
-          <Icon icon={UserGroupIcon} tone="primary-foreground" size={18} />
-          <Text>{t('invitations.inviteParticipants')}</Text>
-        </Button>
-      ) : null}
       <View className="gap-2">
         <View className="flex-row items-center gap-2">
           <StatusBadge

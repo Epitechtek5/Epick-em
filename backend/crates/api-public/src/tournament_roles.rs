@@ -9,7 +9,7 @@
 
 use crate::auth::{AppState, Claims};
 use crate::error::{ApiError, ErrorResponse};
-use crate::store::{RoleAssignment, RoleAuditEntry, TournamentInvitation, TournamentRole};
+use crate::store::{Invitation, RoleAssignment, RoleAuditEntry, TournamentRole};
 use crate::tournament_access::{Capacity, require_manage, require_owner, require_visible};
 use crate::tournaments::find_tournament;
 use actix_web::{HttpResponse, delete, get, post, put, web};
@@ -324,7 +324,7 @@ async fn role_audit(
     security(("bearer" = [])),
     params(("id" = Uuid, Path, description = "Identifiant du tournoi")),
     responses(
-        (status = 200, description = "Invitations", body = Vec<TournamentInvitation>),
+        (status = 200, description = "Invitations", body = Vec<Invitation>),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé aux organisateurs du tournoi", body = ErrorResponse),
         (status = 404, description = "Tournoi introuvable", body = ErrorResponse),
@@ -340,7 +340,7 @@ async fn list_invitations(
     require_manage(&state, &claims, &tournament).await?;
     let invitations = state
         .store
-        .list_tournament_invitations(tournament.id)
+        .list_invitations(tournament.id)
         .await
         .map_err(ApiError::internal)?;
     Ok(HttpResponse::Ok().json(invitations))
@@ -358,7 +358,7 @@ async fn list_invitations(
         ("user_id" = Uuid, Path, description = "Identifiant du compte"),
     ),
     responses(
-        (status = 200, description = "Invitation", body = TournamentInvitation),
+        (status = 200, description = "Invitation", body = Invitation),
         (status = 400, description = "Compte introuvable", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé aux organisateurs du tournoi", body = ErrorResponse),

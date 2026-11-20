@@ -480,7 +480,7 @@ pub struct RoleAssignment {
 
 /// Invitation à un tournoi `invitation_only`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct TournamentInvitation {
+pub struct Invitation {
     pub user_id: Uuid,
     pub invited_by: Option<Uuid>,
     pub invited_at: String,
