@@ -4008,6 +4008,7 @@ async fn settings_default_merge_and_cascade() {
     assert!(!first.allows(Category::Teams, Channel::Email));
     assert!(first.allows(Category::Teams, Channel::Push));
 
+    // La deuxième modification fusionne : l'e-mail des équipes reste coupé.
     let second = store
         .update_user_settings(
             user.id,
@@ -4030,6 +4031,7 @@ async fn settings_default_merge_and_cascade() {
     assert!(second.allows(Category::Matches, Channel::Email));
     assert_eq!(store.user_settings(user.id).await.unwrap(), Some(second));
 
+    // Une modification vide ne change rien.
     let before = store.user_settings(user.id).await.unwrap();
     store
         .update_user_settings(user.id, UserSettingsUpdate::default())
@@ -4037,6 +4039,7 @@ async fn settings_default_merge_and_cascade() {
         .unwrap();
     assert_eq!(store.user_settings(user.id).await.unwrap(), before);
 
+    // Réglages, appareils et journal partent avec le compte.
     store
         .register_push_token(
             user.id,
@@ -4090,7 +4093,9 @@ async fn push_tokens_are_unique_owned_and_capped() {
             .is_none()
     );
 
+    // Révoquer ne marche que pour le propriétaire.
     assert!(!store.revoke_push_token(bob.id, &token).await.unwrap());
+    // Le jeton change de compte quand l'appareil change de compte.
     let moved = store
         .register_push_token(bob.id, &token, Platform::Ios)
         .await
@@ -4142,6 +4147,7 @@ async fn notification_claims_are_exclusive_and_releasable() {
             .await
             .unwrap()
     );
+    // Un autre canal ou un autre événement est indépendant.
     assert!(
         store
             .claim_notification(&key, user.id, Channel::Push)
@@ -4164,17 +4170,14 @@ async fn notification_claims_are_exclusive_and_releasable() {
             .await
             .unwrap()
     );
-
+    // Deux réservations simultanées : une seule gagne.
     let key = unique("race");
-    let (first, second) = tokio::join!(
+    let (a, b) = tokio::join!(
         store.claim_notification(&key, user.id, Channel::Push),
         store.claim_notification(&key, user.id, Channel::Push)
     );
     assert_eq!(
-        [first.unwrap(), second.unwrap()]
-            .iter()
-            .filter(|won| **won)
-            .count(),
+        [a.unwrap(), b.unwrap()].iter().filter(|won| **won).count(),
         1
     );
 }
@@ -4198,6 +4201,7 @@ async fn profile_pictures_are_set_cleared_and_kept_by_other_updates() {
         .unwrap()
         .unwrap();
     assert_eq!(profile.picture_url.as_deref(), Some(url.as_str()));
+    // Le profil en cache et le compte voient la photo ; une autre modification la garde.
     assert_eq!(
         store
             .find_profile(user.id)

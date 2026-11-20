@@ -1,4 +1,15 @@
-import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Download04Icon, Edit02Icon, RefreshIcon } from '@hugeicons/core-free-icons'
+import {
+  Add01Icon,
+  Analytics01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Download04Icon,
+  Edit02Icon,
+  PercentCircleIcon,
+  ListViewIcon,
+  Award01Icon,
+  RefreshIcon,
+} from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router'
 
@@ -8,7 +19,7 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { deleteStat, listStats } from '@/features/stats/api'
 import { statErrorKey } from '@/features/stats/errors'
-import { statTypeLabelKey } from '@/features/stats/labels'
+import { statScopeLabelKey, statTypeLabelKey } from '@/features/stats/labels'
 import type { Stat } from '@/features/stats/types'
 import { readNotice, type Notice } from '@/features/games/notice'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -16,6 +27,8 @@ import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
+import { EmptyState, HERO_ACTION, HERO_PRIMARY, PageHero } from '@/components/common/page-blocks'
+import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 12
 
@@ -66,35 +79,31 @@ export default function StatsPage() {
   const hasNext = state.status === 'success' && state.data.length > PAGE_SIZE
 
   return (
-    <div className="grid w-full max-w-5xl gap-6 self-start">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="grid gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">{t('stats.title')}</h1>
-          <p className="text-muted-foreground">{t('stats.description')}</p>
-        </div>
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      <PageHero icon={Analytics01Icon} title={t('stats.title')} description={t('stats.description')}>
         <div
           className="flex flex-wrap gap-2 sm:flex-nowrap"
           role="group"
           aria-label={isAdmin ? t('stats.adminActions') : t('stats.title')}
         >
-          <Button variant="outline" onClick={reload} disabled={state.status === 'loading'}>
+          <Button variant="outline" className={HERO_ACTION} onClick={reload} disabled={state.status === 'loading'}>
             <Icon icon={RefreshIcon} />
             {t('stats.refresh')}
           </Button>
           {isAdmin ? (
             <>
-              <Link to="/stats/transfer" className={buttonVariants({ variant: 'outline' })}>
+              <Link to="/stats/transfer" className={cn(buttonVariants({ variant: 'outline' }), HERO_ACTION)}>
                 <Icon icon={Download04Icon} />
                 {t('stats.transfer')}
               </Link>
-              <Link to="/stats/new" className={buttonVariants()}>
+              <Link to="/stats/new" className={cn(buttonVariants(), HERO_PRIMARY)}>
                 <Icon icon={Add01Icon} />
                 {t('stats.create')}
               </Link>
             </>
           ) : null}
         </div>
-      </div>
+      </PageHero>
 
       {notice ? <StateMessage kind="success">{t(notice.key, notice.params)}</StateMessage> : null}
       {deleteError ? <StateMessage kind="error">{t(deleteError)}</StateMessage> : null}
@@ -119,30 +128,39 @@ export default function StatsPage() {
       ) : null}
 
       {state.status === 'success' && stats.length === 0 ? (
-        <StateMessage kind="empty">
+        <EmptyState icon={Analytics01Icon}>
           {isAdmin && page === 1 ? t('stats.emptyAdmin') : t('stats.empty')}
-        </StateMessage>
+        </EmptyState>
       ) : null}
 
       {stats.length > 0 ? (
-        <ul aria-label={t('stats.list')} className="grid gap-3">
+        <ul aria-label={t('stats.list')} className="grid gap-3 sm:grid-cols-2">
           {stats.map((stat) => (
             <li
               key={stat.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-card p-4 text-card-foreground ring-1 ring-foreground/10"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-card p-4 text-card-foreground shadow-sm ring-1 ring-foreground/10 transition-shadow hover:shadow-md"
             >
-              <div className="grid gap-1">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:bg-primary/25 dark:text-violet-200">
+                  <Icon icon={stat.type === 'percent' ? PercentCircleIcon : stat.type === 'select' ? ListViewIcon : stat.type === 'mvp' ? Award01Icon : Analytics01Icon} size={20} />
+                </span>
+                <div className="grid min-w-0 gap-1">
                 <h2 className="text-base font-semibold">{stat.name}</h2>
                 <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
                   <span>
-                    <span className="sr-only">{t('stats.key')} : </span>
+                    <span className="sr-only">{t('stats.key')}{t('common.colon')} </span>
                     <code className="font-mono">{stat.key}</code>
                   </span>
                   <span>
-                    <span className="sr-only">{t('stats.type')} : </span>
+                    <span className="sr-only">{t('stats.type')}{t('common.colon')} </span>
                     {t(statTypeLabelKey(stat.type))} ({stat.type})
                   </span>
+                  <span>
+                    <span className="sr-only">{t('stats.scope')}{t('common.colon')} </span>
+                    {t(statScopeLabelKey(stat.scope))}
+                  </span>
                 </p>
+                </div>
               </div>
               {isAdmin ? (
                 <div className="flex flex-wrap gap-2">

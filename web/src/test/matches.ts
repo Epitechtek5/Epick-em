@@ -50,6 +50,7 @@ export function makeMatch(overrides: Partial<Match> = {}): Match {
     round: 1,
     bracket: null,
     next_match_id: null,
+    best_of: 1,
     scheduled_at: null,
     started_at: null,
     ended_at: null,
@@ -57,6 +58,7 @@ export function makeMatch(overrides: Partial<Match> = {}): Match {
     created_at: '2026-11-14T18:00:00Z',
     updated_at: '2026-11-14T18:00:00Z',
     participants: [],
+    games: [],
     ...overrides,
   }
 }

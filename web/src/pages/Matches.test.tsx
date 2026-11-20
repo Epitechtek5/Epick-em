@@ -195,6 +195,7 @@ describe('Matchs d’une étape', () => {
       round: 3,
       bracket: null,
       next_match_id: null,
+      best_of: 1,
       scheduled_at: null,
       participant_ids: [P_ME.id, P_BOB.id],
     })

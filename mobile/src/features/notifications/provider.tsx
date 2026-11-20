@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { AndroidImportance } from 'expo-notifications';
 import { router, type Href } from 'expo-router';
@@ -13,7 +14,7 @@ import { invitationTarget } from '@/features/invitations/navigation';
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldPlaySound: true,
-    shouldSetBadge: true,
+    shouldSetBadge: false,
     shouldShowBanner: true,
     shouldShowList: true,
   }),
@@ -50,7 +51,8 @@ function projectId(): string | undefined {
 }
 
 async function acquirePushToken(): Promise<string | null> {
-  if (Platform.OS !== 'ios' && Platform.OS !== 'android') return null;
+  if (!Device.isDevice || (Platform.OS !== 'ios' && Platform.OS !== 'android'))
+    return null;
 
   const id = projectId();
   if (!id) return null;
