@@ -1538,6 +1538,14 @@ pub(crate) async fn active_participants(
         .collect())
 }
 
+/// `true` pour un administrateur ; l'erreur n'est une erreur que si la lecture du compte échoue.
+pub(crate) async fn is_admin(state: &AppState, claims: &Claims) -> Result<bool, ApiError> {
+    match require_admin(state, claims).await {
+        Ok(()) => Ok(true),
+        Err(ApiError::Forbidden) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
 /// L'inscrit lui-même, ou le propriétaire de l'équipe inscrite.
 async fn require_actor(
     state: &AppState,

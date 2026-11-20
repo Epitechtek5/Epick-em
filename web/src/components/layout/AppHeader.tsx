@@ -4,6 +4,7 @@ import {
   Home01Icon,
   Analytics01Icon,
   Logout01Icon,
+  Mail01Icon,
   UserGroupIcon,
 } from '@hugeicons/core-free-icons'
 import type { IconSvgElement } from '@hugeicons/react'
@@ -25,6 +26,7 @@ const NAV_ITEMS: Array<{ to: string; label: MessageKey; icon: IconSvgElement }> 
   { to: '/stats', label: 'nav.stats', icon: Analytics01Icon },
   { to: '/teams', label: 'nav.teams', icon: UserGroupIcon },
   { to: '/tournaments', label: 'nav.tournaments', icon: ChampionIcon },
+  { to: '/invitations', label: 'nav.invitations', icon: Mail01Icon },
 ]
 
 const navLink = (isActive: boolean) =>

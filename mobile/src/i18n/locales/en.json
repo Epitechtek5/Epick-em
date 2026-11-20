@@ -894,5 +894,102 @@
     "denied": "Unable to confirm these credentials for an account without email.",
     "verified": "Verified email",
     "unverified": "Unverified email"
+  },
+  "invitations": {
+    "to": "To {{name}}",
+    "title": "Invitations",
+    "details": "Invitation",
+    "create": "Create an invitation",
+    "incoming": "Received",
+    "outgoing": "Sent",
+    "status": "Status",
+    "type": "Type",
+    "view": "View invitation",
+    "empty": "No invitations",
+    "emptyDescription": "Invitations matching your filters will appear here.",
+    "resourceUnavailable": "Invitation",
+    "from": "Invited by {{name}}",
+    "role": "Role",
+    "expires": "Expires {{date}}",
+    "usage": "{{used}} of {{max}} uses",
+    "previous": "Previous",
+    "next": "Next",
+    "accept": "Accept invitation",
+    "decline": "Decline",
+    "revoke": "Revoke invitation",
+    "resend": "Resend invitation",
+    "acceptedTeam": "Invitation accepted. You have joined the team.",
+    "acceptedTournament": "Invitation accepted. Open the tournament to check whether your registration is confirmed, awaiting approval or waitlisted.",
+    "tournamentPolicy": "The tournament’s registration and waiting-list policies still apply.",
+    "loginTitle": "An invitation is waiting for you",
+    "loginDescription": "Sign in to view it. You will return here after signing in. Nothing is accepted without your confirmation.",
+    "secretUnavailable": "For your security, shared links are only displayed when created. You can revoke this invitation and create a new link.",
+    "inviteMembers": "Invite members",
+    "inviteParticipants": "Invite participants",
+    "recipient": "Recipient",
+    "search": "Filter users by username",
+    "searchPage": "Search filters the current page. Use Next to browse more users.",
+    "maxUses": "Maximum uses (1–1000)",
+    "validity": "Validity",
+    "send": "Send invitation",
+    "generate": "Generate link",
+    "share": "Share link",
+    "shareNow": "Share this link now. It cannot be retrieved after you leave this screen.",
+    "sent": "Invitation created successfully.",
+    "done": "Done",
+    "modes": {
+      "user": "Choose a player",
+      "link": "Share a link"
+    },
+    "ttl": {
+      "default": "Server default",
+      "24": "24 hours",
+      "168": "7 days"
+    },
+    "types": {
+      "all": "All types",
+      "team": "Team",
+      "tournament_team": "Tournament team",
+      "tournament": "Tournament"
+    },
+    "statuses": {
+      "all": "All statuses",
+      "pending": "Pending",
+      "accepted": "Accepted",
+      "declined": "Declined",
+      "revoked": "Revoked",
+      "expired": "Expired"
+    },
+    "confirm": {
+      "decline": "Decline this invitation?",
+      "revoke": "This invitation will stop working immediately. This cannot be undone."
+    },
+    "messages": {
+      "decline": "Invitation declined.",
+      "revoke": "Invitation revoked.",
+      "resend": "Delivery requested. The expiration date is unchanged."
+    },
+    "errors": {
+      "network": "Could not load invitations. Check your connection and try again.",
+      "forbidden": "You do not have permission to perform this action.",
+      "unavailable": "This invitation is unavailable. It may be invalid, expired, revoked, exhausted or intended for another account.",
+      "expired": "This invitation has expired. Ask the sender for a new one.",
+      "conflict": "This invitation can no longer be processed, or the resource cannot accept you. Refresh its details before trying again.",
+      "rateLimit": "An invitation was recently resent. Wait a minute before trying again.",
+      "validation": "Check the recipient, role, validity and usage limit. The server may restrict the requested duration.",
+      "recipient": "Select a recipient.",
+      "uses": "Enter a whole number between 1 and 1000.",
+      "share": "Could not open sharing. Try again."
+    },
+    "openTeam": "View team",
+    "openTournament": "View tournament",
+    "receivedNotice": "You have a new invitation",
+    "acceptedNotice": "Your invitation was accepted",
+    "declinedNotice": "Your invitation was declined",
+    "activity": "New activity",
+    "dismiss": "Dismiss notification",
+    "badgeLabel": "Invitations, {{count}} pending invitations or new responses",
+    "newResponses": "View new responses ({{count}})",
+    "markRead": "Mark responses as read"
   }
 }

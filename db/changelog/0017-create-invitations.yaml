@@ -1,0 +1,51 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0017-create-invitations
+      author: epickem
+      changes:
+        - sql:
+            sql: |
+              CREATE TABLE invitations (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                type varchar(24) NOT NULL,
+                resource_id uuid NOT NULL,
+                inviter_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                recipient_id uuid REFERENCES users(id) ON DELETE CASCADE,
+                status varchar(16) NOT NULL DEFAULT 'pending',
+                token_hash char(64),
+                max_uses integer,
+                uses integer NOT NULL DEFAULT 0,
+                metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                expires_at timestamptz NOT NULL,
+                responded_at timestamptz,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT invitations_type_check CHECK (type IN ('team', 'tournament_team', 'tournament')),
+                CONSTRAINT invitations_status_check CHECK (status IN ('pending', 'accepted', 'declined', 'revoked', 'expired')),
+                CONSTRAINT invitations_target_check CHECK (recipient_id IS NOT NULL OR token_hash IS NOT NULL),
+                CONSTRAINT invitations_self_check CHECK (recipient_id IS NULL OR recipient_id <> inviter_id),
+                CONSTRAINT invitations_uses_check CHECK (uses >= 0 AND (max_uses IS NULL OR max_uses >= 1)),
+                CONSTRAINT invitations_token_hash_key UNIQUE (token_hash)
+              );
+              COMMENT ON TABLE invitations IS 'Invitations génériques (équipe, équipe de tournoi, tournoi) à un compte ou par lien ; seule l''empreinte du jeton du lien est stockée';
+              COMMENT ON COLUMN invitations.resource_id IS 'Équipe, équipe de tournoi ou tournoi visé selon type ; sans clé étrangère (ressource polymorphe, revalidée à l''acceptation)';
+              COMMENT ON COLUMN invitations.metadata IS 'Données propres au type, ex. {"role": "member"}';
+              CREATE UNIQUE INDEX invitations_pending_recipient_key
+                ON invitations (type, resource_id, recipient_id)
+                WHERE status = 'pending' AND recipient_id IS NOT NULL;
+              CREATE INDEX invitations_recipient_idx ON invitations (recipient_id, status, created_at DESC);
+              CREATE INDEX invitations_inviter_idx ON invitations (inviter_id, status, created_at DESC);
+              CREATE INDEX invitations_expiry_idx ON invitations (expires_at) WHERE status = 'pending';
+              CREATE TABLE invitation_events (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                invitation_id uuid NOT NULL REFERENCES invitations(id) ON DELETE CASCADE,
+                kind varchar(16) NOT NULL,
+                actor_id uuid REFERENCES users(id) ON DELETE SET NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT invitation_events_kind_check CHECK (kind IN ('created', 'accepted', 'declined', 'revoked', 'expired'))
+              );
+              COMMENT ON TABLE invitation_events IS 'Historique des invitations : création et chaque changement de statut, avec son auteur (null pour une expiration)';
+              CREATE INDEX invitation_events_invitation_idx ON invitation_events (invitation_id, created_at);
+            rollback: |
+              DROP TABLE invitation_events;
+              DROP TABLE invitations;

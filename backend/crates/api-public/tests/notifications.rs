@@ -6,13 +6,17 @@ use actix_web::http::StatusCode;
 use actix_web::test::TestRequest;
 use api_public::AppState;
 use api_public::config::AuthConfig;
+use api_public::invitations::{
+    EngineInvitationNotifier, InvitationNotification, InvitationNotifier,
+};
 use api_public::mail::MemoryMailer;
 use api_public::notifications::{
     Audience, Catalog, Event, EventDefinition, Notifier, team_member_added,
 };
 use api_public::push::MemoryPush;
 use api_public::store::{
-    AuthStore, Category, Channel, MemoryStore, Platform, Role, UserSettings, UserSettingsUpdate,
+    AuthStore, Category, Channel, Invitation, InvitationEventKind, InvitationStatus,
+    InvitationType, MemoryStore, Platform, Role, TeamRole, UserSettings, UserSettingsUpdate,
 };
 use common::{
     PUBLIC_URL, SECRET, access, app_with_services, call, eventually, logged_in_as, login, request,
@@ -109,6 +113,45 @@ fn state(env: &Env) -> AppState {
 
 fn member_added(env: &Env, key: &str) -> Event {
     team_member_added(Uuid::new_v4(), "Les Aigles", env.alice_id, key)
+}
+
+#[actix_web::test]
+async fn invitation_events_are_delivered_by_the_notification_engine() {
+    let (_app, e) = env().await;
+    let notifier = EngineInvitationNotifier::from_state(&state(&e));
+    let invitation_id = Uuid::new_v4();
+    notifier
+        .notify(InvitationNotification {
+            delivery_id: None,
+            kind: InvitationEventKind::Created,
+            invitation: Invitation {
+                id: invitation_id,
+                kind: InvitationType::Team,
+                resource_id: Uuid::new_v4(),
+                inviter_id: Uuid::new_v4(),
+                recipient_id: Some(e.alice_id),
+                role: Some(TeamRole::Member),
+                status: InvitationStatus::Pending,
+                is_link: false,
+                max_uses: None,
+                uses: 0,
+                expires_at: "2026-12-01T00:00:00.000000Z".into(),
+                created_at: "2026-11-16T00:00:00.000000Z".into(),
+                updated_at: "2026-11-16T00:00:00.000000Z".into(),
+                responded_at: None,
+            },
+            actor_id: Some(Uuid::new_v4()),
+        })
+        .await
+        .unwrap();
+
+    let sent = e.mailer.notifications();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1.title, "Nouvelle invitation");
+    assert_eq!(
+        sent[0].1.action_url.as_deref(),
+        Some(format!("{PUBLIC_URL}/invitations/{invitation_id}").as_str())
+    );
 }
 
 #[actix_web::test]
@@ -573,7 +616,7 @@ async fn team_events_notify_the_member_concerned() {
         &app,
         TestRequest::post(),
         &format!("/teams/{team}/members"),
-        &e.alice,
+        &e.admin,
         Some(json!({"user_id": e.bob_id, "role": "member"})),
     )
     .await;
