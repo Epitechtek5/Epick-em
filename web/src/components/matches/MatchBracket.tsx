@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { bracketLabelKey, matchStatusLabelKey, resultLabelKey } from '@/features/matches/labels'
-import { layoutBracket, openSlots, orderedParticipants, predecessors } from '@/features/matches/organize'
+import { feeders, isBye, isFinalReset, layoutBracket, openSlots, orderedParticipants } from '@/features/matches/organize'
 import type { Match } from '@/features/matches/types'
 import { matchCapacity } from '@/features/matches/validation'
 import type { Step } from '@/features/steps/types'
@@ -32,7 +32,7 @@ export function MatchBracket({ step, matches, display }: { step: Step; matches: 
   const capacity = matchCapacity(step)
   const slots = Math.max(2, Math.min(capacity, Math.max(2, ...matches.map((match) => match.participants.length))))
   const layout = useMemo(() => layoutBracket(matches, slots), [matches, slots])
-  const incoming = useMemo(() => predecessors(matches), [matches])
+  const incoming = useMemo(() => feeders(matches), [matches])
 
   function fit() {
     const width = viewport.current?.clientWidth ?? 0
@@ -52,15 +52,21 @@ export function MatchBracket({ step, matches, display }: { step: Step; matches: 
       return parts.join(', ')
     })
     const waiting = openSlots(match, incoming.get(match.id) ?? [], capacity).map((slot) =>
-      slot.kind === 'winnerOf' ? t('matches.winnerOf', { number: display.numbers.get(slot.match.id) ?? '?' }) : t('matches.toBeDetermined'),
+      slot.kind === 'pending'
+        ? t('matches.toBeDetermined')
+        : t(slot.kind === 'winnerOf' ? 'matches.winnerOf' : 'matches.loserOf', { number: display.numbers.get(slot.match.id) ?? '?' }),
     )
+    const loserNext = match.loser_next_match_id ? display.numbers.get(match.loser_next_match_id) : undefined
     return [
       t('matches.number', { number }),
       t(matchStatusLabelKey(match.status)),
       match.round === null ? t('matches.noRound') : t('matches.roundNumber', { round: match.round }),
       ...(match.bracket ? [t(bracketLabelKey(match.bracket))] : []),
+      ...(isFinalReset(match) ? [t('matches.resetHint')] : []),
+      ...(isBye(match) ? [t('matches.byeHint')] : []),
       ...people,
       ...waiting,
+      ...(loserNext !== undefined ? [t('matches.loserGoesTo', { number: loserNext })] : []),
       t('matches.openDetails'),
     ].join(' · ')
   }
@@ -100,6 +106,22 @@ export function MatchBracket({ step, matches, display }: { step: Step; matches: 
         </span>
       </div>
       <p className="text-sm text-muted-foreground">{t('matches.bracketHelp')}</p>
+      {layout.edges.some((edge) => edge.kind === 'loser') ? (
+        <ul aria-label={t('matches.legend')} className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+          <li className="flex items-center gap-2">
+            <svg aria-hidden="true" width="28" height="6" className="text-foreground/40">
+              <line x1="0" y1="3" x2="28" y2="3" stroke="currentColor" strokeWidth={2} />
+            </svg>
+            {t('matches.legendWinner')}
+          </li>
+          <li className="flex items-center gap-2">
+            <svg aria-hidden="true" width="28" height="6" className="text-amber-600 dark:text-amber-400">
+              <line x1="0" y1="3" x2="28" y2="3" stroke="currentColor" strokeWidth={2} strokeDasharray="5 4" />
+            </svg>
+            {t('matches.legendLoser')}
+          </li>
+        </ul>
+      ) : null}
 
       <div
         ref={viewport}
@@ -115,7 +137,16 @@ export function MatchBracket({ step, matches, display }: { step: Step; matches: 
           >
             <svg aria-hidden="true" data-bracket-edges="" width={layout.width} height={layout.height} className="absolute inset-0 text-foreground/30">
               {layout.edges.map((edge) => (
-                <path key={`${edge.from}-${edge.to}`} d={edge.path} fill="none" stroke="currentColor" strokeWidth={2} />
+                <path
+                  key={`${edge.from}-${edge.to}-${edge.kind}`}
+                  d={edge.path}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  data-edge-kind={edge.kind}
+                  className={edge.kind === 'loser' ? 'text-amber-600/60 dark:text-amber-400/60' : undefined}
+                  strokeDasharray={edge.kind === 'loser' ? '6 5' : undefined}
+                />
               ))}
             </svg>
             {layout.regions.map((region) => (
@@ -153,7 +184,20 @@ export function MatchBracket({ step, matches, display }: { step: Step; matches: 
                   style={{ left: node.x, top: node.y, width: node.width, height: node.height }}
                 >
                   <span className="flex items-center justify-between gap-2">
-                    <span className="font-semibold">{t('matches.number', { number: display.numbers.get(match.id) ?? 0 })}</span>
+                    <span className="flex min-w-0 items-center gap-1.5 font-semibold">
+                      {t('matches.number', { number: display.numbers.get(match.id) ?? 0 })}
+                      {isFinalReset(match) ? (
+                        <span className="rounded bg-amber-100 px-1.5 text-[0.65rem] font-semibold text-amber-900 dark:bg-amber-500/20 dark:text-amber-100">
+                          {t('matches.reset')}
+                        </span>
+                      ) : null}
+                      {isBye(match) ? (
+                        <span className="rounded bg-sky-100 px-1.5 text-[0.65rem] font-semibold text-sky-900 dark:bg-sky-500/20 dark:text-sky-100">
+                          {t('matches.bye')}
+                        </span>
+                      ) : null}
+                      {match.best_of > 1 ? <span className="font-mono text-[0.7rem] text-muted-foreground">BO{match.best_of}</span> : null}
+                    </span>
                     <MatchStatusBadge status={match.status} className="px-2 text-[0.7rem]" />
                   </span>
                   {lines.map((line, index) =>

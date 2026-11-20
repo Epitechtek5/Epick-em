@@ -5,6 +5,7 @@ import type { Match } from '@/features/matches/types'
 import type { GroupRanking, Step } from '@/features/steps/types'
 import type { Tournament } from '@/features/tournaments/types'
 import {
+  DOUBLE_ONGOING,
   ELIM_GROUPS,
   ELIM_ONGOING,
   elimBracket,
@@ -137,7 +138,7 @@ describe('Matchs d’une étape', () => {
     renderApp(stepPath(POOLS_ONGOING))
 
     const section = await matchesSection()
-    expect(within(section).getByText(/Le serveur ne génère pas encore les matchs/)).toBeInTheDocument()
+    expect(within(section).getByText(/Les matchs viennent du serveur/)).toBeInTheDocument()
     expect(await within(section).findByRole('heading', { name: 'Groupe 1' })).toBeInTheDocument()
     expect(within(section).getByRole('heading', { name: 'Tour 1' })).toBeInTheDocument()
     expect(within(section).getByRole('heading', { name: 'Tour 2' })).toBeInTheDocument()
@@ -342,5 +343,51 @@ describe('Tableau d’élimination', () => {
     expect(await screen.findByText('Ce format ne forme pas de tableau : les matchs sont présentés par groupe et par tour.')).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Groupe 1' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /Tableau d’élimination/ })).not.toBeInTheDocument()
+  })
+
+  it('double élimination : liens du perdant, bye et manche de reset', async () => {
+    signInAs('user')
+    const final = makeMatch({ step_id: DOUBLE_ONGOING.id, bracket: 'grand_final', round: 1, number: 1 })
+    const reset = makeMatch({ step_id: DOUBLE_ONGOING.id, bracket: 'grand_final', round: 2, number: 1 })
+    const losers = makeMatch({ step_id: DOUBLE_ONGOING.id, bracket: 'losers', round: 1, number: 1, next_match_id: final.id, next_slot: 2 })
+    const bye = makeMatch({
+      step_id: DOUBLE_ONGOING.id,
+      bracket: 'winners',
+      round: 1,
+      number: 2,
+      status: 'finished',
+      next_match_id: final.id,
+      next_slot: 1,
+    })
+    bye.participants = [participant(bye.id, P_ME.id, { result: 'win', rank: 1, slot: 1 })]
+    const opener = makeMatch({
+      step_id: DOUBLE_ONGOING.id,
+      bracket: 'winners',
+      round: 1,
+      number: 1,
+      next_match_id: final.id,
+      next_slot: 1,
+      loser_next_match_id: losers.id,
+      loser_next_slot: 1,
+    })
+    const linkedFinal = { ...final, next_match_id: reset.id, next_slot: 1, loser_next_match_id: reset.id, loser_next_slot: 2 }
+    server({
+      steps: [POOLS_ONGOING, DOUBLE_ONGOING],
+      matches: { [DOUBLE_ONGOING.id]: [opener, bye, losers, linkedFinal, reset] },
+    })
+    renderApp(`${stepPath(DOUBLE_ONGOING)}/bracket`)
+    const canvas = await screen.findByRole('region', { name: 'Tableau d’élimination, défilable au clavier' })
+    expect(screen.getByRole('list', { name: 'Légende des liens' })).toHaveTextContent('Le perdant descend au tableau des perdants')
+    expect(canvas.querySelectorAll('[data-edge-kind="loser"]')).toHaveLength(2)
+    expect(canvas.querySelectorAll('[data-edge-kind="winner"]')).toHaveLength(4)
+    const links = within(canvas).getAllByRole('link')
+    const at = (id: string) => links.find((link) => link.getAttribute('href')?.endsWith(id))!
+    expect(at(losers.id)).toHaveAccessibleName(/Perdant du match 1/)
+    expect(at(opener.id)).toHaveAccessibleName(/Le perdant va au match 3\./)
+    expect(at(bye.id)).toHaveAccessibleName(/Bye : le participant avance sans jouer/)
+    expect(at(reset.id)).toHaveAccessibleName(/Manche de reset/)
+    expect(within(at(reset.id)).getByText('Reset')).toBeInTheDocument()
+    expect(within(at(reset.id)).getByText('Vainqueur du match 4')).toBeInTheDocument()
+    expect(within(at(reset.id)).getByText('Perdant du match 4')).toBeInTheDocument()
   })
 })

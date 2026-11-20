@@ -36,7 +36,7 @@ import { readNotice } from '@/features/games/notice'
 import { deleteMatch, getMatch, listMatches, saveResults, setMatchStatus } from '@/features/matches/api'
 import { isConflict, matchErrorDetail, matchErrorKey } from '@/features/matches/errors'
 import { startProblem } from '@/features/matches/games'
-import { groupIndexes, matchesPath, matchNumbers, openSlots, orderedParticipants, predecessors } from '@/features/matches/organize'
+import { feeders, groupIndexes, isFinalReset, matchesPath, matchNumbers, openSlots, orderedParticipants } from '@/features/matches/organize'
 import type { Match, MatchTransition, ResultRow } from '@/features/matches/types'
 import {
   canDeleteMatch,
@@ -212,8 +212,11 @@ export default function MatchDetailsPage() {
   const nameOf = (id: string) =>
     people.participants.some((candidate) => candidate.id === id) ? people.identity(id).name : (people.names[id] ?? players[id] ?? t('teams.unknownUser'))
   const groupIndex = match?.group_id && loaded ? groupIndexes(loaded.groups).get(match.group_id) : undefined
-  const feeding = match && loaded ? (predecessors(loaded.matches).get(match.id) ?? []) : []
+  const feeding = match && loaded ? (feeders(loaded.matches).get(match.id) ?? []) : []
   const next = match?.next_match_id ? loaded?.matches.find((candidate) => candidate.id === match.next_match_id) : undefined
+  const loserNext = match?.loser_next_match_id
+    ? loaded?.matches.find((candidate) => candidate.id === match.loser_next_match_id)
+    : undefined
   const slots = match && step ? openSlots(match, feeding, matchCapacity(step)) : []
   const transitions = match && step ? transitionsOf(step, match) : []
   const problem = match && step ? playableProblem(step, match.participants.length) : null
@@ -327,16 +330,16 @@ export default function MatchDetailsPage() {
               </FactTile>
             </dl>
 
-            {next || feeding.length > 0 ? (
+            {next || loserNext || feeding.length > 0 ? (
               <div className="grid gap-1 rounded-xl bg-card p-4 text-sm shadow-sm ring-1 ring-foreground/10">
                 {feeding.length > 0 ? (
                   <p>
                     {t('matches.fedBy')}{' '}
-                    {feeding.map((previous, index) => (
-                      <span key={previous.id}>
+                    {feeding.map(({ match: previous, kind }, index) => (
+                      <span key={`${previous.id}-${kind}`}>
                         {index > 0 ? ', ' : null}
                         <Link to={matchPath(previous)} className="font-medium text-primary underline underline-offset-4 dark:text-violet-300">
-                          {t('matches.number', { number: numbers.get(previous.id) ?? 0 })}
+                          {t(kind === 'winner' ? 'matches.winnerOf' : 'matches.loserOf', { number: numbers.get(previous.id) ?? 0 })}
                         </Link>
                       </span>
                     ))}
@@ -350,6 +353,15 @@ export default function MatchDetailsPage() {
                     </Link>
                   </p>
                 ) : null}
+                {loserNext ? (
+                  <p>
+                    {t('matches.loserGoesToLabel')}{' '}
+                    <Link to={matchPath(loserNext)} className="font-medium text-primary underline underline-offset-4 dark:text-violet-300">
+                      {t('matches.number', { number: numbers.get(loserNext.id) ?? 0 })}
+                    </Link>
+                  </p>
+                ) : null}
+                {isFinalReset(match) ? <p className="text-muted-foreground">{t('matches.resetHint')}</p> : null}
               </div>
             ) : null}
 

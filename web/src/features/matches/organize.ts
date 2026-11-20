@@ -7,10 +7,27 @@ import { BRACKETS, type Bracket, type Match, type MatchParticipant } from './typ
 // Adresse des matchs d'une étape.
 export const matchesPath = (tournamentId: string, stepId: string) => `/tournaments/${tournamentId}/steps/${stepId}/matches`
 
-// Participants dans l'ordre du classement du match quand il en a un, sinon dans l'ordre du serveur.
+// Participants dans l'ordre du classement du match quand il en a un, sinon par emplacement
+// (matchs générés), sinon dans l'ordre du serveur.
 export function orderedParticipants(match: Match): MatchParticipant[] {
-  if (!match.participants.some((participant) => participant.rank !== null)) return match.participants
-  return [...match.participants].sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER))
+  if (match.participants.some((participant) => participant.rank !== null)) {
+    return [...match.participants].sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER))
+  }
+  if (match.participants.some((participant) => participant.slot != null)) {
+    return [...match.participants].sort((a, b) => (a.slot ?? Number.MAX_SAFE_INTEGER) - (b.slot ?? Number.MAX_SAFE_INTEGER))
+  }
+  return match.participants
+}
+
+// Match exempt généré (bye) : terminé d'emblée avec un seul participant, vainqueur.
+export function isBye(match: Match): boolean {
+  return match.status === 'finished' && match.participants.length === 1 && match.participants[0].result === 'win'
+}
+
+// Manche de « reset » d'une double élimination : la seconde grande finale, jouée seulement si le
+// finaliste du tableau des perdants gagne la première (sinon le serveur l'annule).
+export function isFinalReset(match: Match): boolean {
+  return match.bracket === 'grand_final' && (match.round ?? 1) > 1
 }
 
 // N° d'un match : sa place (à partir de 1) dans la liste complète de l'étape, dans l'ordre du
@@ -89,17 +106,45 @@ export function predecessors(matches: readonly Match[]): Map<string, Match[]> {
   return incoming
 }
 
-// Place libre d'un match : vainqueur attendu d'un match précédent encore à jouer, ou participant
-// pas encore désigné.
-export type Slot = { kind: 'winnerOf'; match: Match } | { kind: 'pending' }
+// Match qui en alimente un autre : par son vainqueur (`next_match_id`) ou, en double
+// élimination, par son perdant (`loser_next_match_id`), à l'emplacement donné par le serveur.
+export interface Feed {
+  match: Match
+  kind: 'winner' | 'loser'
+  slot: number | null
+}
 
-// Places libres à afficher pour un match qui attend encore des participants : un vainqueur attendu
-// par match précédent non terminé, puis des places « à déterminer » jusqu'à `capacity`.
-export function openSlots(match: Match, incoming: readonly Match[], capacity: number): Slot[] {
+// Vainqueurs et perdants attendus par chaque match, dans l'ordre des emplacements.
+export function feeders(matches: readonly Match[]): Map<string, Feed[]> {
+  const incoming = new Map<string, Feed[]>()
+  const add = (target: string | null | undefined, feed: Feed) => {
+    if (target) incoming.set(target, [...(incoming.get(target) ?? []), feed])
+  }
+  for (const match of matches) {
+    add(match.next_match_id, { match, kind: 'winner', slot: match.next_slot ?? null })
+    add(match.loser_next_match_id, { match, kind: 'loser', slot: match.loser_next_slot ?? null })
+  }
+  for (const feeds of incoming.values()) {
+    feeds.sort((a, b) => (a.slot ?? Number.MAX_SAFE_INTEGER) - (b.slot ?? Number.MAX_SAFE_INTEGER))
+  }
+  return incoming
+}
+
+// Place libre d'un match : vainqueur ou perdant attendu d'un match précédent encore à jouer, ou
+// participant pas encore désigné.
+export type Slot = { kind: 'winnerOf'; match: Match } | { kind: 'loserOf'; match: Match } | { kind: 'pending' }
+
+// Places libres à afficher pour un match qui attend encore des participants : un vainqueur (ou un
+// perdant) attendu par match précédent non terminé, puis des places « à déterminer » jusqu'à
+// `capacity`. `incoming` accepte aussi de simples matchs (liens vainqueur).
+export function openSlots(match: Match, incoming: readonly (Feed | Match)[], capacity: number): Slot[] {
   if (match.status === 'finished' || match.status === 'cancelled') return []
   const free = Math.max(0, capacity - match.participants.length)
-  const waiting = incoming.filter((previous) => previous.status !== 'finished' && previous.status !== 'cancelled')
-  const slots: Slot[] = waiting.slice(0, free).map((previous) => ({ kind: 'winnerOf', match: previous }))
+  const feeds = incoming.map((item): Feed => ('kind' in item ? item : { match: item, kind: 'winner', slot: null }))
+  const waiting = feeds.filter((feed) => feed.match.status !== 'finished' && feed.match.status !== 'cancelled')
+  const slots: Slot[] = waiting
+    .slice(0, free)
+    .map((feed) => (feed.kind === 'winner' ? { kind: 'winnerOf', match: feed.match } : { kind: 'loserOf', match: feed.match }))
   while (slots.length < free) slots.push({ kind: 'pending' })
   return slots
 }
@@ -137,6 +182,8 @@ export interface BracketEdge {
   from: string
   to: string
   path: string
+  // Lien du vainqueur, ou du perdant vers le tableau des perdants (double élimination).
+  kind: 'winner' | 'loser'
 }
 
 export interface BracketLayout {
@@ -178,7 +225,12 @@ export function layoutBracket(matches: readonly Match[], slots: number): Bracket
           : contentTop + index * (cardHeight + NODE_GAP) + cardHeight / 2
         return { match, center }
       })
-      wanted.sort((a, b) => a.center - b.center || (order.get(a.match.id) ?? 0) - (order.get(b.match.id) ?? 0))
+      wanted.sort(
+        (a, b) =>
+          a.center - b.center ||
+          (a.match.number ?? 0) - (b.match.number ?? 0) ||
+          (order.get(a.match.id) ?? 0) - (order.get(b.match.id) ?? 0),
+      )
       let previousBottom = contentTop - NODE_GAP
       for (const { match, center } of wanted) {
         const y = Math.max(center - cardHeight / 2, previousBottom + NODE_GAP)
@@ -203,22 +255,29 @@ export function layoutBracket(matches: readonly Match[], slots: number): Bracket
 
   const byId = new Map(nodes.map((node) => [node.match.id, node]))
   const outside = (node: BracketNode, next: BracketNode) => next.region !== node.region || next.x <= node.x
-  const gutter = nodes.some((node) => {
-    const next = node.match.next_match_id ? byId.get(node.match.next_match_id) : undefined
-    return next !== undefined && outside(node, next)
-  })
+  const links = (node: BracketNode) =>
+    (
+      [
+        [node.match.next_match_id, 'winner'],
+        [node.match.loser_next_match_id, 'loser'],
+      ] as const
+    ).flatMap(([id, kind]) => {
+      const next = id ? byId.get(id) : undefined
+      return next ? [{ next, kind }] : []
+    })
+  const gutter = nodes.some((node) => links(node).some(({ next }) => outside(node, next)))
   const width = Math.max(1, contentWidth + (gutter ? OUTER_GUTTER : 0))
-  const edges = nodes.flatMap((node) => {
-    const next = node.match.next_match_id ? byId.get(node.match.next_match_id) : undefined
-    if (!next) return []
-    const startX = node.x + node.width
-    const startY = node.y + node.height / 2
-    const endY = next.y + next.height / 2
-    const around = outside(node, next)
-    const endX = around ? next.x + next.width : next.x
-    const turnX = around ? width - OUTER_GUTTER / 2 : (startX + endX) / 2
-    return [{ from: node.match.id, to: next.match.id, path: `M ${startX} ${startY} H ${turnX} V ${endY} H ${endX}` }]
-  })
+  const edges: BracketEdge[] = nodes.flatMap((node) =>
+    links(node).map(({ next, kind }) => {
+      const startX = node.x + node.width
+      const startY = node.y + node.height / 2
+      const endY = next.y + next.height / 2
+      const around = outside(node, next)
+      const endX = around ? next.x + next.width : next.x
+      const turnX = around ? width - OUTER_GUTTER / 2 : (startX + endX) / 2
+      return { from: node.match.id, to: next.match.id, kind, path: `M ${startX} ${startY} H ${turnX} V ${endY} H ${endX}` }
+    }),
+  )
 
   return { regions, nodes, edges, width, height: Math.max(1, top - REGION_GAP + PADDING), cardHeight }
 }

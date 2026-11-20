@@ -16,7 +16,9 @@ import { MatchesSection } from '@/components/matches/MatchesSection'
 import { StateMessage } from '@/components/games/StateMessage'
 import { StepStatusBadge } from '@/components/steps/StepBadges'
 import { StepGroups } from '@/components/steps/StepGroups'
+import { StepGeneration } from '@/components/steps/StepGeneration'
 import { StepLifecycle } from '@/components/steps/StepLifecycle'
+import { StepRulesSummary } from '@/components/steps/StepRulesSummary'
 import { TournamentStatusBadge } from '@/components/tournaments/TournamentStatusBadge'
 import { Chip, FactTile, PageHero } from '@/components/tournaments/ui'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -24,9 +26,9 @@ import { Icon } from '@/components/ui/icon'
 import { readNotice } from '@/features/games/notice'
 import { deleteStep, listSteps } from '@/features/steps/api'
 import { stepErrorKey } from '@/features/steps/errors'
-import { formatDescKey, formatLabelKey, matchTypeDescKey, matchTypeLabelKey } from '@/features/steps/labels'
+import { formatDescKey, formatLabelKey, matchTypeDescKey, matchTypeLabelKey, tiebreakLabel } from '@/features/steps/labels'
 import type { Step } from '@/features/steps/types'
-import { capacityOf, qualifiedOf, stepsEditable } from '@/features/steps/validation'
+import { capacityOf, isSupportedCriterion, qualifiedOf, stepsEditable } from '@/features/steps/validation'
 import { isUuid } from '@/features/teams/validation'
 import { getTournament } from '@/features/tournaments/api'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -185,13 +187,15 @@ export default function StepDetailsPage() {
                           {index + 1}.
                         </span>
                         <span className="sr-only">{t('steps.tiebreakPriority', { n: index + 1 })}{t('common.colon')} </span>
-                        <code className="font-mono">{key}</code>
+                        {isSupportedCriterion(key) ? tiebreakLabel(t, key) : <code className="font-mono">{key}</code>}
                       </Chip>
                     </li>
                   ))}
                 </ol>
               )}
             </div>
+
+            <StepRulesSummary step={step} />
 
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" onClick={reload}>
@@ -225,6 +229,9 @@ export default function StepDetailsPage() {
           </article>
 
           <StepLifecycle key={step.id} tournament={tournament} step={step} steps={steps} canManage={isAdmin} onChanged={applyChanges} />
+          {isAdmin && step.status === 'ongoing' ? (
+            <StepGeneration tournament={tournament} step={step} version={version} onGenerated={() => setVersion((v) => v + 1)} />
+          ) : null}
           <StepGroups tournament={tournament} step={step} version={version} />
           <MatchesSection tournament={tournament} step={step} version={version} canManage={isAdmin} />
         </>
