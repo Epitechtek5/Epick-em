@@ -31,10 +31,10 @@ databaseChangeLog:
   - include:
       file: changelog/0015-email-verification.yaml
   - include:
-      file: changelog/0018-match-games.yaml
-  - include:
       file: changelog/0016-user-settings.yaml
   - include:
       file: changelog/0016-extend-tournaments.yaml
   - include:
       file: changelog/0017-create-invitations.yaml
+  - include:
+      file: changelog/0018-match-games.yaml
