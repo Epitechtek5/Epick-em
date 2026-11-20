@@ -788,5 +788,63 @@
     "denied": "Unable to confirm these credentials for an account without email.",
     "verified": "Verified email",
     "unverified": "Unverified email"
+  },
+  "importPreview": {
+    "title": "Review import",
+    "intro": "Choose a file, review the planned changes, then confirm.",
+    "readOnly": "No data has been changed. Cancelling leaves stored data unchanged.",
+    "fileInfo": "{{format}} · {{size}} KiB",
+    "expires": "This preview is valid for up to {{minutes}} minutes.",
+    "destructive": "Existing data will be replaced or deleted. Review all affected resources before confirming.",
+    "consent": "I have reviewed the replacements and deletions of existing data.",
+    "confirm": "Confirm import",
+    "changeFile": "Choose another file",
+    "refresh": "Refresh preview",
+    "invalid": "Correct the file and generate a new preview before confirming.",
+    "success": "Import complete",
+    "verify": "Check tournaments",
+    "view": "View tournaments",
+    "show": "Show",
+    "hide": "Hide",
+    "more_one": "Show more ({{count}} remaining)",
+    "more_other": "Show more ({{count}} remaining)",
+    "seed": "Seed #{{seed}}",
+    "unseeded": "No manual seed",
+    "rank": "Rank {{rank}}",
+    "progression": "Winner advances to match {{number}}",
+    "placements": "Seeding, placement and results",
+    "matchResults_one": "Match results ({{count}} match)",
+    "matchResults_other": "Match results ({{count}} matches)",
+    "impacts": "Downstream impacts",
+    "countChange": "Before: {{before}} → After: {{after}}",
+    "serverDetail": "Server details: {{detail}}",
+    "serverLanguage": "Diagnostics below are provided by the server in its original language.",
+    "detailsUnavailable": "This server provides resource totals only; detailed placements and results are not available.",
+    "resourceCounts": "Number of planned operations by resource category, not individual records.",
+    "validationErrors_one": "{{count}} validation error",
+    "validationErrors_other": "{{count}} validation errors",
+    "warnings_one": "{{count}} warning",
+    "warnings_other": "{{count}} warnings",
+    "states": {
+      "loading": "Preparing preview…",
+      "applying": "Applying the confirmed import…",
+      "stale": "Data has changed since this preview. Nothing was imported. Generate a new preview and review the changes again.",
+      "expired": "This preview has expired or is no longer available. Generate a new preview before confirming.",
+      "unknown": "The connection failed during confirmation. The import may already have been applied. Check the tournaments before starting another import; confirmation will not be sent again automatically."
+    },
+    "actions": {
+      "create": "Creation",
+      "update": "Update",
+      "replace": "Replacement",
+      "delete": "Deletion"
+    },
+    "resources": {
+      "tournament": "Tournament",
+      "scoring_rules": "Scoring rules",
+      "participants": "Participants",
+      "teams": "Teams",
+      "steps": "Stages",
+      "matches": "Matches"
+    }
   }
 }

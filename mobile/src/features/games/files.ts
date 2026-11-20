@@ -23,15 +23,15 @@ export function checkImportSize(size: number) {
     throw new GameFileError('games.validation.fileSize');
 }
 
-export async function pickAndImportFile<T>(
-  token: string,
-  importFile: (
-    token: string,
-    format: GameFormat,
-    bytes: Uint8Array,
-  ) => Promise<T>,
+export interface ImportFile {
+  name: string;
+  format: GameFormat;
+  bytes: Uint8Array;
+}
+
+export async function pickImportFile(
   translationRoot: 'games' | 'stats' | 'teams' | 'tournaments',
-): Promise<T | null> {
+): Promise<ImportFile | null> {
   const picked = await DocumentPicker.getDocumentAsync({
     multiple: false,
     copyToCacheDirectory: true,
@@ -77,8 +77,21 @@ export async function pickAndImportFile<T>(
     // DocumentPicker supplied a private cache copy, never the original document.
     if (file.exists) file.delete();
   }
+  return { name: asset.name, format, bytes };
+}
+
+export async function pickAndImportFile<T>(
+  token: string,
+  importFile: (
+    token: string,
+    format: GameFormat,
+    bytes: Uint8Array,
+  ) => Promise<T>,
+  translationRoot: 'games' | 'stats' | 'teams' | 'tournaments',
+): Promise<T | null> {
+  const file = await pickImportFile(translationRoot);
   // The backend validates document version, CSV quoting and domain constraints.
-  return importFile(token, format, bytes);
+  return file ? importFile(token, file.format, file.bytes) : null;
 }
 
 export function pickAndImportGames(token: string) {

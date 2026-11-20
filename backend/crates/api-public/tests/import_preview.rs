@@ -210,6 +210,19 @@ async fn a_preview_describes_the_changes_and_writes_nothing() {
         ]
     );
     let downstream = tournament["downstream"].to_string();
+    let step = &tournament["steps"][0];
+    assert_eq!(step["position"], 1);
+    assert_eq!(step["groups"][0]["index"], 1);
+    assert_eq!(step["groups"][0]["participants"][0]["name"], "player0");
+    assert_eq!(step["groups"][0]["participants"][0]["seed"], 1);
+    let result = &step["matches"][0];
+    assert_eq!(result["index"], 1);
+    assert_eq!(result["next"], 3);
+    assert_eq!(result["participants"][0]["points"], 4.5);
+    assert_eq!(result["participants"][0]["rank"], 1);
+    assert_eq!(result["participants"][0]["result"], "win");
+    // The preview exposes the computed winner placement, not just the input file.
+    assert_eq!(step["matches"][2]["participants"][0]["name"], "player0");
     assert!(
         downstream.contains("4 tête(s) de série") && downstream.contains("1 match(s) terminé(s)"),
         "{downstream}"
