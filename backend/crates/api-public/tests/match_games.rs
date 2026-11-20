@@ -422,6 +422,40 @@ async fn every_game_route_requires_a_token() {
 }
 
 #[actix_web::test]
+async fn games_of_an_invitation_only_tournament_stay_hidden() {
+    let (app, s) = setup().await;
+    let series = series(&app, &s, "pool").await;
+    let match_id = new_match(&app, &s, &series, 3).await;
+    let games = format!("{}/{match_id}/games", series.matches());
+    let (status, game) = post(&app, &games, &s.admin, json!({})).await;
+    assert_eq!(status, StatusCode::CREATED, "{game}");
+    let (status, updated) = patch(
+        &app,
+        &format!("/tournaments/{}", series.tid),
+        &s.admin,
+        json!({ "visibility": "invitation_only" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+
+    let outsider = logged_in_as(&app, "outsider", "secret123").await;
+    let outsider = access(&outsider);
+    for path in [games.clone(), format!("{games}/1")] {
+        assert_eq!(
+            get(&app, &path, outsider).await.0,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+        // Les participants du tournoi y ont toujours accès.
+        assert_eq!(
+            get(&app, &path, &s.players[0]).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+}
+
+#[actix_web::test]
 async fn selection_stats_have_a_scope_and_options_per_game() {
     let (app, s) = setup().await;
     // Portée incohérente avec le type.
