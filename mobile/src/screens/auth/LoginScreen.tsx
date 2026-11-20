@@ -14,8 +14,10 @@ import { useAuth } from '@/features/auth/session';
 import { ApiError } from '@/lib/api';
 import { AuthHeader } from '@/components/auth-header';
 import { normalizeEmail, validateEmail } from '@/features/auth/validation';
+import { useInvitationReturn } from '@/features/invitations/navigation';
 
 export default function LoginScreen() {
+  const { target } = useInvitationReturn();
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -55,7 +57,7 @@ export default function LoginScreen() {
       setSubmitting(false);
     }
   }
-  if (user) return <Redirect href="/" />;
+  if (user) return <Redirect href={target ?? '/'} />;
   return (
     <AuthScreen>
       <AuthHeader

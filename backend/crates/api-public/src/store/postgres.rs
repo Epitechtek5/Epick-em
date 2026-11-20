@@ -2,14 +2,16 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, CheckInSettlement, Game, GameInput, GameUpdate, Invitation, Match, MatchFinish,
-    MatchImport, MatchInput, MatchParticipant, MatchScore, MatchStatus, MatchUpdate,
-    NamedParticipant, ParticipantChange, ParticipantImport, ParticipantInput, ParticipantStatus,
-    RegistrationField, Role, RoleAssignment, RoleAuditEntry, ScoringRule, ScoringRuleDefinition,
-    ScoringRuleInput, Stat, StatInput, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
-    StepInput, StepParticipant, StepStart, StoreError, Team, TeamImport, TeamInput, TeamMember,
-    TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentParticipant,
-    TournamentRole, TournamentSettings, TournamentStatus, TournamentTeam, TournamentTeamInput,
+    AuthStore, CheckInSettlement, Game, GameInput, GameUpdate, Invitation, InvitationAction,
+    InvitationEvent, InvitationEventKind, InvitationFilter, InvitationInput, InvitationStatus,
+    InvitationType, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchScore,
+    MatchStatus, MatchUpdate, NamedParticipant, ParticipantChange, ParticipantImport,
+    ParticipantInput, ParticipantStatus, RegistrationField, Role, RoleAssignment, RoleAuditEntry,
+    ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatUpdate, Step,
+    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepStart, StoreError,
+    Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
+    TournamentInput, TournamentInvitation, TournamentParticipant, TournamentRole,
+    TournamentSettings, TournamentStatus, TournamentTeam, TournamentTeamInput,
     TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
 use super::{
@@ -242,6 +244,252 @@ fn team_conflict(err: sqlx::Error) -> StoreError {
 
 fn is_foreign_key_violation(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(db) if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION))
+}
+
+/// Colonnes de `invitations`, dans l'ordre de [`InvitationRow`].
+fn invitation_columns() -> String {
+    format!(
+        "id, type, resource_id, inviter_id, recipient_id, status, token_hash IS NOT NULL, \
+         max_uses, uses, metadata::text, {} AS expires_at, {} AS created_at, \
+         {} AS updated_at, {} AS responded_at",
+        ts("expires_at"),
+        ts("created_at"),
+        ts("updated_at"),
+        ts("responded_at")
+    )
+}
+
+type InvitationRow = (
+    Uuid,
+    String,
+    Uuid,
+    Uuid,
+    Option<Uuid>,
+    String,
+    bool,
+    Option<i32>,
+    i32,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+);
+
+fn invitation(row: InvitationRow) -> Result<Invitation, StoreError> {
+    let metadata: serde_json::Value =
+        serde_json::from_str(&row.9).map_err(|err| StoreError::Other(err.to_string()))?;
+    Ok(Invitation {
+        id: row.0,
+        kind: row.1.parse()?,
+        resource_id: row.2,
+        inviter_id: row.3,
+        recipient_id: row.4,
+        role: super::role_of(&metadata)?,
+        status: row.5.parse()?,
+        is_link: row.6,
+        max_uses: row.7,
+        uses: row.8,
+        expires_at: row.10,
+        created_at: row.11,
+        updated_at: row.12,
+        responded_at: row.13,
+    })
+}
+
+async fn insert_invitation_event(
+    conn: &mut sqlx::PgConnection,
+    invitation_id: Uuid,
+    kind: InvitationEventKind,
+    actor: Option<Uuid>,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "INSERT INTO invitation_events (invitation_id, kind, actor_id) VALUES ($1, $2, $3)",
+    )
+    .bind(invitation_id)
+    .bind(kind.as_str())
+    .bind(actor)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Crée l'adhésion ou l'inscription de `actor` dans la transaction de l'acceptation, en
+/// verrouillant la ressource et en revalidant ses règles.
+async fn apply_invitation(
+    conn: &mut sqlx::PgConnection,
+    invitation: &Invitation,
+    actor: Uuid,
+) -> Result<(), StoreError> {
+    // Une invitation à un compte ne s'accepte que par ce compte.
+    if invitation
+        .recipient_id
+        .is_some_and(|recipient| recipient != actor)
+    {
+        return Err(StoreError::InvitationUnavailable);
+    }
+    let role = invitation.role.filter(|role| *role != TeamRole::Owner);
+    match invitation.kind {
+        InvitationType::Team => {
+            let Some(role) = role else {
+                return Err(StoreError::InvitationUnavailable);
+            };
+            let owner =
+                sqlx::query_scalar::<_, Uuid>("SELECT owner_id FROM teams WHERE id = $1 FOR SHARE")
+                    .bind(invitation.resource_id)
+                    .fetch_optional(&mut *conn)
+                    .await?;
+            if owner != Some(invitation.inviter_id) {
+                return Err(StoreError::InvitationUnavailable);
+            }
+            sqlx::query("INSERT INTO team_member (team_id, user_id, role) VALUES ($1, $2, $3)")
+                .bind(invitation.resource_id)
+                .bind(actor)
+                .bind(role.as_str())
+                .execute(conn)
+                .await
+                .map_err(invitation_conflict)?;
+        }
+        InvitationType::TournamentTeam => {
+            let Some(role) = role else {
+                return Err(StoreError::InvitationUnavailable);
+            };
+            if !lock_roster_room(conn, invitation.resource_id, actor, role).await? {
+                return Err(StoreError::InvitationUnavailable);
+            }
+            let team = sqlx::query_as::<_, (Uuid, String)>(
+                "SELECT tt.owner_id, t.status FROM tournament_teams tt \
+                 JOIN tournaments t ON t.id = tt.tournament_id \
+                 WHERE tt.id = $1 FOR SHARE OF tt, t",
+            )
+            .bind(invitation.resource_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            if !matches!(team, Some((owner, ref status)) if owner == invitation.inviter_id && matches!(status.as_str(), "draft" | "registration"))
+            {
+                return Err(StoreError::InvitationUnavailable);
+            }
+            sqlx::query(
+                "INSERT INTO tournament_team_member (tournament_team_id, tournament_id, user_id, role) \
+                 SELECT id, tournament_id, $2, $3 FROM tournament_teams WHERE id = $1",
+            )
+            .bind(invitation.resource_id)
+            .bind(actor)
+            .bind(role.as_str())
+            .execute(conn)
+            .await
+            .map_err(invitation_conflict)?;
+        }
+        InvitationType::Tournament => {
+            // Le verrou sur le tournoi sérialise les inscriptions : le plafond ne se dépasse pas.
+            let row = sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    i32,
+                    Option<String>,
+                    Option<String>,
+                    String,
+                    String,
+                    bool,
+                    bool,
+                ),
+            >(&format!(
+                "SELECT participant_type, status, max_participants, {}, {}, {}, \
+                        registration_policy, waiting_list_enabled, \
+                        EXISTS (SELECT 1 FROM users WHERE id = $2 AND role = 'admin') \
+                 FROM tournaments WHERE id = $1 FOR UPDATE",
+                ts("registration_open_at"),
+                ts("registration_close_at"),
+                ts("now()")
+            ))
+            .bind(invitation.resource_id)
+            .bind(invitation.inviter_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            let Some((
+                kind,
+                status,
+                max,
+                open_at,
+                close_at,
+                now,
+                policy,
+                waiting_list,
+                inviter_is_admin,
+            )) = row
+            else {
+                return Err(StoreError::InvitationUnavailable);
+            };
+            let open = super::registration_open(
+                status.parse()?,
+                open_at.as_deref(),
+                close_at.as_deref(),
+                &now,
+            );
+            if kind != "solo" || !open || !inviter_is_admin {
+                return Err(StoreError::InvitationUnavailable);
+            }
+            let participant_status = if policy == "approval_required" {
+                ParticipantStatus::Pending
+            } else if sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM tournament_participant \
+                 WHERE tournament_id = $1 \
+                   AND status IN ('registered', 'checked_in', 'disqualified')",
+            )
+            .bind(invitation.resource_id)
+            .fetch_one(&mut *conn)
+            .await?
+                >= i64::from(max)
+            {
+                if waiting_list {
+                    ParticipantStatus::Waitlisted
+                } else {
+                    return Err(StoreError::TournamentFull);
+                }
+            } else {
+                ParticipantStatus::Registered
+            };
+            sqlx::query(
+                "INSERT INTO tournament_participant \
+                 (tournament_id, user_id, status, responses) VALUES ($1, $2, $3, '{}'::jsonb)",
+            )
+            .bind(invitation.resource_id)
+            .bind(actor)
+            .bind(participant_status.as_str())
+            .execute(conn)
+            .await
+            .map_err(invitation_conflict)?;
+        }
+    }
+    Ok(())
+}
+
+/// Conflit d'adhésion ou d'inscription ; un compte ou une ressource disparus rendent
+/// l'invitation indisponible.
+fn invitation_conflict(err: sqlx::Error) -> StoreError {
+    if is_foreign_key_violation(&err) {
+        return StoreError::InvitationUnavailable;
+    }
+    if let sqlx::Error::Database(db) = &err
+        && db.code().as_deref() == Some(UNIQUE_VIOLATION)
+        && matches!(
+            db.constraint(),
+            Some("tournament_participant_user_key" | "tournament_participant_team_key")
+        )
+    {
+        return StoreError::AlreadyParticipant;
+    }
+    // Déjà dans cette même équipe de tournoi : la clé primaire se déclenche avant l'unicité par
+    // tournoi.
+    if let sqlx::Error::Database(db) = &err
+        && db.code().as_deref() == Some(UNIQUE_VIOLATION)
+        && db.constraint() == Some("tournament_team_member_pkey")
+    {
+        return StoreError::PlayerAlreadyRegistered;
+    }
+    team_conflict(err)
 }
 
 /// Colonnes de `tournaments`, dans l'ordre lu par [`TournamentRow`].
@@ -747,7 +995,7 @@ async fn hand_over_tournaments(
 /// `user_id` lui-même ; `false` si l'équipe n'existe pas. Le verrou sérialise les ajouts et les
 /// changements de rôle d'une même équipe jusqu'à la fin de la transaction.
 async fn lock_roster_room(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut sqlx::PgConnection,
     team_id: Uuid,
     user_id: Uuid,
     role: TeamRole,
@@ -758,7 +1006,7 @@ async fn lock_roster_room(
          WHERE tt.id = $1 FOR UPDATE OF tt",
     )
     .bind(team_id)
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *tx)
     .await?
     else {
         return Ok(false);
@@ -778,7 +1026,7 @@ async fn lock_roster_room(
     .bind(team_id)
     .bind(user_id)
     .bind(substitute)
-    .fetch_one(&mut **tx)
+    .fetch_one(&mut *tx)
     .await?;
     if count >= i64::from(limit) {
         return Err(StoreError::TeamRosterFull(limit));
@@ -3030,7 +3278,10 @@ impl AuthStore for PgStore {
         .collect()
     }
 
-    async fn list_invitations(&self, tournament_id: Uuid) -> Result<Vec<Invitation>, StoreError> {
+    async fn list_tournament_invitations(
+        &self,
+        tournament_id: Uuid,
+    ) -> Result<Vec<TournamentInvitation>, StoreError> {
         Ok(sqlx::query_as::<_, (Uuid, Option<Uuid>, String)>(&format!(
             "SELECT user_id, invited_by, {} FROM tournament_invitation \
              WHERE tournament_id = $1 ORDER BY invited_at, user_id",
@@ -3040,7 +3291,7 @@ impl AuthStore for PgStore {
         .fetch_all(&self.pool)
         .await?
         .into_iter()
-        .map(|(user_id, invited_by, invited_at)| Invitation {
+        .map(|(user_id, invited_by, invited_at)| TournamentInvitation {
             user_id,
             invited_by,
             invited_at,
@@ -3053,7 +3304,7 @@ impl AuthStore for PgStore {
         tournament_id: Uuid,
         user_id: Uuid,
         invited_by: Uuid,
-    ) -> Result<Option<Invitation>, StoreError> {
+    ) -> Result<Option<TournamentInvitation>, StoreError> {
         let row = sqlx::query_as::<_, (Uuid, Option<Uuid>, String)>(&format!(
             "INSERT INTO tournament_invitation (tournament_id, user_id, invited_by) \
              VALUES ($1, $2, $3) \
@@ -3067,7 +3318,7 @@ impl AuthStore for PgStore {
         .fetch_one(&self.pool)
         .await;
         match row {
-            Ok((user_id, invited_by, invited_at)) => Ok(Some(Invitation {
+            Ok((user_id, invited_by, invited_at)) => Ok(Some(TournamentInvitation {
                 user_id,
                 invited_by,
                 invited_at,
@@ -3764,5 +4015,224 @@ impl AuthStore for PgStore {
         .await?;
         tx.commit().await?;
         Ok(true)
+    }
+
+    async fn create_invitation(&self, input: InvitationInput) -> Result<Invitation, StoreError> {
+        let metadata = match input.role {
+            Some(role) => serde_json::json!({ "role": role.as_str() }),
+            None => serde_json::json!({}),
+        };
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, InvitationRow>(&format!(
+            "INSERT INTO invitations \
+             (type, resource_id, inviter_id, recipient_id, token_hash, max_uses, metadata, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, now() + make_interval(secs => $8)) \
+             RETURNING {}",
+            invitation_columns()
+        ))
+        .bind(input.kind.as_str())
+        .bind(input.resource_id)
+        .bind(input.inviter_id)
+        .bind(input.recipient_id)
+        .bind(input.token_hash)
+        .bind(input.max_uses)
+        .bind(metadata.to_string())
+        .bind(input.ttl.as_secs_f64())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|err| match &err {
+            sqlx::Error::Database(db)
+                if db.code().as_deref() == Some(UNIQUE_VIOLATION)
+                    && db.constraint() == Some("invitations_pending_recipient_key") =>
+            {
+                StoreError::InvitationDuplicate
+            }
+            _ => err.into(),
+        })?;
+        let invitation = invitation(row)?;
+        insert_invitation_event(
+            &mut tx,
+            invitation.id,
+            InvitationEventKind::Created,
+            Some(input.inviter_id),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(invitation)
+    }
+
+    async fn find_invitation(&self, id: Uuid) -> Result<Option<Invitation>, StoreError> {
+        sqlx::query_as::<_, InvitationRow>(&format!(
+            "SELECT {} FROM invitations WHERE id = $1",
+            invitation_columns()
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(invitation)
+        .transpose()
+    }
+
+    async fn find_invitation_by_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<Invitation>, StoreError> {
+        sqlx::query_as::<_, InvitationRow>(&format!(
+            "SELECT {} FROM invitations WHERE token_hash = $1",
+            invitation_columns()
+        ))
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(invitation)
+        .transpose()
+    }
+
+    async fn list_invitations(
+        &self,
+        filter: InvitationFilter,
+    ) -> Result<(Vec<Invitation>, i64), StoreError> {
+        let condition = "($1::uuid IS NULL OR recipient_id = $1) \
+             AND ($2::uuid IS NULL OR inviter_id = $2) \
+             AND ($3::text IS NULL OR status = $3) \
+             AND ($4::text IS NULL OR type = $4)";
+        let status = filter.status.map(InvitationStatus::as_str);
+        let kind = filter.kind.map(InvitationType::as_str);
+        let total = sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT count(*) FROM invitations WHERE {condition}"
+        ))
+        .bind(filter.recipient_id)
+        .bind(filter.inviter_id)
+        .bind(status)
+        .bind(kind)
+        .fetch_one(&self.pool)
+        .await?;
+        let rows = sqlx::query_as::<_, InvitationRow>(&format!(
+            "SELECT {} FROM invitations WHERE {condition} \
+             ORDER BY created_at DESC, id LIMIT $5 OFFSET $6",
+            invitation_columns()
+        ))
+        .bind(filter.recipient_id)
+        .bind(filter.inviter_id)
+        .bind(status)
+        .bind(kind)
+        .bind(filter.limit)
+        .bind(filter.offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok((
+            rows.into_iter().map(invitation).collect::<Result<_, _>>()?,
+            total,
+        ))
+    }
+
+    async fn list_invitation_events(&self, id: Uuid) -> Result<Vec<InvitationEvent>, StoreError> {
+        sqlx::query_as::<_, (String, Option<Uuid>, String)>(&format!(
+            "SELECT kind, actor_id, {} FROM invitation_events \
+             WHERE invitation_id = $1 ORDER BY created_at, id",
+            ts("created_at")
+        ))
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|(kind, actor_id, created_at)| {
+            Ok(InvitationEvent {
+                kind: kind.parse()?,
+                actor_id,
+                created_at,
+            })
+        })
+        .collect()
+    }
+
+    async fn respond_invitation(
+        &self,
+        id: Uuid,
+        actor: Uuid,
+        action: InvitationAction,
+    ) -> Result<Option<Invitation>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        // Le verrou de la ligne sérialise les réponses simultanées à la même invitation.
+        let row = sqlx::query_as::<_, (String, bool)>(
+            "SELECT status, expires_at <= now() FROM invitations WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((status, expired)) = row else {
+            return Ok(None);
+        };
+        if status != InvitationStatus::Pending.as_str() {
+            return Err(StoreError::InvitationNotPending);
+        }
+        if expired {
+            sqlx::query(
+                "UPDATE invitations SET status = 'expired', updated_at = now(), \
+                 responded_at = now() WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+            insert_invitation_event(&mut tx, id, InvitationEventKind::Expired, None).await?;
+            tx.commit().await?;
+            return Err(StoreError::InvitationExpired);
+        }
+        let (kind, update) = match action {
+            InvitationAction::Decline => (
+                InvitationEventKind::Declined,
+                "status = 'declined', responded_at = now()",
+            ),
+            InvitationAction::Revoke => (
+                InvitationEventKind::Revoked,
+                "status = 'revoked', responded_at = now()",
+            ),
+            InvitationAction::Accept => {
+                let current = sqlx::query_as::<_, InvitationRow>(&format!(
+                    "SELECT {} FROM invitations WHERE id = $1",
+                    invitation_columns()
+                ))
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+                apply_invitation(&mut tx, &invitation(current)?, actor).await?;
+                // Un lien reste `pending` jusqu'à `max_uses` acceptations.
+                (
+                    InvitationEventKind::Accepted,
+                    "uses = uses + 1, \
+                     status = CASE WHEN (recipient_id IS NOT NULL OR (max_uses IS NOT NULL AND uses + 1 >= max_uses)) THEN 'accepted' ELSE 'pending' END, \
+                     responded_at = CASE WHEN (recipient_id IS NOT NULL OR (max_uses IS NOT NULL AND uses + 1 >= max_uses)) THEN now() ELSE responded_at END",
+                )
+            }
+        };
+        let row = sqlx::query_as::<_, InvitationRow>(&format!(
+            "UPDATE invitations SET {update}, updated_at = now() WHERE id = $1 RETURNING {}",
+            invitation_columns()
+        ))
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        insert_invitation_event(&mut tx, id, kind, Some(actor)).await?;
+        tx.commit().await?;
+        invitation(row).map(Some)
+    }
+
+    async fn expire_invitations(&self) -> Result<Vec<Invitation>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query_as::<_, InvitationRow>(&format!(
+            "UPDATE invitations SET status = 'expired', updated_at = now(), responded_at = now() \
+             WHERE status = 'pending' AND expires_at <= now() RETURNING {}",
+            invitation_columns()
+        ))
+        .fetch_all(&mut *tx)
+        .await?;
+        let expired: Vec<Invitation> =
+            rows.into_iter().map(invitation).collect::<Result<_, _>>()?;
+        for invitation in &expired {
+            insert_invitation_event(&mut tx, invitation.id, InvitationEventKind::Expired, None)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(expired)
     }
 }

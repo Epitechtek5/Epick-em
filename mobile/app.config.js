@@ -34,18 +34,26 @@ module.exports = ({ config }) => ({
   },
   android: {
     ...config.android,
+    ...(process.env.GOOGLE_SERVICES_JSON
+      ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON }
+      : {}),
     ...(linkHost
       ? {
           intentFilters: [
             ...(config.android?.intentFilters || []),
-            ...['/reset-password', '/verify-email'].map((path) => ({
+            ...[
+              '/reset-password',
+              '/verify-email',
+              '/invite/',
+              '/invitations/',
+            ].map((path) => ({
               action: 'VIEW',
               autoVerify: true,
               data: [
                 {
                   scheme: 'https',
                   host: linkHost,
-                  ...(path === '/reset-password'
+                  ...(path !== '/verify-email'
                     ? { pathPrefix: path }
                     : { path }),
                 },

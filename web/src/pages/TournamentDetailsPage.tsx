@@ -20,6 +20,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
 import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog'
 import { StateMessage } from '@/components/games/StateMessage'
+import { InvitationsSection } from '@/components/invitations/InvitationsSection'
 import { StepsSection } from '@/components/steps/StepsSection'
 import { CopyTournamentDialog } from '@/components/tournaments/CopyTournamentDialog'
 import { ManagementSection } from '@/components/tournaments/ManagementSection'
@@ -39,6 +40,7 @@ import {
   duplicateTournament,
   getTournament,
   listAllTournamentTeams,
+  listAllParticipants,
   saveAsTemplate,
 } from '@/features/tournaments/api'
 import { tournamentErrorKey } from '@/features/tournaments/errors'
@@ -68,7 +70,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 export default function TournamentDetailsPage() {
   const { id = '' } = useParams()
   const { t, lang } = useI18n()
-  const { refreshRole } = useAuth()
+  const { refreshRole, isAdmin } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(id)
@@ -411,6 +413,24 @@ export default function TournamentDetailsPage() {
                 reload()
                 reloadAccess()
               }}
+            />
+          ) : null}
+          {/* Invitations au tournoi : administrateurs globaux, tournoi solo encore ouvert aux inscrits. */}
+          {isAdmin &&
+          tournament.participant_type === 'solo' &&
+          (tournament.status === 'draft' || tournament.status === 'registration') ? (
+            <InvitationsSection
+              type="tournament"
+              resourceId={tournament.id}
+              resourceName={tournament.name}
+              hint={t('invitations.manage.tournamentHint')}
+              loadExcluded={(signal) =>
+                listAllParticipants(tournament.id, signal).then((participants) =>
+                  participants.flatMap((participant) =>
+                    participant.user_id && participant.status !== 'withdrawn' ? [participant.user_id] : [],
+                  ),
+                )
+              }
             />
           ) : null}
           <StepsSection tournament={tournament} canManage={canManage} />

@@ -12,6 +12,18 @@ use std::time::Duration;
 
 const RESEND_ENDPOINT: &str = "https://api.resend.com/emails";
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_PUBLIC_URL: &str = "http://localhost:3000";
+
+/// Origine publique du site, disponible même lorsque Resend n'est pas configuré.
+pub fn public_url_from_env() -> String {
+    public_url_from_lookup(|name| std::env::var(name).ok())
+}
+
+fn public_url_from_lookup(lookup: impl Fn(&str) -> Option<String>) -> String {
+    lookup("PUBLIC_URL")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_PUBLIC_URL.into())
+}
 
 #[derive(Debug)]
 pub struct MailError(String);
@@ -452,6 +464,18 @@ mod tests {
     fn sending_is_disabled_without_an_api_key() {
         assert!(config(&[]).is_none());
         assert!(config(&[("RESEND_API_KEY", "")]).is_none());
+    }
+
+    #[test]
+    fn public_url_does_not_depend_on_the_resend_key() {
+        let vars = HashMap::from([(
+            "PUBLIC_URL".to_string(),
+            "https://epickem.example".to_string(),
+        )]);
+        assert_eq!(
+            public_url_from_lookup(|name| vars.get(name).cloned()),
+            "https://epickem.example"
+        );
     }
 
     #[test]

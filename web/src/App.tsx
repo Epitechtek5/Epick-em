@@ -14,6 +14,8 @@ import GameTransferPage from '@/pages/GameTransferPage'
 import GamesPage from '@/pages/GamesPage'
 import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
+import InvitationPage from '@/pages/InvitationPage'
+import InvitationsPage from '@/pages/InvitationsPage'
 import MatchDetailsPage from '@/pages/MatchDetailsPage'
 import MatchEditorPage from '@/pages/MatchEditorPage'
 import NotFoundPage from '@/pages/NotFoundPage'
@@ -50,6 +52,8 @@ export default function App() {
         {/* Liens reçus par e-mail : accessibles connecté ou non (pas de GuestRoute). */}
         <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/invite/:token" element={<InvitationPage />} />
+        <Route path="/invitations/:id" element={<InvitationPage />} />
         {/* Pages publiques : lecture seule, sans connexion ; le serveur masque les tournois sur invitation. */}
         <Route path="/public/tournaments" element={<PublicTournamentsPage />} />
         <Route path="/public/tournaments/:id" element={<PublicTournamentPage />} />
@@ -62,6 +66,7 @@ export default function App() {
         <Route element={<ProtectedRoute />}>
           <Route path="/app" element={<HomePage />} />
           <Route path="/account" element={<AccountPage />} />
+          <Route path="/invitations" element={<InvitationsPage />} />
           <Route path="/games" element={<GamesPage />} />
           <Route element={<AdminRoute />}>
             <Route path="/games/new" element={<GameEditorPage />} />

@@ -36,6 +36,14 @@ export default function AuthenticatedLayout() {
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
+        name="invitations/index"
+        options={{ title: t('invitations.title') }}
+      />
+      <Stack.Screen
+        name="invitations/create"
+        options={{ title: t('invitations.create') }}
+      />
+      <Stack.Screen
         name="tournaments/create"
         options={{ title: t('tournaments.create') }}
       />

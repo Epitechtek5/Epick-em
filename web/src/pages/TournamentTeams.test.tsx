@@ -14,6 +14,7 @@ import {
   TOURNAMENT_ID,
   TT_MINE,
   USERS,
+  noInvitations,
   userResponse,
 } from '@/test/render'
 
@@ -25,6 +26,8 @@ function server(on?: (path: string, init: RequestInit) => Response | undefined) 
     if (custom) return custom
     const user = userResponse(path)
     if (user) return user
+    const noInvites = noInvitations(path)
+    if (noInvites) return noInvites
     const method = init.method ?? 'GET'
     if (path.startsWith('/users')) return jsonResponse(200, USERS)
     if (path.startsWith(`/tournaments/${TOURNAMENT_ID}/teams?`)) return jsonResponse(200, [TT_MINE, TT_OTHER])
@@ -194,8 +197,8 @@ describe('Équipes de tournoi', () => {
     expect(screen.queryByRole('button', { name: /^Passer bob/ })).not.toBeInTheDocument()
   })
 
-  it('ajoute un membre et gère 409 player_already_registered', async () => {
-    signInAs('user')
+  it('un administrateur ajoute un membre et gère 409 player_already_registered', async () => {
+    signInAs('admin')
     const user = userEvent.setup()
     server((path, init) =>
       init.method === 'POST' && path.startsWith('/tournament-teams/')

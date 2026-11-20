@@ -35,6 +35,7 @@ const FIELDS = Object.keys(FIELD_IDS) as LoginField[]
 
 // Messages transmis par les pages qui renvoient vers la connexion.
 export interface LoginLocationState {
+  from?: string
   registered?: boolean
   email?: string
   passwordReset?: boolean
@@ -191,7 +192,7 @@ export default function LoginPage() {
           </Button>
           <p className="text-center text-sm text-muted-foreground">
             {t('auth.login.noAccount')}{' '}
-            <Link to="/register" className={linkClass}>
+            <Link to="/register" state={{ from: state.from }} className={linkClass}>
               {t('auth.login.createAccount')}
             </Link>
           </p>

@@ -252,6 +252,73 @@ const BUILTIN: &[EventDefinition] = &[
         ],
         path: Some("/tournaments/{tournament_id}/steps/{step_id}"),
     },
+    EventDefinition {
+        kind: "invitation.created",
+        category: Category::Teams,
+        channels: BOTH,
+        texts: [
+            ("Nouvelle invitation", "Vous avez reçu une invitation."),
+            ("New invitation", "You received an invitation."),
+            ("Nueva invitación", "Has recibido una invitación."),
+        ],
+        path: Some("/invitations/{invitation_id}"),
+    },
+    EventDefinition {
+        kind: "invitation.accepted",
+        category: Category::Teams,
+        channels: BOTH,
+        texts: [
+            ("Invitation acceptée", "Votre invitation a été acceptée."),
+            ("Invitation accepted", "Your invitation was accepted."),
+            ("Invitación aceptada", "Tu invitación ha sido aceptada."),
+        ],
+        path: Some("/invitations/{invitation_id}"),
+    },
+    EventDefinition {
+        kind: "invitation.declined",
+        category: Category::Teams,
+        channels: BOTH,
+        texts: [
+            ("Invitation refusée", "Votre invitation a été refusée."),
+            ("Invitation declined", "Your invitation was declined."),
+            ("Invitación rechazada", "Tu invitación ha sido rechazada."),
+        ],
+        path: Some("/invitations/{invitation_id}"),
+    },
+    EventDefinition {
+        kind: "invitation.revoked",
+        category: Category::Teams,
+        channels: BOTH,
+        texts: [
+            (
+                "Invitation révoquée",
+                "Une invitation qui vous était destinée a été révoquée.",
+            ),
+            (
+                "Invitation revoked",
+                "An invitation sent to you was revoked.",
+            ),
+            (
+                "Invitación revocada",
+                "Se ha revocado una invitación que recibiste.",
+            ),
+        ],
+        path: Some("/invitations/{invitation_id}"),
+    },
+    EventDefinition {
+        kind: "invitation.expired",
+        category: Category::Teams,
+        channels: BOTH,
+        texts: [
+            (
+                "Invitation expirée",
+                "Une invitation est arrivée à expiration.",
+            ),
+            ("Invitation expired", "An invitation has expired."),
+            ("Invitación caducada", "Una invitación ha caducado."),
+        ],
+        path: Some("/invitations/{invitation_id}"),
+    },
 ];
 
 /// À qui s'adresse un événement ; résolu au moment de la livraison, hors de la requête HTTP.

@@ -4,13 +4,14 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
 import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
+import { InvitationsSection } from '@/components/invitations/InvitationsSection'
 import { TeamMembersSection } from '@/components/teams/TeamMembersSection'
 import { TeamOverview } from '@/components/teams/TeamOverview'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { getGame } from '@/features/games/api'
 import { readNotice } from '@/features/games/notice'
-import { deleteTeam, getTeam } from '@/features/teams/api'
+import { deleteTeam, getTeam, listTeamMembers } from '@/features/teams/api'
 import { teamErrorKey } from '@/features/teams/errors'
 import { isUuid, ownsTeam } from '@/features/teams/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -24,7 +25,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 export default function TeamDetailsPage() {
   const { id = '' } = useParams()
   const { t } = useI18n()
-  const { userId } = useAuth()
+  const { userId, isAdmin } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(id)
@@ -140,7 +141,26 @@ export default function TeamDetailsPage() {
             onRefresh={reload}
           />
           {!canManage ? <p className="text-sm text-muted-foreground">{t('teams.readOnly')}</p> : null}
-          <TeamMembersSection scope="team" teamId={team.id} ownerId={team.owner_id} canManage={canManage} />
+          <TeamMembersSection
+            scope="team"
+            teamId={team.id}
+            ownerId={team.owner_id}
+            canManage={canManage}
+            canAdd={isAdmin}
+          />
+          {canManage ? (
+            <InvitationsSection
+              type="team"
+              resourceId={team.id}
+              resourceName={team.name}
+              hint={t('invitations.manage.teamHint')}
+              loadExcluded={(signal) =>
+                listTeamMembers(team.id, signal).then((members) =>
+                  members.filter((member) => !member.left_at).map((member) => member.user_id),
+                )
+              }
+            />
+          ) : null}
         </>
       ) : null}
     </div>
