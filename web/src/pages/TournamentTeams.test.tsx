@@ -193,7 +193,11 @@ describe('Équipes de tournoi', () => {
     expect(screen.getByText('Créée pour ce tournoi')).toBeInTheDocument()
     await screen.findByRole('list', { name: 'Membres actifs' })
     expect(screen.queryByRole('button', { name: 'Supprimer l’équipe de tournoi' })).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Compte à ajouter')).not.toBeInTheDocument()
+    // L'ajout direct est réservé aux administrateurs globaux (comme côté serveur).
+    if (role === 'admin') expect(await screen.findByLabelText('Compte à ajouter')).toBeInTheDocument()
+    else expect(screen.queryByLabelText('Compte à ajouter')).not.toBeInTheDocument()
+    // Seul le propriétaire invite.
+    expect(screen.queryByRole('form', { name: 'Nouvelle invitation' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Passer bob/ })).not.toBeInTheDocument()
   })
 
