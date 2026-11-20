@@ -147,11 +147,6 @@ export const TT_MINE: TournamentTeam = {
   created_at: '2026-01-01T00:00:00Z',
 }
 
-// Réponse GET /invitations?… : aucune invitation (serveurs simulés des fiches équipe/tournoi).
-export function noInvitations(path: string): Response | null {
-  return path.startsWith('/invitations?') ? jsonResponse(200, { items: [], total: 0, limit: 100, offset: 0 }) : null
-}
-
 // Réponse GET /user/{id} à partir des comptes connus.
 export function userResponse(path: string): Response | null {
   const match = /^\/user\/([0-9a-f-]+)$/.exec(path)

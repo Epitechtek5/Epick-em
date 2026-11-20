@@ -9,7 +9,6 @@ import { useAuth } from '@/features/auth/session';
 import { usePreferences } from '@/features/preferences/provider';
 import { registerPushToken } from '@/features/preferences/api';
 import { rememberPushToken, revokeCurrentPushToken } from './registration';
-import { invitationTarget } from '@/features/invitations/navigation';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -22,8 +21,6 @@ Notifications.setNotificationHandler({
 
 function notificationPath(data: Record<string, unknown>): Href | null {
   const path = data.path;
-  const invitation = invitationTarget(path);
-  if (invitation) return invitation;
   if (
     typeof path !== 'string' ||
     !/^\/tournaments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/steps\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i.test(

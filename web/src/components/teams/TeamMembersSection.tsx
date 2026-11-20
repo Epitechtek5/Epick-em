@@ -65,17 +65,13 @@ interface TeamMembersSectionProps {
   ownerId: string
   // Propriétaire connecté : seuls ses contrôles de gestion sont affichés.
   canManage: boolean
-  // Ajout direct d'un compte, réservé par le serveur aux administrateurs globaux ; le
-  // propriétaire passe par les invitations.
-  canAdd?: boolean
 }
 
-// Membres d'une équipe (globale ou de tournoi). Lecture pour tous ; le propriétaire change un
-// rôle ou retire un membre, un administrateur global peut aussi ajouter directement un compte
-// existant (membre ou remplaçant) ; les autres arrivées passent par les invitations. Le propriétaire
+// Membres d'une équipe (globale ou de tournoi). Lecture pour tous ; le propriétaire ajoute un
+// compte existant (membre ou remplaçant), change un rôle ou retire un membre. Le propriétaire
 // n'est jamais modifiable et le rôle `owner` n'est jamais proposé. La liste est relue après
 // chaque opération.
-export function TeamMembersSection({ scope, teamId, ownerId, canManage, canAdd = false }: TeamMembersSectionProps) {
+export function TeamMembersSection({ scope, teamId, ownerId, canManage }: TeamMembersSectionProps) {
   const { t, lang } = useI18n()
   const api = API[scope]
   const { state, reload } = useAsyncResource(
@@ -232,7 +228,7 @@ export function TeamMembersSection({ scope, teamId, ownerId, canManage, canAdd =
         </>
       ) : null}
 
-      {canAdd && state.status === 'success' ? (
+      {canManage && state.status === 'success' ? (
         <AddMemberForm
           scope={scope}
           activeIds={active.map((member) => member.user_id)}

@@ -9,7 +9,7 @@ import {
   RefreshControl,
   View,
 } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ArrowDown01Icon from '@hugeicons/core-free-icons/ArrowDown01Icon';
 import Delete02Icon from '@hugeicons/core-free-icons/Delete02Icon';
@@ -118,7 +118,7 @@ function Members({ tournament }: { tournament: boolean }) {
   }
 
   function add() {
-    if (!token || !selectedUserId || user?.role !== 'admin') return;
+    if (!token || !selectedUserId) return;
     if (active.some((member) => member.user_id === selectedUserId)) {
       setError('teams.errors.alreadyMember');
       return;
@@ -247,21 +247,6 @@ function Members({ tournament }: { tournament: boolean }) {
             ) : null}
             {error ? <FormMessage>{t(error)}</FormMessage> : null}
             {canManage ? (
-              <Button
-                onPress={() =>
-                  router.push({
-                    pathname: '/(authenticated)/invitations/create',
-                    params: {
-                      type: tournament ? 'tournament_team' : 'team',
-                      resourceId: id,
-                    },
-                  })
-                }
-              >
-                <Text>{t('invitations.inviteMembers')}</Text>
-              </Button>
-            ) : null}
-            {canManage && user?.role === 'admin' ? (
               <Card className="gap-3 p-4">
                 <Text variant="large">{t('teams.addMember')}</Text>
                 <Pressable
@@ -321,7 +306,7 @@ function Members({ tournament }: { tournament: boolean }) {
           );
         }}
       />
-      {canManage && user?.role === 'admin' ? (
+      {canManage ? (
         <Modal
           visible={userPickerOpen}
           transparent

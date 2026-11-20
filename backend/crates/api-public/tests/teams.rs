@@ -377,7 +377,7 @@ async fn owner_manages_members() {
     let team_id = id(&team);
     let members = format!("/teams/{team_id}/members");
 
-    add_member(&app, &s.admin, team_id, &s.bob.id, "member").await;
+    add_member(&app, &s.alice.token, team_id, &s.bob.id, "member").await;
 
     // Doublon, rôle `owner`, compte inconnu, droits.
     let body = |user: &str, role: &str| Some(json!({ "user_id": user, "role": role }));
@@ -385,7 +385,7 @@ async fn owner_manages_members() {
         &app,
         TestRequest::post(),
         &members,
-        &s.admin,
+        &s.alice.token,
         body(&s.bob.id, "substitute"),
     )
     .await;
@@ -399,7 +399,7 @@ async fn owner_manages_members() {
             &app,
             TestRequest::post(),
             &members,
-            &s.admin,
+            &s.alice.token,
             body(user, role),
         )
         .await;
@@ -409,7 +409,7 @@ async fn owner_manages_members() {
         &app,
         TestRequest::post(),
         &members,
-        &s.alice.token,
+        &s.bob.token,
         body(&s.carol.id, "member"),
     )
     .await;
@@ -451,7 +451,7 @@ async fn owner_manages_members() {
     assert_eq!(list.as_array().unwrap().len(), 2);
     assert_ne!(list[1]["left_at"], Value::Null);
 
-    add_member(&app, &s.admin, team_id, &s.bob.id, "member").await;
+    add_member(&app, &s.alice.token, team_id, &s.bob.id, "member").await;
     let (_, list) = send(&app, TestRequest::get(), &members, &s.alice.token, None).await;
     assert_eq!(list.as_array().unwrap().len(), 3);
 }
@@ -483,8 +483,8 @@ async fn copy_is_complete_and_independent() {
     let (app, s) = setup().await;
     let team = create_team(&app, &s, &s.alice.token, "Karmine").await;
     let team_id = id(&team);
-    add_member(&app, &s.admin, team_id, &s.bob.id, "member").await;
-    add_member(&app, &s.admin, team_id, &s.carol.id, "substitute").await;
+    add_member(&app, &s.alice.token, team_id, &s.bob.id, "member").await;
+    add_member(&app, &s.alice.token, team_id, &s.carol.id, "substitute").await;
     // Carol quitte l'équipe : elle n'est pas copiée.
     let (status, _) = send(
         &app,
@@ -578,7 +578,7 @@ async fn copy_is_complete_and_independent() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    add_member(&app, &s.admin, team_id, &s.carol.id, "member").await;
+    add_member(&app, &s.alice.token, team_id, &s.carol.id, "member").await;
     let (_, copy_now) = send(
         &app,
         TestRequest::get(),
@@ -627,7 +627,7 @@ async fn copy_can_pick_members_but_only_active_ones() {
     let (app, s) = setup().await;
     let team = create_team(&app, &s, &s.alice.token, "Karmine").await;
     let team_id = id(&team);
-    add_member(&app, &s.admin, team_id, &s.bob.id, "member").await;
+    add_member(&app, &s.alice.token, team_id, &s.bob.id, "member").await;
     let tournament = s.tournament.clone();
 
     // Carol n'a jamais été membre.
@@ -674,7 +674,7 @@ async fn a_team_registers_once_and_a_player_joins_one_team_per_tournament() {
     let (app, s) = setup().await;
     let team = create_team(&app, &s, &s.alice.token, "Karmine").await;
     let team_id = id(&team);
-    add_member(&app, &s.admin, team_id, &s.bob.id, "member").await;
+    add_member(&app, &s.alice.token, team_id, &s.bob.id, "member").await;
     let tournament = s.tournament.clone();
 
     let (status, _) = register(
@@ -708,7 +708,7 @@ async fn a_team_registers_once_and_a_player_joins_one_team_per_tournament() {
         &app,
         TestRequest::post(),
         &format!("/tournament-teams/{solo}/members"),
-        &s.admin,
+        &s.carol.token,
         Some(json!({ "user_id": s.bob.id, "role": "member" })),
     )
     .await;
@@ -775,6 +775,15 @@ async fn tournament_team_crud_is_owner_only() {
         assert_eq!(status, StatusCode::FORBIDDEN);
         let (status, _) = send(&app, TestRequest::delete(), &path, token, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _) = send(
+            &app,
+            TestRequest::post(),
+            &format!("{path}/members"),
+            token,
+            Some(json!({ "user_id": s.carol.id, "role": "member" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     let members = format!("{path}/members");
@@ -782,20 +791,11 @@ async fn tournament_team_crud_is_owner_only() {
         &app,
         TestRequest::post(),
         &members,
-        &s.admin,
+        &s.alice.token,
         Some(json!({ "user_id": s.bob.id, "role": "member" })),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    let (status, _) = send(
-        &app,
-        TestRequest::post(),
-        &members,
-        &s.alice.token,
-        Some(json!({ "user_id": s.carol.id, "role": "member" })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, member) = send(
         &app,
         TestRequest::patch(),
@@ -855,8 +855,8 @@ async fn export(app: &app_type!(), path: &str, token: &str) -> (StatusCode, Stri
 /// Deux équipes, dont une avec un ancien membre.
 async fn seed(app: &app_type!(), s: &Setup) {
     let team = create_team(app, s, &s.alice.token, "Karmine, \"KC\"").await;
-    add_member(app, &s.admin, id(&team), &s.bob.id, "member").await;
-    add_member(app, &s.admin, id(&team), &s.carol.id, "substitute").await;
+    add_member(app, &s.alice.token, id(&team), &s.bob.id, "member").await;
+    add_member(app, &s.alice.token, id(&team), &s.carol.id, "substitute").await;
     let (status, _) = send(
         app,
         TestRequest::delete(),
@@ -966,7 +966,7 @@ async fn exported_teams_are_imported_without_loss() {
 async fn import_updates_a_team_and_replaces_its_members() {
     let (app, s) = setup().await;
     let team = create_team(&app, &s, &s.alice.token, "Karmine").await;
-    add_member(&app, &s.admin, id(&team), &s.bob.id, "member").await;
+    add_member(&app, &s.alice.token, id(&team), &s.bob.id, "member").await;
 
     let file = json!({
         "version": 1,

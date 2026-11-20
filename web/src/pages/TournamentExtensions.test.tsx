@@ -10,7 +10,7 @@ import type {
   TournamentAccess,
   TournamentParticipant,
 } from '@/features/tournaments/types'
-import { BOB, CAROL, GAME_A, jsonResponse, ME, renderApp, routeFetch, signInAs, TT_MINE, USERS, userResponse, noInvitations } from '@/test/render'
+import { BOB, CAROL, GAME_A, jsonResponse, ME, renderApp, routeFetch, signInAs, TT_MINE, USERS, userResponse } from '@/test/render'
 import { P_BOB, P_ME, SOLO } from '@/test/tournaments'
 
 // Issue #147 : configuration étendue, inscriptions (approbation, liste d'attente, champs
@@ -87,8 +87,6 @@ function server(initial: Partial<State> = {}) {
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
     const user = userResponse(path)
     if (user) return user
-    const noInvites = noInvitations(path)
-    if (noInvites) return noInvites
     const t = state.tournament
     const base = `/tournaments/${t.id}`
     if (path.startsWith('/users?')) return jsonResponse(200, USERS)

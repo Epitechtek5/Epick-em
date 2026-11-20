@@ -11,7 +11,6 @@
 use crate::config::AuthConfig;
 use crate::error::{ApiError, ErrorResponse};
 use crate::game_io::GameStats;
-use crate::invitations::{InvitationNotifier, InvitationTtl, NoopInvitationNotifier};
 use crate::mail::{Mailer, NoopMailer};
 use crate::match_io::InSteps;
 use crate::notifications::{Catalog, DEFAULT_RETRY_DELAY};
@@ -68,18 +67,14 @@ pub struct AppState {
     pub(crate) mailer: Arc<dyn Mailer>,
     /// Origine publique du site, début des liens envoyés par e-mail.
     pub(crate) public_url: Arc<str>,
-    /// Destinataire des événements d'invitation ; par défaut [`NoopInvitationNotifier`].
-    pub(crate) invitation_notifier: Arc<dyn InvitationNotifier>,
-    /// Validité par défaut et maximale des invitations.
-    pub(crate) invitation_ttl: InvitationTtl,
+    /// Événements d'inscription et de pointage ; par défaut ignorés (voir [`crate::events`]).
+    pub(crate) events: Arc<dyn EventSink>,
     /// Envoi des notifications push ; par défaut [`NoopPush`] (canal ignoré).
     pub(crate) push: Arc<dyn PushSender>,
     /// Types d'événements du moteur de notifications.
     pub(crate) catalog: Arc<Catalog>,
     /// Attente entre deux essais d'une livraison de notification.
     pub(crate) retry_delay: std::time::Duration,
-    /// Événements d'inscription et de pointage ; par défaut ignorés (voir [`crate::events`]).
-    pub(crate) events: Arc<dyn EventSink>,
 }
 
 impl AppState {
@@ -99,13 +94,17 @@ impl AppState {
             dummy_hash: dummy_hash.into(),
             mailer: Arc::new(NoopMailer),
             public_url: DEFAULT_PUBLIC_URL.into(),
-            invitation_notifier: Arc::new(NoopInvitationNotifier),
-            invitation_ttl: InvitationTtl::default(),
+            events: Arc::new(NoopEvents),
             push: Arc::new(NoopPush),
             catalog: Arc::new(Catalog::builtin()),
             retry_delay: DEFAULT_RETRY_DELAY,
-            events: Arc::new(NoopEvents),
         })
+    }
+
+    /// Branche la destination des événements d'inscription et de pointage.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.events = events;
+        self
     }
 
     /// Branche l'envoi des notifications push (Expo en production).
@@ -123,12 +122,6 @@ impl AppState {
     /// Règle l'attente entre deux essais d'une livraison de notification.
     pub fn with_retry_delay(mut self, delay: std::time::Duration) -> Self {
         self.retry_delay = delay;
-        self
-    }
-
-    /// Branche la destination des événements d'inscription et de pointage.
-    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
-        self.events = events;
         self
     }
 
@@ -162,28 +155,10 @@ impl AppState {
         self
     }
 
-    /// Branche le destinataire des événements d'invitation (moteur de notifications).
-    pub fn with_invitation_notifier(mut self, notifier: Arc<dyn InvitationNotifier>) -> Self {
-        self.invitation_notifier = notifier;
-        self
-    }
-
-    /// Règle la validité par défaut et maximale des invitations.
-    pub fn with_invitation_ttl(mut self, ttl: InvitationTtl) -> Self {
-        self.invitation_ttl = ttl;
-        self
-    }
-
     /// Branche l'envoi des e-mails ; `public_url` est l'origine publique du site (ex.
     /// `https://epickem.app`) : le lien de réinitialisation du mot de passe en est déduit.
     pub fn with_mailer(mut self, mailer: Arc<dyn Mailer>, public_url: &str) -> Self {
         self.mailer = mailer;
-        self.public_url = public_url.into();
-        self
-    }
-
-    /// Règle l'origine publique indépendamment de la configuration du transport e-mail.
-    pub fn with_public_url(mut self, public_url: &str) -> Self {
         self.public_url = public_url.into();
         self
     }

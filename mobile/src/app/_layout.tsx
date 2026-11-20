@@ -17,24 +17,15 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider, useAuth } from '@/features/auth/session';
 import { PushNotificationsProvider } from '@/features/notifications/provider';
-import { InvitationReturnProvider } from '@/features/invitations/navigation';
-import {
-  InvitationActivityProvider,
-  InvitationActivityBanner,
-} from '@/features/invitations/activity';
 import { colors } from '@/theme/colors';
 
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
-        <InvitationReturnProvider>
-          <SessionPreferences>
-            <InvitationActivityProvider>
-              <ThemedLayout />
-            </InvitationActivityProvider>
-          </SessionPreferences>
-        </InvitationReturnProvider>
+        <SessionPreferences>
+          <ThemedLayout />
+        </SessionPreferences>
       </AuthProvider>
     </GestureHandlerRootView>
   );
@@ -90,7 +81,6 @@ function ThemedLayout() {
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <Stack screenOptions={{ headerShown: false }} />
         <PushNotificationsProvider />
-        <InvitationActivityBanner />
         <PortalHost />
       </View>
     </ThemeProvider>

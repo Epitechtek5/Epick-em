@@ -13,7 +13,6 @@ import {
   TEAM_MINE,
   TEAM_OTHER,
   USERS,
-  noInvitations,
   userResponse,
 } from '@/test/render'
 
@@ -35,8 +34,6 @@ function server(
     if (custom) return custom
     const user = userResponse(path)
     if (user) return user
-    const noInvites = noInvitations(path)
-    if (noInvites) return noInvites
     if (path.startsWith('/users')) return jsonResponse(200, USERS)
     if (path === `/games/${GAME_A.id}`) return jsonResponse(200, GAME_A)
     if (path.startsWith('/games/')) return jsonResponse(200, { ...GAME_A, id: team.game_id, name: 'Beta Racer' })
@@ -90,8 +87,8 @@ describe('TeamDetailsPage', () => {
     expect(within(active).queryByText('carol')).not.toBeInTheDocument()
   })
 
-  it('un administrateur ajoute directement un compte existant comme remplaçant et la liste est relue', async () => {
-    signInAs('admin')
+  it('le propriétaire ajoute un compte existant comme remplaçant et la liste est relue', async () => {
+    signInAs('user')
     const user = userEvent.setup()
     const fetchMock = server()
     renderApp(`/teams/${TEAM_MINE.id}`)
@@ -115,7 +112,7 @@ describe('TeamDetailsPage', () => {
   })
 
   it('affiche 409 already_team_member', async () => {
-    signInAs('admin')
+    signInAs('user')
     const user = userEvent.setup()
     server(TEAM_MINE, undefined, (_path, init) =>
       init.method === 'POST' ? jsonResponse(409, { error: 'already_team_member' }) : undefined,
@@ -127,7 +124,7 @@ describe('TeamDetailsPage', () => {
   })
 
   it('affiche un compte introuvable (400 user_id)', async () => {
-    signInAs('admin')
+    signInAs('user')
     const user = userEvent.setup()
     server(TEAM_MINE, undefined, (_path, init) =>
       init.method === 'POST'
@@ -203,11 +200,7 @@ describe('TeamDetailsPage', () => {
       expect(screen.getByText('Seul le propriétaire peut modifier cette équipe et ses membres.')).toBeInTheDocument()
       expect(screen.queryByRole('link', { name: 'Modifier l’équipe' })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Supprimer l’équipe' })).not.toBeInTheDocument()
-      // L'ajout direct est réservé aux administrateurs globaux (comme côté serveur).
-      if (role === 'admin') expect(await screen.findByLabelText('Compte à ajouter')).toBeInTheDocument()
-      else expect(screen.queryByLabelText('Compte à ajouter')).not.toBeInTheDocument()
-      // Seul le propriétaire invite.
-      expect(screen.queryByRole('form', { name: 'Nouvelle invitation' })).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Compte à ajouter')).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /Retirer/ })).not.toBeInTheDocument()
       expect(screen.getByRole('img', { name: 'Aucune photo pour Vitality' })).toBeInTheDocument()
       expect(screen.getByText(/Tag : aucun/)).toBeInTheDocument()

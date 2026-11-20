@@ -4,7 +4,6 @@
 //! [`MemoryStore`] sert aux tests sans base.
 
 mod games;
-mod invitations;
 mod matches;
 mod memory;
 mod postgres;
@@ -15,11 +14,6 @@ mod teams;
 mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
-pub use self::invitations::{
-    Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
-    InvitationInput, InvitationStatus, InvitationType,
-};
-pub(crate) use self::invitations::{registration_open, role_of};
 pub use self::matches::{
     Bracket, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchResult,
     MatchScore, MatchStatus, MatchUpdate,
@@ -41,13 +35,13 @@ pub use self::teams::{
     TournamentTeamInput, TournamentTeamMember,
 };
 pub use self::tournaments::{
-    CheckInSettlement, FieldType, NamedParticipant, ParticipantChange, ParticipantImport,
-    ParticipantInput, ParticipantStatus, ParticipantType, RegistrationField, RegistrationPolicy,
-    RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringMode, ScoringRule,
+    CheckInSettlement, FieldType, Invitation, NamedParticipant, ParticipantChange,
+    ParticipantImport, ParticipantInput, ParticipantStatus, ParticipantType, RegistrationField,
+    RegistrationPolicy, RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringMode, ScoringRule,
     ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput,
     SettingsUpdate as TournamentSettingsUpdate, TeamScoringMode, Tournament, TournamentImport,
-    TournamentInput, TournamentInvitation, TournamentMode, TournamentParticipant, TournamentRole,
-    TournamentSettings, TournamentStatus, TournamentUpdate, Visibility, no_responses,
+    TournamentInput, TournamentMode, TournamentParticipant, TournamentRole, TournamentSettings,
+    TournamentStatus, TournamentUpdate, Visibility, no_responses,
 };
 
 use async_trait::async_trait;
@@ -175,14 +169,6 @@ pub enum StoreError {
     MatchState,
     /// L'adresse e-mail est déjà utilisée par un autre compte.
     EmailTaken,
-    /// Une invitation en attente existe déjà pour ce compte et cette ressource.
-    InvitationDuplicate,
-    /// L'invitation n'est plus en attente (acceptée, refusée ou révoquée).
-    InvitationNotPending,
-    /// L'invitation a expiré ; son statut `expired` est enregistré.
-    InvitationExpired,
-    /// La ressource visée n'existe plus ou n'accepte plus de nouveau membre ou participant.
-    InvitationUnavailable,
     /// L'équipe de tournoi a atteint la limite de titulaires ou de remplaçants (la valeur).
     TeamRosterFull(i32),
     Other(String),
@@ -212,12 +198,6 @@ impl fmt::Display for StoreError {
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
-            StoreError::InvitationDuplicate => f.write_str("invitation déjà en attente"),
-            StoreError::InvitationNotPending => f.write_str("invitation plus en attente"),
-            StoreError::InvitationExpired => f.write_str("invitation expirée"),
-            StoreError::InvitationUnavailable => {
-                f.write_str("ressource de l'invitation indisponible")
-            }
             StoreError::TeamRosterFull(limit) => write!(f, "équipe limitée à {limit} joueurs"),
             StoreError::Other(detail) => f.write_str(detail),
         }
@@ -738,10 +718,7 @@ pub trait AuthStore: Send + Sync {
     async fn list_role_audit(&self, tournament_id: Uuid)
     -> Result<Vec<RoleAuditEntry>, StoreError>;
 
-    async fn list_tournament_invitations(
-        &self,
-        tournament_id: Uuid,
-    ) -> Result<Vec<TournamentInvitation>, StoreError>;
+    async fn list_invitations(&self, tournament_id: Uuid) -> Result<Vec<Invitation>, StoreError>;
 
     /// Invite le compte (sans effet s'il l'est déjà) ; `None` si le tournoi ou le compte
     /// n'existe pas.
@@ -750,7 +727,7 @@ pub trait AuthStore: Send + Sync {
         tournament_id: Uuid,
         user_id: Uuid,
         invited_by: Uuid,
-    ) -> Result<Option<TournamentInvitation>, StoreError>;
+    ) -> Result<Option<Invitation>, StoreError>;
 
     /// Retire l'invitation ; `false` s'il n'y en avait pas.
     async fn remove_invitation(
@@ -916,48 +893,4 @@ pub trait AuthStore: Send + Sync {
         token_hash: &str,
         password_hash: &str,
     ) -> Result<bool, StoreError>;
-
-    /// Crée l'invitation `pending` et son événement `created`, en une seule opération ;
-    /// [`StoreError::InvitationDuplicate`] si une invitation en attente existe déjà pour ce
-    /// compte et cette ressource.
-    async fn create_invitation(&self, input: InvitationInput) -> Result<Invitation, StoreError>;
-
-    async fn find_invitation(&self, id: Uuid) -> Result<Option<Invitation>, StoreError>;
-
-    /// Invitation dont le lien a cette empreinte.
-    async fn find_invitation_by_token(
-        &self,
-        token_hash: &str,
-    ) -> Result<Option<Invitation>, StoreError>;
-
-    /// Invitations, les plus récentes d'abord, avec leur nombre total hors pagination.
-    async fn list_invitations(
-        &self,
-        filter: InvitationFilter,
-    ) -> Result<(Vec<Invitation>, i64), StoreError>;
-
-    /// Historique de l'invitation, du plus ancien au plus récent.
-    async fn list_invitation_events(&self, id: Uuid) -> Result<Vec<InvitationEvent>, StoreError>;
-
-    /// Applique la réponse `action` de `actor` à l'invitation, en une seule opération atomique
-    /// protégée contre les accès concurrents : revérifie le statut et l'expiration, puis, pour
-    /// `Accept`, crée l'adhésion ou l'inscription en revalidant les règles de la ressource
-    /// (droits actuels de l'invitant, existence, statut, fenêtre d'inscription, politique
-    /// d'approbation, liste d'attente, capacité et doublons), change le statut et
-    /// trace l'événement. `None` si l'invitation n'existe pas, [`StoreError::InvitationNotPending`]
-    /// si elle n'est plus en attente, [`StoreError::InvitationExpired`] si elle a expiré (le
-    /// statut `expired` est alors enregistré), [`StoreError::InvitationUnavailable`] si la
-    /// ressource n'accepte plus l'invité, et les erreurs d'adhésion ou d'inscription
-    /// (`AlreadyTeamMember`, `PlayerAlreadyRegistered`, `AlreadyParticipant`, `TournamentFull`).
-    /// Une invitation par lien reste `pending` jusqu'à `max_uses` acceptations.
-    async fn respond_invitation(
-        &self,
-        id: Uuid,
-        actor: Uuid,
-        action: InvitationAction,
-    ) -> Result<Option<Invitation>, StoreError>;
-
-    /// Passe en `expired` les invitations en attente dont l'échéance est dépassée, avec leur
-    /// événement, et les renvoie.
-    async fn expire_invitations(&self) -> Result<Vec<Invitation>, StoreError>;
 }
