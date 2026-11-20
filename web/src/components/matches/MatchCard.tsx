@@ -107,7 +107,7 @@ export function MatchCard({
         {match.scheduled_at ? (
           <span className="inline-flex items-center gap-1">
             <Icon icon={Calendar03Icon} size={14} />
-            <span className="sr-only">{t('matches.scheduledAt')} : </span>
+            <span className="sr-only">{t('matches.scheduledAt')}{t('common.colon')} </span>
             <time dateTime={match.scheduled_at}>{formatDateTime(lang, match.scheduled_at)}</time>
           </span>
         ) : null}

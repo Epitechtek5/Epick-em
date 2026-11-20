@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { themeStore } from '@/lib/theme/theme-store'
 import { ThemeToggle } from './ThemeToggle'
 
 afterEach(() => {
@@ -7,10 +8,12 @@ afterEach(() => {
   localStorage.removeItem('epickem-theme')
   document.documentElement.classList.remove('dark')
   document.documentElement.style.colorScheme = ''
+  themeStore.reload()
 })
 
 it('active le mode sombre par défaut et conserve le choix après remontage', async () => {
   localStorage.removeItem('epickem-theme')
+  themeStore.reload()
   const user = userEvent.setup()
   const view = render(<ThemeToggle />)
   expect(document.documentElement).toHaveClass('dark')

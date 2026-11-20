@@ -37,7 +37,7 @@ export function MatchStatusBadge({ status, className }: { status: MatchStatus; c
       ) : (
         <Icon icon={STATUS_ICONS[status]} size={14} />
       )}
-      <span className="sr-only">{t('matches.statusLabel')} : </span>
+      <span className="sr-only">{t('matches.statusLabel')}{t('common.colon')} </span>
       {t(matchStatusLabelKey(status))}
     </span>
   )
@@ -52,7 +52,7 @@ export function BracketChip({ bracket }: { bracket: Bracket }) {
   const { t } = useI18n()
   return (
     <span className={cn(BADGE, 'bg-background font-medium text-foreground/80 ring-foreground/15')}>
-      <span className="sr-only">{t('matches.bracketLabel')} : </span>
+      <span className="sr-only">{t('matches.bracketLabel')}{t('common.colon')} </span>
       {t(bracketLabelKey(bracket))}
     </span>
   )

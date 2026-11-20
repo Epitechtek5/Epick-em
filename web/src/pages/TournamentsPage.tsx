@@ -1,11 +1,4 @@
-import {
-  Add01Icon,
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
-  ChampionIcon,
-  Download04Icon,
-  RefreshIcon,
-} from '@hugeicons/core-free-icons'
+import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, ChampionIcon, Download04Icon, RefreshIcon, Task01Icon } from '@hugeicons/core-free-icons'
 import { Link, useLocation, useSearchParams } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
@@ -116,6 +109,13 @@ export default function TournamentsPage() {
                 >
                   <Icon icon={Download04Icon} />
                   {t('tournaments.transfer')}
+                </Link>
+                <Link
+                  to="/tournament-templates"
+                  className={cn(buttonVariants({ variant: 'outline' }), 'border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white')}
+                >
+                  <Icon icon={Task01Icon} />
+                  {t('tournaments.templates.link')}
                 </Link>
                 <Link to="/tournaments/new" className={cn(buttonVariants(), 'bg-white text-violet-800 hover:bg-violet-50')}>
                   <Icon icon={Add01Icon} />

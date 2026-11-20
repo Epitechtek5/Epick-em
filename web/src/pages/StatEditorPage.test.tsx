@@ -57,7 +57,7 @@ describe('création', () => {
 
     expect(await screen.findByText('La statistique Éliminations a été créée.')).toBeInTheDocument()
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!
-    expect(JSON.parse(post[1].body as string)).toEqual({ name: 'Éliminations', key: 'kills', type: 'percent' })
+    expect(JSON.parse(post[1].body as string)).toEqual({ name: 'Éliminations', key: 'kills', type: 'percent', scope: 'participant' })
   })
 
   it('signale une clé déjà prise (409 stat_key_taken) sur le champ clé', async () => {
@@ -158,5 +158,53 @@ describe('modification', () => {
     renderApp('/stats/pas-un-uuid/edit')
     expect(await screen.findByRole('alert')).toHaveTextContent('identifiant de statistique n’est pas valide')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('statistiques à choix et MVP', () => {
+  it('crée un choix de portée partie ; la portée suit le type', async () => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    const created = { id: STAT_A.id, name: 'Carte', key: 'map', type: 'select', scope: 'match' }
+    const fetchMock = routeFetch((_path, init) => (init.method === 'POST' ? jsonResponse(201, created) : jsonResponse(200, [created])))
+    renderApp('/stats/new')
+
+    await user.type(await screen.findByLabelText('Nom'), 'Carte')
+    await user.type(screen.getByLabelText('Clé'), 'map')
+    const scope = screen.getByLabelText('S’applique à')
+    expect(scope).toBeDisabled()
+    await user.selectOptions(screen.getByLabelText('Type'), 'mvp')
+    expect(scope).toHaveValue('match')
+    expect(scope).toBeDisabled()
+    await user.selectOptions(screen.getByLabelText('Type'), 'select')
+    expect(scope).toBeEnabled()
+    expect(screen.getByText(/Choix parmi des valeurs configurées pour chaque jeu/)).toBeInTheDocument()
+    await user.selectOptions(scope, 'match')
+    await user.click(screen.getByRole('button', { name: 'Créer une statistique' }))
+
+    expect(await screen.findByText('La statistique Carte a été créée.')).toBeInTheDocument()
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!
+    expect(JSON.parse(post[1].body as string)).toEqual({ name: 'Carte', key: 'map', type: 'select', scope: 'match' })
+  })
+
+  it('en modification, un numérique ne peut pas devenir un choix ; le refus du serveur s’affiche sur le champ', async () => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    const select = { ...STAT_A, name: 'Agent', key: 'agent', type: 'select', scope: 'participant' }
+    routeFetch((_path, init) =>
+      init.method === 'PATCH'
+        ? jsonResponse(400, { error: 'validation', errors: { scope: 'Une statistique `select` est de portée `participant`.' } })
+        : jsonResponse(200, select),
+    )
+    renderApp(`/stats/${STAT_A.id}/edit`)
+
+    const type = await screen.findByLabelText('Type')
+    expect(type).toHaveValue('select')
+    expect(screen.getByRole('option', { name: 'Valeur brute (flat)' })).toBeDisabled()
+    expect(screen.getByRole('option', { name: 'MVP (mvp)' })).toBeEnabled()
+    await user.selectOptions(screen.getByLabelText('S’applique à'), 'match')
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Choisissez une portée compatible avec ce type.')
+    expect(screen.getByLabelText('S’applique à')).toHaveAttribute('aria-invalid', 'true')
   })
 })
