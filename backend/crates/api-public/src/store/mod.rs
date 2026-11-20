@@ -761,7 +761,8 @@ pub trait AuthStore: Send + Sync {
 
     async fn has_invitation(&self, tournament_id: Uuid, user_id: Uuid) -> Result<bool, StoreError>;
 
-    /// Points per participant, summed across tournament steps.
+    /// Points de chaque inscrit (par identifiant d'inscription), somme de ses points dans les
+    /// étapes du tournoi ; un inscrit absent d'une étape n'a aucun point.
     async fn participant_points(
         &self,
         tournament_id: Uuid,

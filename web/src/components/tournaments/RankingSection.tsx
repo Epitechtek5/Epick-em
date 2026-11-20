@@ -24,7 +24,7 @@ const MEDALS: Record<number, { tone: string; height: string }> = {
   3: { tone: 'bg-orange-100 text-orange-900 ring-orange-500/40 dark:bg-orange-400/20 dark:text-orange-100', height: 'sm:min-h-44' },
 }
 
-function Podium({ entries }: { entries: Array<{ key: string; rank: number; name: string; points: string }> }) {
+export function Podium({ entries }: { entries: Array<{ key: string; rank: number; name: string; points: string }> }) {
   const { t } = useI18n()
   const top = entries.filter((entry) => entry.rank <= 3).slice(0, 3)
   if (top.length === 0) return null

@@ -1,14 +1,16 @@
-import { ArrowLeft01Icon } from '@hugeicons/core-free-icons'
+import { ArrowLeft01Icon, ChampionIcon, UserGroupIcon, UserIcon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
+import { InvitationsSection } from '@/components/invitations/InvitationsSection'
 import { TeamMembersSection } from '@/components/teams/TeamMembersSection'
 import { TeamOverview } from '@/components/teams/TeamOverview'
-import { Button, buttonVariants } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { readNotice } from '@/features/games/notice'
-import { deleteTournamentTeam, getTournamentTeam } from '@/features/teams/api'
+import { deleteTournamentTeam, getTournamentTeam, listTournamentTeamMembers } from '@/features/teams/api'
 import { teamErrorKey } from '@/features/teams/errors'
 import { isUuid, ownsTeam } from '@/features/teams/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -23,7 +25,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 export default function TournamentTeamDetailsPage() {
   const { id = '' } = useParams()
   const { t } = useI18n()
-  const { userId } = useAuth()
+  const { userId, isAdmin } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(id)
@@ -57,26 +59,16 @@ export default function TournamentTeamDetailsPage() {
 
   if (!valid) {
     return (
-      <div className="grid w-full max-w-5xl gap-4 self-start">
-        <h1 className="text-3xl font-semibold tracking-tight">{t('tournamentTeams.details')}</h1>
+      <div className="grid w-full max-w-6xl gap-6 self-start">
+        <PageHero icon={UserGroupIcon} title={t('tournamentTeams.details')} />
         <StateMessage kind="error">{t('teams.errors.invalidId')}</StateMessage>
       </div>
     )
   }
 
   return (
-    <div className="grid w-full max-w-5xl gap-8 self-start">
-      {team ? (
-        <div>
-          <Link
-            to={`/tournaments/${team.tournament_id}/teams`}
-            className={buttonVariants({ variant: 'outline', size: 'sm' })}
-          >
-            <Icon icon={ArrowLeft01Icon} />
-            {t('tournamentTeams.returnToList')}
-          </Link>
-        </div>
-      ) : null}
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      {!team ? <PageHero icon={UserGroupIcon} title={t('tournamentTeams.details')} /> : null}
 
       {notice ? <StateMessage kind="success">{t(notice.key, notice.params)}</StateMessage> : null}
 
@@ -86,7 +78,6 @@ export default function TournamentTeamDetailsPage() {
 
       {state.status === 'error' ? (
         <>
-          <h1 className="text-3xl font-semibold tracking-tight">{t('tournamentTeams.details')}</h1>
           <StateMessage
             kind="error"
             action={
@@ -107,9 +98,10 @@ export default function TournamentTeamDetailsPage() {
             tag={team.tag}
             pictureUrl={team.picture_url}
             details={[
-              { label: t('tournamentTeams.kind'), value: t('tournamentTeams.kindValue') },
+              { label: t('tournamentTeams.kind'), icon: UserGroupIcon, value: t('tournamentTeams.kindValue') },
               {
                 label: t('tournamentTeams.tournament'),
+                icon: ChampionIcon,
                 value: (
                   <Link to={`/tournaments/${team.tournament_id}`} className="font-mono text-primary underline underline-offset-4">
                     {team.tournament_id}
@@ -118,6 +110,7 @@ export default function TournamentTeamDetailsPage() {
               },
               {
                 label: t('teams.owner'),
+                icon: UserIcon,
                 value: `${owners[team.owner_id] ?? t('teams.unknownUser')}${canManage ? ` (${t('teams.you')})` : ''}`,
               },
               {
@@ -131,6 +124,12 @@ export default function TournamentTeamDetailsPage() {
                 ),
               },
             ]}
+            back={
+              <Link to={`/tournaments/${team.tournament_id}/teams`} className={HERO_BACK}>
+                <Icon icon={ArrowLeft01Icon} size={16} />
+                {t('tournamentTeams.returnToList')}
+              </Link>
+            }
             canManage={canManage}
             editTo={`/tournament-teams/${team.id}/edit`}
             deleteLabels={{
@@ -146,7 +145,24 @@ export default function TournamentTeamDetailsPage() {
           />
           {team.team_id ? <p className="text-sm text-muted-foreground">{t('tournamentTeams.independent')}</p> : null}
           {!canManage ? <p className="text-sm text-muted-foreground">{t('teams.readOnly')}</p> : null}
-          <TeamMembersSection scope="tournament" teamId={team.id} ownerId={team.owner_id} canManage={canManage} />
+          <TeamMembersSection
+            scope="tournament"
+            teamId={team.id}
+            ownerId={team.owner_id}
+            canManage={canManage}
+            canAdd={isAdmin}
+          />
+          {canManage ? (
+            <InvitationsSection
+              type="tournament_team"
+              resourceId={team.id}
+              resourceName={team.name}
+              hint={t('invitations.manage.teamHint')}
+              loadExcluded={(signal) =>
+                listTournamentTeamMembers(team.id, signal).then((members) => members.map((member) => member.user_id))
+              }
+            />
+          ) : null}
         </>
       ) : null}
     </div>

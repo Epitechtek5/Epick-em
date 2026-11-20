@@ -1,6 +1,8 @@
+import { ArrowLeft01Icon, GameController01Icon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { GameForm } from '@/components/games/GameForm'
 import { StateMessage } from '@/components/games/StateMessage'
 import { Button } from '@/components/ui/button'
@@ -10,6 +12,7 @@ import type { GameField, GameValues } from '@/features/games/types'
 import { changedGameFields, isGameId } from '@/features/games/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { Icon } from '@/components/ui/icon'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -82,8 +85,17 @@ export default function GameEditorPage() {
   const title = editing ? t('games.edit') : t('games.create')
 
   return (
-    <div className="grid w-full max-w-2xl gap-6 self-start">
-      <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
+    <div className="grid w-full max-w-3xl gap-6 self-start">
+      <PageHero
+        icon={GameController01Icon}
+        title={title}
+        back={
+          <Link to={editing && valid ? `/games/${id}` : '/games'} className={HERO_BACK}>
+            <Icon icon={ArrowLeft01Icon} size={16} />
+            {t('games.returnToCatalog')}
+          </Link>
+        }
+      />
 
       {!valid ? (
         <StateMessage

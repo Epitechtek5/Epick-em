@@ -1,6 +1,8 @@
 import {
   Calendar03Icon,
+  CheckListIcon,
   FloppyDiskIcon,
+  Globe02Icon,
   InformationCircleIcon,
   LockedIcon,
   UserGroupIcon,
@@ -18,24 +20,40 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Textarea } from '@/components/ui/textarea'
 import type { Game } from '@/features/games/types'
-import { participantTypeLabelKey, teamScoringLabelKey } from '@/features/tournaments/labels'
+import {
+  modeLabelKey,
+  participantTypeLabelKey,
+  policyLabelKey,
+  teamScoringLabelKey,
+  visibilityLabelKey,
+} from '@/features/tournaments/labels'
 import {
   PARTICIPANT_TYPES,
+  REGISTRATION_POLICIES,
   TEAM_SCORING_MODES,
+  TOURNAMENT_MODES,
+  VISIBILITIES,
+  type RegistrationPolicy,
   type TeamScoringMode,
+  type TournamentMode,
   type TournamentField,
   type TournamentFieldErrors,
   type TournamentValues,
+  type Visibility,
 } from '@/features/tournaments/types'
 import {
   CAPACITY_MAX,
   DESCRIPTION_MAX,
   EMPTY_TOURNAMENT,
+  FIELDS_MAX,
+  LOCATION_MAX,
+  RULES_MAX,
   TEAM_SIZE_MAX,
   validateTournament,
 } from '@/features/tournaments/validation'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { cn } from '@/lib/utils'
+import { RegistrationFieldsEditor } from './RegistrationFieldsEditor'
 import { FormSection } from './ui'
 
 const IDS: Record<TournamentField, string> = {
@@ -47,10 +65,21 @@ const IDS: Record<TournamentField, string> = {
   registration_open_at: 'tournament-registration-open',
   registration_close_at: 'tournament-registration-close',
   participant_type: 'tournament-type-solo',
-  team_size: 'tournament-team-size',
   max_participants: 'tournament-capacity',
   team_scoring_mode: 'tournament-team-scoring',
   team_scoring_n: 'tournament-team-scoring-n',
+  mode: 'tournament-mode',
+  location: 'tournament-location',
+  visibility: 'tournament-visibility',
+  rules: 'tournament-rules',
+  team_min_starters: 'tournament-min-starters',
+  team_max_starters: 'tournament-max-starters',
+  team_max_substitutes: 'tournament-max-substitutes',
+  registration_policy: 'tournament-registration-policy',
+  waiting_list_enabled: 'tournament-waiting-list',
+  registration_fields: 'tournament-registration-fields',
+  check_in_open_at: 'tournament-check-in-open',
+  check_in_close_at: 'tournament-check-in-close',
 }
 const ORDER: TournamentField[] = [
   'game_id',
@@ -60,19 +89,40 @@ const ORDER: TournamentField[] = [
   'end_date',
   'registration_open_at',
   'registration_close_at',
+  'mode',
+  'location',
+  'visibility',
+  'rules',
   'participant_type',
-  'team_size',
+  'team_min_starters',
+  'team_max_starters',
+  'team_max_substitutes',
   'max_participants',
   'team_scoring_mode',
   'team_scoring_n',
+  'registration_policy',
+  'waiting_list_enabled',
+  'registration_fields',
+  'check_in_open_at',
+  'check_in_close_at',
 ]
+
+// Borne affichée dans le message d'erreur de chaque champ.
+const LIMITS: Partial<Record<TournamentField, number>> = {
+  max_participants: CAPACITY_MAX,
+  location: LOCATION_MAX,
+  rules: RULES_MAX,
+  registration_fields: FIELDS_MAX,
+}
 
 interface TournamentFormProps {
   initial?: TournamentValues
   // Création : liste des jeux (le jeu et le type de participant ne se changent plus ensuite).
   games?: Game[]
-  // Tournoi en cours ou terminé : capacité, taille d'équipe et score d'équipe verrouillés.
+  // Tournoi en cours ou terminé : capacité, composition des équipes et score d'équipe verrouillés.
   capacityLocked?: boolean
+  // Pointage verrouillé (tournoi en cours, ou clôture déjà traitée).
+  checkInLocked?: boolean
   submitLabel: string
   busy: boolean
   serverErrors?: TournamentFieldErrors
@@ -89,6 +139,7 @@ export function TournamentForm({
   initial = EMPTY_TOURNAMENT,
   games,
   capacityLocked = false,
+  checkInLocked = false,
   submitLabel,
   busy,
   serverErrors,
@@ -131,7 +182,7 @@ export function TournamentForm({
   const messages: Partial<Record<TournamentField, string>> = {}
   for (const field of ORDER) {
     const key = errors[field] ?? serverErrors?.[field]
-    if (key) messages[field] = t(key, { max: field === 'max_participants' ? CAPACITY_MAX : TEAM_SIZE_MAX })
+    if (key) messages[field] = t(key, { max: LIMITS[field] ?? TEAM_SIZE_MAX })
   }
   const items: ErrorSummaryItem[] = [
     ...ORDER.flatMap((field) => (messages[field] ? [{ fieldId: IDS[field], message: messages[field] }] : [])),
@@ -154,7 +205,12 @@ export function TournamentForm({
     </p>
   )
 
-  const dateField = (field: 'start_date' | 'end_date' | 'registration_open_at' | 'registration_close_at', label: string, required: boolean) => (
+  const dateField = (
+    field: 'start_date' | 'end_date' | 'registration_open_at' | 'registration_close_at' | 'check_in_open_at' | 'check_in_close_at',
+    label: string,
+    required: boolean,
+    disabled = false,
+  ) => (
     <div className="grid gap-2">
       <Label htmlFor={IDS[field]}>{label}</Label>
       <Input
@@ -162,8 +218,9 @@ export function TournamentForm({
         type="datetime-local"
         value={values[field]}
         required={required}
+        disabled={disabled}
         aria-invalid={messages[field] ? true : undefined}
-        aria-describedby={describe(field, 'tournament-dates-hint')}
+        aria-describedby={describe(field, field.startsWith('check_in') ? 'tournament-check-in-hint' : 'tournament-dates-hint')}
         onChange={(event) => set(field, event.target.value)}
       />
       {fieldError(field)}
@@ -241,6 +298,76 @@ export function TournamentForm({
           </div>
         </FormSection>
 
+        <FormSection icon={Globe02Icon} title={t('tournaments.sections.format')}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor={IDS.mode}>{t('tournaments.modeLabel')}</Label>
+              <NativeSelect
+                id={IDS.mode}
+                value={values.mode}
+                aria-describedby="tournament-mode-hint"
+                onChange={(event) => set('mode', event.target.value as TournamentMode)}
+              >
+                {TOURNAMENT_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {t(modeLabelKey(mode))}
+                  </option>
+                ))}
+              </NativeSelect>
+              {hint('tournament-mode-hint', t('tournaments.modeHint'))}
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor={IDS.visibility}>{t('tournaments.visibilityLabel')}</Label>
+              <NativeSelect
+                id={IDS.visibility}
+                value={values.visibility}
+                aria-describedby="tournament-visibility-hint"
+                onChange={(event) => set('visibility', event.target.value as Visibility)}
+              >
+                {VISIBILITIES.map((visibility) => (
+                  <option key={visibility} value={visibility}>
+                    {t(visibilityLabelKey(visibility))}
+                  </option>
+                ))}
+              </NativeSelect>
+              {hint(
+                'tournament-visibility-hint',
+                t(values.visibility === 'public' ? 'tournaments.visibilityHint.public' : 'tournaments.visibilityHint.invitation_only'),
+              )}
+            </div>
+          </div>
+          {values.mode !== 'online' ? (
+            <div className="grid gap-2">
+              <Label htmlFor={IDS.location}>{t('tournaments.locationOptional')}</Label>
+              <Input
+                id={IDS.location}
+                value={values.location}
+                autoComplete="off"
+                aria-invalid={messages.location ? true : undefined}
+                aria-describedby={describe('location', 'tournament-location-hint')}
+                onChange={(event) => set('location', event.target.value)}
+              />
+              {hint('tournament-location-hint', t('tournaments.locationHint', { max: LOCATION_MAX }))}
+              {fieldError('location')}
+            </div>
+          ) : null}
+          <div className="grid gap-2">
+            <Label htmlFor={IDS.rules}>{t('tournaments.rulesOptional')}</Label>
+            <Textarea
+              id={IDS.rules}
+              value={values.rules}
+              aria-invalid={messages.rules ? true : undefined}
+              aria-describedby={describe('rules', 'tournament-rules-hint')}
+              onChange={(event) => set('rules', event.target.value)}
+            />
+            {hint(
+              'tournament-rules-hint',
+              t('tournaments.rulesHint', { count: Array.from(values.rules.trim()).length, max: RULES_MAX }),
+            )}
+            {fieldError('rules')}
+          </div>
+        </FormSection>
+
         <FormSection
           icon={Calendar03Icon}
           title={t('tournaments.sections.dates')}
@@ -286,7 +413,9 @@ export function TournamentForm({
                       setValues((current) => ({
                         ...current,
                         participant_type: type,
-                        team_size: type === 'team' ? current.team_size : '',
+                        team_min_starters: type === 'team' ? current.team_min_starters : '',
+                        team_max_starters: type === 'team' ? current.team_max_starters : '',
+                        team_max_substitutes: type === 'team' ? current.team_max_substitutes : '',
                       }))
                     }
                     className="mt-1 size-4 shrink-0 accent-primary"
@@ -308,25 +437,65 @@ export function TournamentForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             {values.participant_type === 'team' ? (
+              <>
               <div className="grid gap-2">
-                <Label htmlFor={IDS.team_size}>{t('tournaments.teamSize')}</Label>
+                <Label htmlFor={IDS.team_min_starters}>{t('tournaments.minStarters')}</Label>
                 <Input
-                  id={IDS.team_size}
+                  id={IDS.team_min_starters}
                   type="number"
                   inputMode="numeric"
                   min={1}
                   max={TEAM_SIZE_MAX}
                   step={1}
-                  value={values.team_size}
-                  required
+                  value={values.team_min_starters}
+                  required={true}
                   disabled={capacityLocked}
-                  aria-invalid={messages.team_size ? true : undefined}
-                  aria-describedby={describe('team_size', 'tournament-team-size-hint', lockedHint)}
-                  onChange={(event) => set('team_size', event.target.value)}
+                  aria-invalid={messages.team_min_starters ? true : undefined}
+                  aria-describedby={describe('team_min_starters', 'tournament-team-min-starters-hint', lockedHint)}
+                  onChange={(event) => set('team_min_starters', event.target.value)}
                 />
-                {hint('tournament-team-size-hint', t('tournaments.teamSizeHint', { max: TEAM_SIZE_MAX }))}
-                {fieldError('team_size')}
+                {hint('tournament-team-min-starters-hint', t('tournaments.minStartersHint', { max: TEAM_SIZE_MAX }))}
+                {fieldError('team_min_starters')}
               </div>
+              <div className="grid gap-2">
+                <Label htmlFor={IDS.team_max_starters}>{t('tournaments.maxStarters')}</Label>
+                <Input
+                  id={IDS.team_max_starters}
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={TEAM_SIZE_MAX}
+                  step={1}
+                  value={values.team_max_starters}
+                  required={true}
+                  disabled={capacityLocked}
+                  aria-invalid={messages.team_max_starters ? true : undefined}
+                  aria-describedby={describe('team_max_starters', 'tournament-team-max-starters-hint', lockedHint)}
+                  onChange={(event) => set('team_max_starters', event.target.value)}
+                />
+                {hint('tournament-team-max-starters-hint', t('tournaments.maxStartersHint', { max: TEAM_SIZE_MAX }))}
+                {fieldError('team_max_starters')}
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor={IDS.team_max_substitutes}>{t('tournaments.maxSubstitutesOptional')}</Label>
+                <Input
+                  id={IDS.team_max_substitutes}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={TEAM_SIZE_MAX}
+                  step={1}
+                  value={values.team_max_substitutes}
+                  required={false}
+                  disabled={capacityLocked}
+                  aria-invalid={messages.team_max_substitutes ? true : undefined}
+                  aria-describedby={describe('team_max_substitutes', 'tournament-team-max-substitutes-hint', lockedHint)}
+                  onChange={(event) => set('team_max_substitutes', event.target.value)}
+                />
+                {hint('tournament-team-max-substitutes-hint', t('tournaments.maxSubstitutesHint', { max: TEAM_SIZE_MAX }))}
+                {fieldError('team_max_substitutes')}
+              </div>
+              </>
             ) : null}
 
             <div className="grid gap-2">
@@ -400,6 +569,72 @@ export function TournamentForm({
                 {fieldError('team_scoring_n')}
               </div>
             ) : null}
+          </div>
+        </FormSection>
+
+        <FormSection icon={CheckListIcon} title={t('tournaments.sections.registration')}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor={IDS.registration_policy}>{t('tournaments.policyLabel')}</Label>
+              <NativeSelect
+                id={IDS.registration_policy}
+                value={values.registration_policy}
+                aria-describedby="tournament-policy-hint"
+                onChange={(event) => set('registration_policy', event.target.value as RegistrationPolicy)}
+              >
+                {REGISTRATION_POLICIES.map((policy) => (
+                  <option key={policy} value={policy}>
+                    {t(policyLabelKey(policy))}
+                  </option>
+                ))}
+              </NativeSelect>
+              {hint(
+                'tournament-policy-hint',
+                t(values.registration_policy === 'open' ? 'tournaments.policyHint.open' : 'tournaments.policyHint.approval_required'),
+              )}
+            </div>
+            <div className="grid content-start gap-2">
+              <label className="flex items-center gap-2 pt-7 text-sm font-medium">
+                <input
+                  id={IDS.waiting_list_enabled}
+                  type="checkbox"
+                  className="size-4 accent-primary"
+                  checked={values.waiting_list_enabled}
+                  aria-describedby="tournament-waiting-list-hint"
+                  onChange={(event) => set('waiting_list_enabled', event.target.checked)}
+                />
+                {t('tournaments.waitingList')}
+              </label>
+              {hint('tournament-waiting-list-hint', t('tournaments.waitingListHint'))}
+            </div>
+          </div>
+
+          <fieldset className="grid gap-2">
+            <legend className="text-sm font-medium">{t('tournaments.fields.title')}</legend>
+            {hint('tournament-fields-hint', t('tournaments.fields.hint', { max: FIELDS_MAX }))}
+            <RegistrationFieldsEditor
+              id={IDS.registration_fields}
+              fields={values.registration_fields}
+              invalid={Boolean(messages.registration_fields)}
+              describedBy={describe('registration_fields', 'tournament-fields-hint')}
+              onChange={(fields) => set('registration_fields', fields)}
+            />
+            {fieldError('registration_fields')}
+          </fieldset>
+
+          <div className="grid gap-4 rounded-xl bg-muted/40 p-4 sm:grid-cols-2">
+            <p className="text-sm font-medium sm:col-span-2">{t('tournaments.checkInWindow')}</p>
+            {checkInLocked ? (
+              <p className="flex items-start gap-2 text-sm text-muted-foreground sm:col-span-2">
+                <Icon icon={LockedIcon} size={18} className="mt-0.5 shrink-0" />
+                {t('tournaments.checkInLockedHint')}
+              </p>
+            ) : null}
+            {dateField('check_in_open_at', t('tournaments.checkInOpenOptional'), false, checkInLocked)}
+            {dateField('check_in_close_at', t('tournaments.checkInCloseOptional'), false, checkInLocked)}
+            <p id="tournament-check-in-hint" className="text-sm text-muted-foreground sm:col-span-2">
+              {t('tournaments.checkInHint')}
+            </p>
           </div>
         </FormSection>
 

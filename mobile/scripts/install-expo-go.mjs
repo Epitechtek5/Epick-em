@@ -1,8 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import downloadModule from '../node_modules/@expo/cli/build/src/utils/downloadExpoGoAsync.js';
+
+// @expo/cli ships with `expo`; npm may hoist it or nest it under expo/node_modules.
+const requireFromExpo = createRequire(
+  createRequire(import.meta.url).resolve('expo/package.json'),
+);
+const downloadModule = requireFromExpo(
+  '@expo/cli/build/src/utils/downloadExpoGoAsync.js',
+);
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const packageJson = JSON.parse(

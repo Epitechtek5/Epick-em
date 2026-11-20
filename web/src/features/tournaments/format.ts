@@ -35,3 +35,16 @@ export function formatDateRange(lang: string, start: string, end: string): strin
 export function formatPoints(lang: string, points: number): string {
   return new Intl.NumberFormat(lang, { maximumFractionDigits: 2 }).format(points)
 }
+
+// Composition d'équipe : « Équipes de 5 » ou « Équipes de 3 à 5 titulaires ».
+export function teamFormatMessage(
+  min: number | null | undefined,
+  max: number | null | undefined,
+): { key: 'tournaments.formatTeam' | 'tournaments.formatTeamRange'; params: Record<string, number> } | null {
+  const low = min ?? max
+  const high = max ?? min
+  if (!low || !high) return null
+  return low === high
+    ? { key: 'tournaments.formatTeam', params: { size: low } }
+    : { key: 'tournaments.formatTeamRange', params: { min: low, max: high } }
+}

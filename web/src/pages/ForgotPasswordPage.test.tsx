@@ -2,6 +2,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { jsonResponse, mockFetch, renderApp, signInAs } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 type User = ReturnType<typeof userEvent.setup>
 
@@ -112,10 +113,10 @@ describe('ForgotPasswordPage', () => {
     const user = userEvent.setup()
     renderApp('/forgot-password')
 
-    await user.selectOptions(screen.getByLabelText('Langue'), 'en')
+    await chooseLanguage(user, 'en')
 
     expect(screen.getByRole('heading', { level: 1, name: 'Forgot password' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send the link' })).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Language'), 'fr')
+    await chooseLanguage(user, 'fr')
   })
 })
