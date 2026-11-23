@@ -60,10 +60,24 @@ pub enum ApiError {
     StepPositionTaken,
     /// Les inscriptions ne sont pas ouvertes.
     RegistrationClosed,
+    /// La fenêtre de pointage n'est pas ouverte.
+    CheckInClosed,
+    /// L'inscrit n'est pas dans le statut attendu pour cette opération.
+    InvalidParticipantState,
+    /// Le propriétaire du tournoi a changé entre-temps.
+    OwnershipChanged,
     /// Changement de statut impossible depuis le statut actuel.
     InvalidTransition,
     /// Adresse e-mail déjà utilisée par un autre compte.
     EmailTaken,
+    /// Invitation déjà en attente pour ce compte et cette ressource.
+    InvitationDuplicate,
+    /// Invitation acceptée, refusée ou révoquée.
+    InvitationNotPending,
+    /// Invitation expirée.
+    InvitationExpired,
+    /// Ressource de l'invitation disparue ou fermée.
+    InvitationUnavailable,
     /// Lien de réinitialisation du mot de passe inconnu, expiré ou déjà utilisé.
     InvalidResetToken,
     EmailUnverified,
@@ -92,6 +106,24 @@ pub enum ApiError {
     TwoFactorNotEnabled,
     /// Aucun enrôlement TOTP en attente de confirmation.
     TwoFactorNotPending,
+    /// Aperçu d'import inconnu, expiré ou déjà appliqué.
+    ImportPreviewExpired,
+    /// L'état de la base a changé depuis l'aperçu : il ne s'applique plus.
+    ImportPreviewStale,
+    /// L'aperçu contient des opérations destructives qui exigent une confirmation explicite.
+    ImportConfirmationRequired,
+    /// Le tournoi est géré par une source externe : il ne se modifie pas par l'API.
+    ExternallyManaged,
+    /// Le match a commencé (ou est terminé, annulé) : son pronostic ne change plus.
+    PredictionLocked,
+    /// Les réponses à cette question de Pick'em sont fermées.
+    PickemLocked,
+    /// Ce tournoi externe est déjà importé.
+    AlreadyImported,
+    /// Une synchronisation de ce tournoi externe est déjà en cours.
+    SyncInProgress,
+    /// La source externe ne répond pas, refuse la requête ou limite le débit.
+    ExternalUnavailable,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -124,6 +156,16 @@ impl ApiError {
                 "Identifiants ou jeton invalides",
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Action non autorisée"),
+            ApiError::PredictionLocked => (
+                StatusCode::CONFLICT,
+                "prediction_locked",
+                "Le match a commencé : le pronostic est verrouillé",
+            ),
+            ApiError::PickemLocked => (
+                StatusCode::CONFLICT,
+                "pickem_locked",
+                "Les réponses à cette question sont fermées",
+            ),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Ressource introuvable"),
             ApiError::Conflict => (
                 StatusCode::CONFLICT,
@@ -200,6 +242,21 @@ impl ApiError {
                 "registration_closed",
                 "Les inscriptions à ce tournoi ne sont pas ouvertes",
             ),
+            ApiError::CheckInClosed => (
+                StatusCode::CONFLICT,
+                "check_in_closed",
+                "La fenêtre de pointage de ce tournoi n'est pas ouverte",
+            ),
+            ApiError::InvalidParticipantState => (
+                StatusCode::CONFLICT,
+                "invalid_participant_state",
+                "Cet inscrit n'est pas dans le statut attendu pour cette opération",
+            ),
+            ApiError::OwnershipChanged => (
+                StatusCode::CONFLICT,
+                "ownership_changed",
+                "Le propriétaire du tournoi a changé : réessayez",
+            ),
             ApiError::InvalidTransition => (
                 StatusCode::CONFLICT,
                 "invalid_status_transition",
@@ -209,6 +266,26 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "email_taken",
                 "Cette adresse e-mail est déjà utilisée",
+            ),
+            ApiError::InvitationDuplicate => (
+                StatusCode::CONFLICT,
+                "invitation_already_pending",
+                "Une invitation est déjà en attente pour ce compte et cette ressource",
+            ),
+            ApiError::InvitationNotPending => (
+                StatusCode::CONFLICT,
+                "invitation_not_pending",
+                "Cette invitation n'est plus en attente",
+            ),
+            ApiError::InvitationExpired => (
+                StatusCode::GONE,
+                "invitation_expired",
+                "Cette invitation a expiré",
+            ),
+            ApiError::InvitationUnavailable => (
+                StatusCode::CONFLICT,
+                "invitation_unavailable",
+                "La ressource de cette invitation n'accepte plus de nouveau membre ou participant",
             ),
             ApiError::InvalidResetToken => (
                 StatusCode::BAD_REQUEST,
@@ -279,6 +356,41 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "two_factor_not_pending",
                 "Aucune activation de double authentification en cours",
+            ),
+            ApiError::ImportPreviewExpired => (
+                StatusCode::GONE,
+                "import_preview_expired",
+                "Aperçu d'import inconnu, expiré ou déjà appliqué",
+            ),
+            ApiError::ImportPreviewStale => (
+                StatusCode::CONFLICT,
+                "import_preview_stale",
+                "Les données ont changé depuis l'aperçu : refaites l'aperçu",
+            ),
+            ApiError::ImportConfirmationRequired => (
+                StatusCode::CONFLICT,
+                "import_confirmation_required",
+                "Cet import remplace des données existantes : confirmez explicitement",
+            ),
+            ApiError::ExternallyManaged => (
+                StatusCode::CONFLICT,
+                "externally_managed",
+                "Ce tournoi est géré par une source externe : il se modifie chez la source",
+            ),
+            ApiError::AlreadyImported => (
+                StatusCode::CONFLICT,
+                "already_imported",
+                "Ce tournoi externe est déjà importé",
+            ),
+            ApiError::SyncInProgress => (
+                StatusCode::CONFLICT,
+                "sync_in_progress",
+                "Une synchronisation de ce tournoi est déjà en cours",
+            ),
+            ApiError::ExternalUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "external_unavailable",
+                "La source externe est momentanément indisponible",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -74,7 +74,14 @@ export function StatusBadge({
   label: string;
   className?: string;
 }) {
-  const tone = STATUS_TONES[status] ?? STATUS_TONES.draft;
+  const invitationTones: Record<string, string> = {
+    accepted: 'finished',
+    declined: 'withdrawn',
+    revoked: 'cancelled',
+    expired: 'withdrawn',
+  };
+  const tone =
+    STATUS_TONES[invitationTones[status] ?? status] ?? STATUS_TONES.draft;
   return (
     <View
       className={cn(

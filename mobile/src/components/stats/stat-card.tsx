@@ -15,6 +15,19 @@ export function StatCard({ stat }: { stat: Stat }) {
           <Text variant="muted">{stat.key}</Text>
           <Text variant="muted">· {t(`stats.types.${stat.type}`)}</Text>
         </View>
+        <Text variant="muted">
+          {t(
+            'stats.scopes.' +
+              (stat.scope ?? (stat.type === 'mvp' ? 'match' : 'participant')),
+          )}
+        </Text>
+        {stat.type === 'select' && stat.options ? (
+          <Text variant="muted">
+            {stat.options.length
+              ? stat.options.map((option) => option.label).join(' · ')
+              : t('stats.noOptions')}
+          </Text>
+        ) : null}
       </CardContent>
     </Card>
   );

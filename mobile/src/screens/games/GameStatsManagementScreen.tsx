@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { Alert, ScrollView, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GameAdminGuard } from '@/components/games/game-admin-guard';
 import { StatCard } from '@/components/stats/stat-card';
@@ -118,6 +118,21 @@ function Management() {
         associated.data.map((stat) => (
           <View key={stat.id} className="gap-2">
             <StatCard stat={stat} />
+            {stat.type === 'select' ? (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onPress={() =>
+                  router.push({
+                    pathname:
+                      '/(authenticated)/games/[id]/stat-options/[statId]',
+                    params: { id, statId: stat.id },
+                  })
+                }
+              >
+                <Text>{t('stats.configureOptions')}</Text>
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               disabled={busy}
@@ -131,6 +146,9 @@ function Management() {
       ) : (
         <ScreenState message={t('stats.gameEmpty')} />
       )}
+      <Button onPress={() => router.push('/(authenticated)/stats/create')}>
+        <Text>{t('stats.create')}</Text>
+      </Button>
       <Text variant="large">{t('stats.available')}</Text>
       {catalog.loading && !catalog.data ? (
         <ScreenState loading message={t('stats.loading')} />

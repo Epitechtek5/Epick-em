@@ -10,7 +10,7 @@ export const outcomes = ['win', 'loss', 'draw'] as const;
 export type MatchStatus = (typeof statuses)[number];
 export type Bracket = (typeof brackets)[number];
 export type Result = (typeof outcomes)[number];
-export type FlatStats = Record<string, number>;
+export type FlatStats = Record<string, number | string>;
 export type TeamStats = {
   total: FlatStats;
   players?: Record<string, FlatStats>;
@@ -22,6 +22,7 @@ export interface Score {
   result: Result | null;
 }
 export interface MatchFields {
+  best_of?: 1 | 3 | 5;
   round: number | null;
   bracket: Bracket | null;
   scheduled_at: string | null;
@@ -33,6 +34,11 @@ export interface MatchInput extends MatchFields {
 }
 export type MatchChanges = Partial<Omit<MatchInput, 'group_id'>>;
 export interface Match extends MatchFields {
+  games?: MatchGame[];
+  number?: number | null;
+  next_slot?: number | null;
+  loser_next_match_id?: string | null;
+  loser_next_slot?: number | null;
   id: string;
   game_id: string;
   step_id: string;
@@ -42,6 +48,34 @@ export interface Match extends MatchFields {
   ended_at: string | null;
   created_at: string;
   updated_at: string;
-  participants: (Score & { points: number; match_id: string })[];
+  participants: (Score & {
+    points: number;
+    match_id: string;
+    slot?: number | null;
+    games_won?: number | null;
+  })[];
 }
 export type MatchOutcome = Match & { step_closed: CloseStepResult | null };
+
+export interface MatchGame {
+  id: string;
+  match_id: string;
+  number: number;
+  status: MatchStatus;
+  attributes: Record<string, string>;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+  participants: (Score & { points: number })[];
+}
+export interface GameResults {
+  attributes: Record<string, string>;
+  results: Score[];
+}
+export interface GameOutcome {
+  game: MatchGame;
+  match: Match;
+  series_finished: boolean;
+  step_closed: CloseStepResult | null;
+}

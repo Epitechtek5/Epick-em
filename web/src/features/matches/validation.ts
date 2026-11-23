@@ -3,6 +3,7 @@ import type { GroupRanking, Step } from '@/features/steps/types'
 import { parseInteger } from '@/features/steps/validation'
 import { fromLocalInput, toLocalInput } from '@/features/tournaments/validation'
 import type { MessageKey } from '@/i18n/context'
+import { BEST_OF } from './types'
 import type {
   FlatStats,
   Match,
@@ -16,6 +17,7 @@ import type {
   ResultEntry,
   ResultErrors,
   ResultRow,
+  ResultRowError,
   ResultRowErrors,
   TeamStats,
 } from './types'
@@ -55,6 +57,22 @@ export function matchesWritable(step: Pick<Step, 'status'>): boolean {
 
 const open = (match: Pick<Match, 'status'>) => match.status === 'scheduled' || match.status === 'ongoing'
 
+type SeriesLike = Pick<Match, 'status'> & Partial<Pick<Match, 'best_of' | 'games'>>
+
+// Match joué en parties (BO3, BO5, ou BO1 dont une partie a été ouverte) : ses résultats viennent
+// des parties et ne se saisissent plus directement (le serveur répond 400).
+export function isSeries(match: Partial<Pick<Match, 'best_of' | 'games'>>): boolean {
+  return (match.best_of ?? 1) > 1 || (match.games?.length ?? 0) > 0
+}
+
+// Match BO1 sans partie dont des résultats ont été saisis directement (ancien parcours).
+export function hasDirectResults(match: Pick<Match, 'participants'> & Partial<Pick<Match, 'games'>>): boolean {
+  return (
+    (match.games?.length ?? 0) === 0 &&
+    match.participants.some((participant) => participant.rank !== null || Object.keys(totalsOf(participant.stats)).length > 0)
+  )
+}
+
 export function canEditMatch(step: Pick<Step, 'status'>, match: Pick<Match, 'status'>): boolean {
   return matchesWritable(step) && open(match)
 }
@@ -69,17 +87,17 @@ export function canDeleteMatch(step: Pick<Step, 'status'>, match: Pick<Match, 's
   return matchesWritable(step) && match.status !== 'finished'
 }
 
-export function canEnterResults(step: Pick<Step, 'status'>, match: Pick<Match, 'status'>): boolean {
-  return matchesWritable(step) && open(match)
+export function canEnterResults(step: Pick<Step, 'status'>, match: SeriesLike): boolean {
+  return matchesWritable(step) && open(match) && !isSeries(match)
 }
 
 // scheduled → ongoing → finished, scheduled → finished, et cancelled tant que le match n'est pas
-// terminé.
-export function transitionsOf(step: Pick<Step, 'status'>, match: Pick<Match, 'status'>): MatchTransition[] {
+// terminé. Une série se termine d'elle-même avec sa partie décisive : pas de fin manuelle.
+export function transitionsOf(step: Pick<Step, 'status'>, match: SeriesLike): MatchTransition[] {
   if (!matchesWritable(step)) return []
-  if (match.status === 'scheduled') return ['ongoing', 'finished', 'cancelled']
-  if (match.status === 'ongoing') return ['finished', 'cancelled']
-  return []
+  const transitions: MatchTransition[] =
+    match.status === 'scheduled' ? ['ongoing', 'finished', 'cancelled'] : match.status === 'ongoing' ? ['finished', 'cancelled'] : []
+  return isSeries(match) ? transitions.filter((target) => target !== 'finished') : transitions
 }
 
 // ---- Match suivant (élimination) ----------------------------------------------------------------
@@ -107,7 +125,7 @@ export function nextCandidates(step: Pick<Step, 'format'>, matches: readonly Mat
 // ---- Formulaire de match ---------------------------------------------------------------------------
 
 export function emptyMatch(groupId = ''): MatchValues {
-  return { group_id: groupId, round: '', bracket: '', next_match_id: '', scheduled_at: '', participant_ids: [] }
+  return { group_id: groupId, round: '', bracket: '', next_match_id: '', best_of: '1', scheduled_at: '', participant_ids: [] }
 }
 
 export function matchValues(match: Match): MatchValues {
@@ -116,6 +134,7 @@ export function matchValues(match: Match): MatchValues {
     round: match.round === null ? '' : String(match.round),
     bracket: match.bracket ?? '',
     next_match_id: match.next_match_id ?? '',
+    best_of: String(match.best_of ?? 1),
     scheduled_at: toLocalInput(match.scheduled_at),
     participant_ids: match.participants.map((participant) => participant.participant_id),
   }
@@ -142,6 +161,7 @@ export function validateMatch(values: MatchValues, context: MatchContext): Match
     if (round === null || round < 1 || round > ROUND_MAX) errors.round = 'matches.validation.round'
   }
   if (values.bracket && !bracketAllowed(step)) errors.bracket = 'matches.validation.bracket'
+  if (!BEST_OF.includes(Number(values.best_of))) errors.best_of = 'matches.validation.bestOf'
 
   if (values.scheduled_at.trim() !== '' && fromLocalInput(values.scheduled_at) === null) {
     errors.scheduled_at = 'matches.validation.scheduledAt'
@@ -171,6 +191,7 @@ export function toMatchInput(values: MatchValues): MatchInput {
     round: values.round.trim() === '' ? null : parseInteger(values.round),
     bracket: values.bracket || null,
     next_match_id: values.next_match_id || null,
+    best_of: Number(values.best_of),
     scheduled_at: values.scheduled_at.trim() === '' ? null : fromLocalInput(values.scheduled_at),
     participant_ids: [...values.participant_ids],
   }
@@ -186,6 +207,8 @@ export function changedMatchFields(match: Match, input: MatchInput): MatchChange
   if (input.round !== match.round) changes.round = input.round
   if (input.bracket !== match.bracket) changes.bracket = input.bracket
   if (input.next_match_id !== match.next_match_id) changes.next_match_id = input.next_match_id
+  // Le format se fige dès la première partie.
+  if (input.best_of !== (match.best_of ?? 1) && canChangeFormat(match)) changes.best_of = input.best_of
   if (!sameInstant(input.scheduled_at, match.scheduled_at)) changes.scheduled_at = input.scheduled_at
   const before = match.participants.map((participant) => participant.participant_id)
   if (canEditParticipants(match) && before.join('\n') !== input.participant_ids.join('\n')) {
@@ -194,7 +217,46 @@ export function changedMatchFields(match: Match, input: MatchInput): MatchChange
   return changes
 }
 
+// Le format (BO1, BO3, BO5) ne change plus une fois une partie commencée.
+export function canChangeFormat(match: Partial<Pick<Match, 'games'>>): boolean {
+  return (match.games?.length ?? 0) === 0
+}
+
 // ---- Résultats --------------------------------------------------------------------------------------
+
+// Statistiques saisies par participant (ou joueur) : numériques et choix de portée participant.
+// Les attributs de partie (carte, MVP…) se saisissent sur la partie.
+export function participantStatsOf(stats: readonly Stat[]): Stat[] {
+  return stats.filter((stat) => stat.type === 'flat' || stat.type === 'percent' || (stat.type === 'select' && stat.scope === 'participant'))
+}
+
+// Problème d'une valeur saisie (null si elle est vide ou valide) : nombre fini de ±1 milliard,
+// pourcentage de 0 à 100, ou clé d'une valeur configurée pour un choix.
+export function statValueProblem(stat: Stat | undefined, raw: string): ResultRowError | null {
+  if (raw.trim() === '') return null
+  if (stat?.type === 'select') return stat.options?.some((option) => option.key === raw) ? null : 'matches.validation.statOption'
+  const number = parseDecimal(raw)
+  if (!stat || stat.type === 'mvp' || number === null || Math.abs(number) > STAT_VALUE_MAX) return 'matches.validation.statNumber'
+  if (stat.type === 'percent' && (number < 0 || number > 100)) return 'matches.validation.statPercent'
+  return null
+}
+
+// Valeurs à envoyer (déjà validées) : un nombre, ou la clé d'option d'un choix.
+export function statValues(values: Record<string, string>, stats: readonly Stat[]): FlatStats {
+  const byKey = new Map(stats.map((stat) => [stat.key, stat]))
+  const result: FlatStats = {}
+  for (const [key, raw] of Object.entries(values)) {
+    if (raw.trim() === '') continue
+    const stat = byKey.get(key)
+    if (stat?.type === 'select') {
+      result[key] = raw
+      continue
+    }
+    const number = parseDecimal(raw)
+    if (number !== null) result[key] = number
+  }
+  return result
+}
 
 export function isTeamStats(stats: ParticipantStats): stats is TeamStats {
   return typeof (stats as TeamStats).total === 'object' && (stats as TeamStats).total !== null
@@ -223,21 +285,15 @@ export function parseDecimal(value: string): number | null {
 }
 
 // Mêmes règles que le serveur (parse_stats) : statistiques du jeu, nombres finis de ±1 milliard,
-// pourcentages de 0 à 100 ; rang de 1 au nombre de participants.
+// pourcentages de 0 à 100, choix parmi les valeurs du jeu ; rang de 1 au nombre de participants.
 export function validateResults(rows: readonly ResultRow[], stats: readonly Stat[]): ResultErrors {
   const errors: ResultErrors = {}
   const byKey = new Map(stats.map((stat) => [stat.key, stat]))
   for (const row of rows) {
     const found: ResultRowErrors = {}
     for (const [key, raw] of Object.entries(row.stats)) {
-      if (raw.trim() === '') continue
-      const stat = byKey.get(key)
-      const number = parseDecimal(raw)
-      if (!stat || number === null || Math.abs(number) > STAT_VALUE_MAX) {
-        found.stats = { ...found.stats, [key]: 'matches.validation.statNumber' }
-      } else if (stat.type === 'percent' && (number < 0 || number > 100)) {
-        found.stats = { ...found.stats, [key]: 'matches.validation.statPercent' }
-      }
+      const problem = statValueProblem(byKey.get(key), raw)
+      if (problem) found.stats = { ...found.stats, [key]: problem }
     }
     if (row.rank.trim() !== '') {
       const rank = parseInteger(row.rank)
@@ -257,13 +313,13 @@ export function partialRanks(rows: readonly ResultRow[]): boolean {
 
 // À appeler sur des lignes validées. Le détail par joueur déjà enregistré est conservé : seul le
 // `total` d'une équipe change.
-export function toResultEntries(rows: readonly ResultRow[], participants: readonly MatchParticipant[]): ResultEntry[] {
+export function toResultEntries(
+  rows: readonly ResultRow[],
+  participants: readonly MatchParticipant[],
+  definitions: readonly Stat[] = [],
+): ResultEntry[] {
   return rows.map((row) => {
-    const values: FlatStats = {}
-    for (const [key, raw] of Object.entries(row.stats)) {
-      const number = parseDecimal(raw)
-      if (raw.trim() !== '' && number !== null) values[key] = number
-    }
+    const values = statValues(row.stats, definitions)
     const previous = participants.find((participant) => participant.participant_id === row.participant_id)?.stats
     const stats: ParticipantStats =
       previous && isTeamStats(previous) ? { ...previous, total: values } : values

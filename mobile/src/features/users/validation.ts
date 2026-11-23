@@ -9,13 +9,17 @@ import {
 export interface UserFormValues {
   username: string;
   email: string;
+  pictureUrl: string;
   password: string;
   confirmPassword: string;
   role: UserRole;
 }
 
 export type UserFormErrors = Partial<
-  Record<'username' | 'email' | 'password' | 'confirmPassword', string>
+  Record<
+    'username' | 'email' | 'pictureUrl' | 'password' | 'confirmPassword',
+    string
+  >
 >;
 
 export function validateUserForm(
@@ -36,6 +40,15 @@ export function validateUserForm(
     if (emailError) errors.email = emailError;
   } else if (originalEmail) {
     errors.email = 'validation.emailRemovalUnsupported';
+  }
+
+  const pictureUrl = form.pictureUrl.trim();
+  if (
+    pictureUrl &&
+    (!/^https?:\/\/\S+$/i.test(pictureUrl) ||
+      new TextEncoder().encode(pictureUrl).length > 2048)
+  ) {
+    errors.pictureUrl = 'validation.pictureUrl';
   }
 
   if (form.password) {

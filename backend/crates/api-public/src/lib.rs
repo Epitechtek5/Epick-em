@@ -1,6 +1,6 @@
 //! API publique : authentification (inscription, connexion, rafraîchissement, déconnexion,
 //! mot de passe oublié, connexion Google, double authentification), gestion des comptes, des jeux, des statistiques, des équipes et des
-//! tournois.
+//! tournois, l'import de tournois externes (start.gg…), les pronostics et le Pick'em.
 //! La documentation OpenAPI est servie sur `/docs` (Swagger UI) et `/openapi.json`.
 //!
 //! Les routes sont exposées sans préfixe : le front les appelle en `/api/*` et nginx (ou le
@@ -9,19 +9,38 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod export_cache;
+pub mod external;
 pub mod game_io;
 pub mod games;
+pub mod generation;
 pub mod google;
 pub mod guard;
+pub mod invitations;
 pub mod mail;
+pub mod match_corrections;
+mod match_evidence;
+pub mod match_games;
 pub mod match_io;
+mod match_reports;
+pub mod match_scheduling;
+pub mod match_workflows;
 pub mod matches;
+pub mod notifications;
 pub mod openapi;
 pub mod password_reset;
+pub mod pickem;
+pub mod predictions;
+pub mod projection;
+pub mod public_api;
+pub mod push;
 pub mod ranking;
+pub mod resolution;
 pub mod router;
 pub mod security;
+pub mod settings;
+mod standing;
 pub mod stat_io;
 pub mod stats;
 pub mod step_io;
@@ -30,12 +49,18 @@ pub mod store;
 pub mod team_io;
 pub mod teams;
 pub mod totp;
+mod tournament_access;
 pub mod tournament_io;
+pub mod tournament_roles;
+mod tournament_settings;
 pub mod tournament_team_io;
 pub mod tournament_teams;
+pub mod tournament_templates;
 pub mod tournaments;
 pub mod users;
 mod verification;
 
 pub use auth::AppState;
 pub use router::app;
+
+pub mod pickem_live;

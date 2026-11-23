@@ -25,7 +25,12 @@ export function statFieldErrors(error: unknown): StatFieldErrors {
 
   const fields: StatFieldErrors = {};
   for (const field of error.fields) {
-    if (field === 'name' || field === 'key' || field === 'type') {
+    if (
+      field === 'name' ||
+      field === 'key' ||
+      field === 'type' ||
+      field === 'scope'
+    ) {
       fields[field] = `stats.validation.${field}`;
     }
   }

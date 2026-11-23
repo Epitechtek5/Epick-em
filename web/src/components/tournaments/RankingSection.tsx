@@ -10,7 +10,7 @@ import { tournamentErrorKey } from '@/features/tournaments/errors'
 import { formatPoints } from '@/features/tournaments/format'
 import { teamScoringLabelKey } from '@/features/tournaments/labels'
 import { hasTeamRanking } from '@/features/tournaments/lifecycle'
-import type { Tournament } from '@/features/tournaments/types'
+import type { PlayerRank, Tournament } from '@/features/tournaments/types'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n } from '@/i18n/context'
@@ -24,7 +24,7 @@ const MEDALS: Record<number, { tone: string; height: string }> = {
   3: { tone: 'bg-orange-100 text-orange-900 ring-orange-500/40 dark:bg-orange-400/20 dark:text-orange-100', height: 'sm:min-h-44' },
 }
 
-function Podium({ entries }: { entries: Array<{ key: string; rank: number; name: string; points: string }> }) {
+export function Podium({ entries }: { entries: Array<{ key: string; rank: number; name: string; points: string }> }) {
   const { t } = useI18n()
   const top = entries.filter((entry) => entry.rank <= 3).slice(0, 3)
   if (top.length === 0) return null
@@ -76,7 +76,10 @@ export function RankingSection({
     [tournament.id, withTeams, version],
   )
   const playerRows = players.state.status === 'success' ? players.state.data : []
-  const names = useUsernames(playerRows.map((row) => row.user_id))
+  const names = useUsernames(playerRows.flatMap((row) => (row.user_id ? [row.user_id] : [])))
+  // Joueur, ou inscrit importé d'une source externe (nommé par la source, sans compte).
+  const playerName = (row: PlayerRank) =>
+    row.display_name ?? (row.user_id ? names[row.user_id] : undefined) ?? t('teams.unknownUser')
   const teamNames = new Map(teams.map((team) => [team.id, team.name]))
 
   const refresh = () => {
@@ -123,7 +126,7 @@ export function RankingSection({
               entries={playerRows.map((row) => ({
                 key: row.participant_id,
                 rank: row.rank,
-                name: names[row.user_id] ?? t('teams.unknownUser'),
+                name: playerName(row),
                 points: formatPoints(lang, row.points),
               }))}
             />
@@ -145,7 +148,7 @@ export function RankingSection({
                     <tr key={row.participant_id} className="border-b last:border-0">
                       <td className="px-4 py-2.5"><RankCell rank={row.rank} /></td>
                       <th scope="row" className="px-4 py-2.5 font-medium">
-                        {names[row.user_id] ?? t('teams.unknownUser')}
+                        {playerName(row)}
                       </th>
                       <td className="px-4 py-2.5">
                         {row.tournament_team_id ? (

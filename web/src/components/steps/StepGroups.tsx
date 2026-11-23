@@ -51,6 +51,7 @@ export function StepGroups({ tournament, step, version }: { tournament: Tourname
       ? (known?.teams.get(participant.tournament_team_id) ?? t('tournaments.participants.unknownTeam'))
       : undefined
     if (tournament.participant_type === 'team' && teamName) return { name: teamName }
+    if (participant.display_name) return { name: participant.display_name }
     if (participant.user_id) return { name: names[participant.user_id] ?? t('teams.unknownUser'), detail: teamName }
     return { name: teamName ?? t('steps.groups.unknownParticipant') }
   }
@@ -124,6 +125,9 @@ export function StepGroups({ tournament, step, version }: { tournament: Tourname
                     <thead>
                       <tr className="border-b bg-muted/60">
                         <th scope="col" className="px-3 py-2 font-medium">{t('steps.groups.rank')}</th>
+                        {group.participants.some((row) => row.seed != null) ? (
+                          <th scope="col" className="px-3 py-2 font-medium">{t('steps.groups.seed')}</th>
+                        ) : null}
                         <th scope="col" className="px-3 py-2 font-medium">{t('steps.groups.participant')}</th>
                         <th scope="col" className="px-3 py-2 text-right font-medium">{t('steps.groups.points')}</th>
                         <th scope="col" className="px-3 py-2 font-medium">{t('steps.groups.status')}</th>
@@ -140,6 +144,9 @@ export function StepGroups({ tournament, step, version }: { tournament: Tourname
                             <td className="px-3 py-2">
                               <span className="inline-grid size-7 place-items-center rounded-full font-mono text-xs font-bold">{row.rank}</span>
                             </td>
+                            {group.participants.some((other) => other.seed != null) ? (
+                              <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{row.seed != null ? `#${row.seed}` : '–'}</td>
+                            ) : null}
                             <th scope="row" className="px-3 py-2 font-medium">
                               <span className="flex min-w-0 items-center gap-2">
                                 <Avatar name={who.name} className="size-7" />

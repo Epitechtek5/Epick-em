@@ -127,6 +127,7 @@ impl SecurityStore for MemoryStore {
             role: Role::User,
             email: Some(email.to_string()),
             pending_email: None,
+            picture_url: None,
             email_verified_at: Some(now_rfc3339()),
         };
         state.users.push(user.clone());

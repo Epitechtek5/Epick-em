@@ -3,6 +3,7 @@
 use crate::auth::AppState;
 use crate::error::ApiError;
 use crate::export_cache::evict_on_write;
+use crate::external::protect_external;
 use crate::guard::require_auth;
 use crate::openapi::ApiDoc;
 use actix_web::body::MessageBody;
@@ -28,13 +29,27 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::verification::routes)
         .configure(crate::security::routes)
         .configure(crate::users::routes)
+        .configure(crate::settings::routes)
         .configure(crate::games::routes)
         .configure(crate::stats::routes)
         .configure(crate::teams::routes)
         .configure(crate::tournament_teams::routes)
+        .configure(crate::public_api::routes)
         .configure(crate::tournaments::routes)
+        .configure(crate::tournament_roles::routes)
+        .configure(crate::tournament_templates::routes)
         .configure(crate::steps::routes)
-        .configure(crate::matches::routes);
+        .configure(crate::generation::routes)
+        .configure(crate::matches::routes)
+        .configure(crate::match_games::routes)
+        .configure(crate::match_workflows::routes)
+        .configure(crate::match_corrections::routes)
+        .configure(crate::match_scheduling::routes)
+        .configure(crate::match_evidence::routes)
+        .configure(crate::invitations::routes)
+        .configure(crate::external::routes)
+        .configure(crate::predictions::routes)
+        .configure(crate::pickem::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).
@@ -61,6 +76,7 @@ pub fn app(
 > {
     let (app, spec) = App::new()
         .app_data(web::Data::new(state))
+        .app_data(web::PayloadConfig::new(5 * 1024 * 1024))
         // Corps JSON, identifiant ou paramètres invalides : même format d'erreur que les handlers.
         .app_data(web::JsonConfig::default().error_handler(|err, _| ApiError::from(err).into()))
         .app_data(web::PathConfig::default().error_handler(|_, _| ApiError::NotFound.into()))
@@ -72,7 +88,9 @@ pub fn app(
         .openapi(ApiDoc::openapi())
         .configure(api_routes)
         .split_for_parts();
-    app.wrap(from_fn(evict_on_write))
+    // Exécutés dans l'ordre inverse : authentification, invalidation du cache, lecture seule.
+    app.wrap(from_fn(protect_external))
+        .wrap(from_fn(evict_on_write))
         .wrap(from_fn(require_auth))
         .service(
             // URL relative à la page : fonctionne aussi sous `/api/docs/` derrière nginx ou Vite.

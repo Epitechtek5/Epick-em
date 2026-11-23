@@ -1,5 +1,7 @@
 export function tournamentLocale(language: string) {
-  return language.toLowerCase().startsWith('fr') ? 'fr-FR' : 'en-GB';
+  if (language.toLowerCase().startsWith('fr')) return 'fr-FR';
+  if (language.toLowerCase().startsWith('es')) return 'es-ES';
+  return 'en-GB';
 }
 
 export function formatTournamentDate(value: string, language: string) {

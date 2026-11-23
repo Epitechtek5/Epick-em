@@ -150,13 +150,22 @@ pub struct MemberImport {
 /// Instant présent au format des horodatages de l'API (`2026-10-26T14:03:09.123456Z`), pour le
 /// store en mémoire ; PostgreSQL produit le même format.
 pub(crate) fn now_rfc3339() -> String {
+    rfc3339_in(std::time::Duration::ZERO)
+}
+
+/// Instant présent décalé de `delay`, au même format que [`now_rfc3339`].
+pub(crate) fn rfc3339_in(delay: std::time::Duration) -> String {
     let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = since_epoch.as_secs();
-    let (days, rest) = (secs / 86_400, secs % 86_400);
+        .unwrap_or_default()
+        + delay;
+    unix_to_rfc3339(since_epoch.as_secs() as i64, since_epoch.subsec_micros())
+}
+
+pub(crate) fn unix_to_rfc3339(secs: i64, micros: u32) -> String {
+    let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Date civile depuis le nombre de jours écoulés depuis 1970 (algorithme de H. Hinnant).
-    let z = days as i64 + 719_468;
+    let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let day_of_era = z.rem_euclid(146_097);
     let year_of_era =
@@ -171,17 +180,25 @@ pub(crate) fn now_rfc3339() -> String {
     };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:06}Z",
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{micros:06}Z",
         rest / 3600,
         rest % 3600 / 60,
         rest % 60,
-        since_epoch.subsec_micros()
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unix_timestamps_are_formatted() {
+        assert_eq!(unix_to_rfc3339(0, 0), "1970-01-01T00:00:00.000000Z");
+        assert_eq!(
+            unix_to_rfc3339(1_709_251_200, 5),
+            "2024-03-01T00:00:00.000005Z"
+        );
+    }
 
     #[test]
     fn timestamp_has_the_postgres_shape() {

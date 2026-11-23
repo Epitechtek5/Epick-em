@@ -29,7 +29,14 @@ const RESOURCES: [&str; 4] = ["games", "stats", "teams", "tournaments"];
 const FORMATS: [Format; 2] = [Format::Json, Format::Csv];
 
 /// Routes d'écriture qui ne touchent à aucune donnée exportée.
-const NO_WRITE_PATHS: [&str; 5] = ["/login", "/login/2fa", "/refresh", "/logout", "/register"];
+const NO_WRITE_PATHS: [&str; 6] = [
+    "/login",
+    "/login/2fa",
+    "/refresh",
+    "/logout",
+    "/register",
+    "/tournaments/import/preview",
+];
 /// Préfixes des routes de connexion Google et de double authentification : aucune donnée
 /// exportée.
 const NO_WRITE_PREFIXES: [&str; 3] = ["/auth/", "/account/", "/2fa/"];
@@ -88,7 +95,9 @@ pub async fn evict_on_write(
 ) -> Result<ServiceResponse<BoxBody>, Error> {
     let writes = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
         && !NO_WRITE_PATHS.contains(&req.path())
-        && !NO_WRITE_PREFIXES.iter().any(|p| req.path().starts_with(p));
+        && !NO_WRITE_PREFIXES.iter().any(|p| req.path().starts_with(p))
+        // Les pronostics et le Pick'em ne font pas partie des exports.
+        && !crate::predictions::spectator_owned(req.path());
     let cache = writes
         .then(|| {
             req.app_data::<web::Data<AppState>>()

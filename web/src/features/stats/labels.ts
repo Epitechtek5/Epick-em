@@ -1,6 +1,17 @@
 import type { MessageKey } from '@/i18n/context'
-import type { StatType } from './types'
+import type { StatScope, StatType } from './types'
 
-export function statTypeLabelKey(type: StatType): MessageKey {
-  return type === 'flat' ? 'stats.typeFlat' : 'stats.typePercent'
+const TYPE: Record<StatType, MessageKey> = {
+  flat: 'stats.typeFlat',
+  percent: 'stats.typePercent',
+  select: 'stats.typeSelect',
+  mvp: 'stats.typeMvp',
 }
+
+const SCOPE: Record<StatScope, MessageKey> = {
+  participant: 'stats.scopeParticipant',
+  match: 'stats.scopeMatch',
+}
+
+export const statTypeLabelKey = (type: StatType): MessageKey => TYPE[type] ?? 'stats.typeFlat'
+export const statScopeLabelKey = (scope: StatScope): MessageKey => SCOPE[scope] ?? 'stats.scopeParticipant'

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 
 import { makeJwt } from '@/test/jwt'
 import { jsonResponse, mockFetch, renderApp, routeFetch, signInAs, STAT_A, STAT_B } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 describe('StatsPage', () => {
   it('affiche les statistiques du serveur : nom, clé et type', async () => {
@@ -31,11 +32,11 @@ describe('StatsPage', () => {
     renderApp('/stats')
     await screen.findByText('Aucune statistique trouvée.')
 
-    await user.selectOptions(screen.getByLabelText('Langue'), 'en')
+    await chooseLanguage(user, 'en')
 
     expect(await screen.findByText('No statistics found.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 1, name: 'Statistics' })).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Language'), 'fr')
+    await chooseLanguage(user, 'fr')
   })
 
   it('est en lecture seule pour user et watcher', async () => {

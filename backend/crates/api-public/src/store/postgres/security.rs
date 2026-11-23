@@ -11,7 +11,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 const USER_COLUMNS: &str = "u.id, u.username, u.password_hash, u.role, u.email, u.pending_email, \
-                            u.email_verified_at::text";
+                            u.email_verified_at::text, u.picture_url";
 
 /// Contrainte d'unicité violée par une création de compte ou une liaison.
 fn oauth_conflict(err: sqlx::Error) -> StoreError {
@@ -162,7 +162,7 @@ impl SecurityStore for PgStore {
         let created = sqlx::query_as::<_, UserRow>(
             "INSERT INTO users (username, email, password_hash, password_set, email_verified_at) \
              VALUES ($1, $2, $3, false, now()) \
-             RETURNING id, username, password_hash, role, email, pending_email, email_verified_at::text",
+             RETURNING id, username, password_hash, role, email, pending_email, email_verified_at::text, picture_url",
         )
         .bind(username)
         .bind(email)

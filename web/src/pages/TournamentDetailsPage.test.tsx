@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import type { ScoringRule, Tournament, TournamentParticipant } from '@/features/tournaments/types'
 import {
   BOB,
+  CAROL,
   GAME_A,
   jsonResponse,
   ME,
@@ -14,6 +15,7 @@ import {
   STAT_B,
   TT_MINE,
   USERS,
+  noInvitations,
   userResponse,
 } from '@/test/render'
 import { fullText, P_BOB, P_ME, RULE_LINEAR, SOLO, TEAM_CUP } from '@/test/tournaments'
@@ -37,6 +39,8 @@ function server(initial: Partial<ServerState> = {}) {
     if (custom) return custom
     const user = userResponse(path)
     if (user) return user
+    const noInvites = noInvitations(path)
+    if (noInvites) return noInvites
     const t = state.tournament
     const base = `/tournaments/${t.id}`
     if (path.startsWith('/users?')) return jsonResponse(200, USERS)
@@ -88,6 +92,8 @@ function server(initial: Partial<ServerState> = {}) {
       return jsonResponse(200, [
         { rank: 1, participant_id: P_BOB.id, user_id: BOB.id, tournament_team_id: null, points: 12.5 },
         { rank: 2, participant_id: P_ME.id, user_id: ME.id, tournament_team_id: TT_MINE.id, points: 3 },
+        // Inscrit importé d'une source externe : pas de compte, seulement son nom.
+        { rank: 3, participant_id: 'imported', user_id: null, display_name: 'Alice (start.gg)', tournament_team_id: null, points: 1 },
       ])
     }
     if (path === `${base}/team-ranking`) {
@@ -340,6 +346,7 @@ describe('TournamentDetailsPage', () => {
     expect(await within(rows[1]).findByText('bob')).toBeInTheDocument()
     expect(rows[1]).toHaveTextContent('12,5')
     expect(within(rows[2]).getByRole('link', { name: 'Karmine Corp' })).toBeInTheDocument()
+    expect(within(rows[3]).getByText('Alice (start.gg)')).toBeInTheDocument()
     const teams = screen.getByRole('table', { name: 'Classement des équipes' })
     expect(within(teams).getByRole('link', { name: 'Karmine Corp' })).toHaveAttribute('href', `/tournament-teams/${TT_MINE.id}`)
     expect(screen.getByText('Points des joueurs agrégés par équipe : Somme des scores.')).toBeInTheDocument()
@@ -453,5 +460,47 @@ describe('TournamentDetailsPage', () => {
     renderApp(`/tournaments/${SOLO.id}`)
     expect(await screen.findByRole('alert')).toHaveTextContent('introuvable')
     expect(screen.getByRole('button', { name: 'Réessayer' })).toBeInTheDocument()
+  })
+  describe('invitations au tournoi', () => {
+    it('un administrateur invite un joueur à un tournoi solo ouvert, sans rôle', async () => {
+      signInAs('admin')
+      const user = userEvent.setup()
+      const { fetchMock } = server({ tournament: { ...SOLO, status: 'registration' } })
+      renderApp(`/tournaments/${SOLO.id}`)
+      const form = await screen.findByRole('form', { name: 'Nouvelle invitation' })
+      expect(within(form).queryByLabelText('Rôle proposé')).not.toBeInTheDocument()
+      // Les inscrits (alice, bob) ne sont pas proposés.
+      const recipient = within(form).getByRole('combobox', { name: 'Compte à inviter' })
+      await waitFor(() => expect(recipient).toBeEnabled())
+      await user.click(recipient)
+      await waitFor(() => expect(screen.queryByRole('option', { name: 'bob' })).not.toBeInTheDocument())
+      await user.click(await screen.findByRole('option', { name: 'carol' }))
+      await user.click(within(form).getByRole('button', { name: 'Inviter' }))
+      const post = await waitFor(() => {
+        const found = fetchMock.mock.calls.find(([url, init]) => url === '/api/invitations' && init?.method === 'POST')
+        expect(found).toBeDefined()
+        return found!
+      })
+      expect(JSON.parse(post[1].body as string)).toEqual({
+        type: 'tournament',
+        resource_id: SOLO.id,
+        recipient_id: CAROL.id,
+      })
+    })
+
+    it('ni un joueur, ni un tournoi par équipes, ni un tournoi démarré ne proposent d’inviter', async () => {
+      for (const [role, tournament] of [
+        ['user', SOLO],
+        ['admin', TEAM_CUP],
+        ['admin', { ...SOLO, status: 'ongoing' }],
+      ] as const) {
+        signInAs(role)
+        server({ tournament })
+        const view = renderApp(`/tournaments/${tournament.id}`)
+        await screen.findByRole('heading', { level: 1, name: tournament.name })
+        expect(screen.queryByRole('form', { name: 'Nouvelle invitation' })).not.toBeInTheDocument()
+        view.unmount()
+      }
+    })
   })
 })

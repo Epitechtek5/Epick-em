@@ -148,6 +148,9 @@ it('does not show owner actions to a non-owner, including an application admin',
 
 it('searches usernames, exposes later user pages, and excludes active members', async () => {
   jest
+    .mocked(useAuth)
+    .mockReturnValue({ ...session, user: { ...session.user, role: 'admin' } });
+  jest
     .mocked(userApi.listUsers)
     .mockImplementation(async (_token, query) =>
       query?.offset === 20
@@ -189,6 +192,9 @@ it('searches usernames, exposes later user pages, and excludes active members', 
 });
 
 it('selects a supported role and adds the selected account', async () => {
+  jest
+    .mocked(useAuth)
+    .mockReturnValue({ ...session, user: { ...session.user, role: 'admin' } });
   jest
     .mocked(userApi.listUsers)
     .mockResolvedValue([account(newUserId, 'zara')]);
@@ -252,6 +258,9 @@ it('keeps the owner immutable and confirms before removing another member', asyn
 });
 
 it('localizes member headings and searchable selection in French', async () => {
+  jest
+    .mocked(useAuth)
+    .mockReturnValue({ ...session, user: { ...session.user, role: 'admin' } });
   await i18n.changeLanguage('fr');
   await render(<TeamMembersScreen />);
 
