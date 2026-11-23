@@ -5,9 +5,12 @@ mod common;
 
 use actix_web::http::StatusCode;
 use actix_web::test::TestRequest;
+use api_public::realtime::{consume_once, event};
 use api_public::resolution::{resolve_pending, resolve_tournament};
 use api_public::store::{AuthStore, MemoryStore, Role};
 use common::{access, app_with, call, logged_in_as, login, request};
+use domain::events::{ChangeCause, EventKind, topics};
+use infra::{EventBus, LiveBus, MemoryBus, MemoryLive};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -493,6 +496,33 @@ async fn predictions_and_pickem_are_resolved_into_leaderboards() {
 
     // Résolution, le tournoi encore en cours : l'étape est jouée, pas le meilleur marqueur.
     let tournament_id: Uuid = tid.parse().unwrap();
+    // Le résultat saisi arrive à api-internal par le flux : la résolution suit aussitôt et les
+    // abonnés au tournoi et au classement général sont prévenus.
+    let (bus, live) = (MemoryBus::new(), MemoryLive::new());
+    let mut heard = live.subscribe();
+    bus.publish(&event(EventKind::TournamentChanged {
+        tournament_id,
+        match_id: main.parse().ok(),
+        cause: ChangeCause::Api,
+    }))
+    .await
+    .unwrap();
+    let store: &dyn AuthStore = a.store.as_ref();
+    assert_eq!(
+        consume_once(store, &bus, &live, Duration::ZERO)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(heard.recv().await.unwrap().event, "predictions.updated");
+    let topics_heard = [heard.recv().await.unwrap(), heard.recv().await.unwrap()];
+    assert!(
+        topics_heard
+            .iter()
+            .all(|m| m.event == "leaderboard.updated")
+    );
+    assert_eq!(topics_heard[0].topic, topics::tournament(tournament_id));
+    assert_eq!(topics_heard[1].topic, topics::LEADERBOARD);
     let report = resolve_tournament(a.store.as_ref() as &dyn AuthStore, tournament_id)
         .await
         .unwrap()

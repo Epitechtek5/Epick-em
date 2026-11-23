@@ -450,6 +450,9 @@ pub fn diff(previous: Option<&ExternalTournament>, next: &ExternalTournament) ->
 /// snapshot and events together while checking lease ownership.
 #[async_trait]
 pub trait Projector: Send + Sync {
+    /// Notification only, called after an accepted atomic save. Must never write a projection.
+    async fn committed(&self, _tournament_id: Uuid) {}
+
     async fn prepare(
         &self,
         tournament_id: Uuid,
@@ -570,6 +573,13 @@ impl SyncService {
                     .await
             }
         };
+        if saved.is_ok()
+            && let Ok((_, changes)) = &outcome
+            && (!changes.is_empty() || record.snapshot.is_none())
+            && let (Some(projector), Some(tournament_id)) = (&self.projector, record.tournament_id)
+        {
+            projector.committed(tournament_id).await;
+        }
         match (outcome, saved) {
             (Ok((_, changes)), Ok(())) => SyncReport {
                 source_id: record.id,

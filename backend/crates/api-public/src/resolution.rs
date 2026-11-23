@@ -27,7 +27,7 @@ pub struct ResolutionReport {
     pub answers: usize,
     /// All current results are final; later corrections are still recalculated.
     pub settled: bool,
-    pub changed: usize,
+    pub changed: u64,
     /// IDs whose prediction/answer windows are currently closed.
     pub locked: Vec<Uuid>,
 }
@@ -299,19 +299,7 @@ pub async fn resolve_tournament(
     );
     let imported = store.imports().summary(tournament_id).await.is_some();
     let settled = over && all_final && !imported;
-    let changed = resolved_predictions
-        .iter()
-        .zip(&predictions)
-        .filter(|(r, p)| r.outcome != p.outcome || r.points != p.points)
-        .count()
-        + resolved_answers
-            .iter()
-            .filter(|r| {
-                answers
-                    .iter()
-                    .any(|a| a.id == r.id && (a.outcome != r.outcome || a.points != r.points))
-            })
-            .count();
+    let changed = 0;
     let now = crate::store::now_rfc3339();
     let mut locked: Vec<Uuid> = matches
         .values()
@@ -325,7 +313,7 @@ pub async fn resolve_tournament(
         )
         .collect();
     locked.sort_unstable();
-    let report = ResolutionReport {
+    let mut report = ResolutionReport {
         tournament_id,
         predictions: resolved_predictions.len(),
         answers: resolved_answers.len(),
@@ -333,7 +321,7 @@ pub async fn resolve_tournament(
         changed,
         locked,
     };
-    pickem
+    report.changed = pickem
         .save_resolution(
             tournament_id,
             resolved_predictions,

@@ -279,9 +279,10 @@ impl PickemStore for MemoryStore {
         predictions: Vec<Resolved>,
         answers: Vec<Resolved>,
         settled: bool,
-    ) -> Result<(), StoreError> {
+    ) -> Result<u64, StoreError> {
         let mut state = self.pickem.state();
         let now = now_rfc3339();
+        let mut changed = 0;
         for resolved in predictions {
             if let Some(p) = state.predictions.iter_mut().find(|p| p.id == resolved.id)
                 && (p.outcome != resolved.outcome || p.points != resolved.points)
@@ -289,6 +290,7 @@ impl PickemStore for MemoryStore {
                 p.outcome = resolved.outcome;
                 p.points = resolved.points;
                 p.updated_at = now.clone();
+                changed += 1;
             }
         }
         for resolved in answers {
@@ -298,12 +300,13 @@ impl PickemStore for MemoryStore {
                 a.outcome = resolved.outcome;
                 a.points = resolved.points;
                 a.updated_at = now.clone();
+                changed += 1;
             }
         }
         state.resolution_clock += 1;
         let clock = state.resolution_clock;
         state.resolutions.insert(tournament_id, (clock, settled));
-        Ok(())
+        Ok(changed)
     }
 
     async fn tournaments_to_resolve(&self, limit: i64) -> Result<Vec<Uuid>, StoreError> {

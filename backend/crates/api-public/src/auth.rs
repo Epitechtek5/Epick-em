@@ -25,7 +25,7 @@ use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use connectors::ConnectorRegistry;
 use connectors::sync::{MemorySyncStore, SyncPolicy, SyncService};
-use infra::{Cache, MemoryCache};
+use infra::{Cache, EventBus, LiveBus, MemoryBus, MemoryCache, MemoryLive};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -68,6 +68,12 @@ pub struct AppState {
     /// Sources externes et synchronisation ([`external`](crate::external)). Par défaut aucune
     /// source et un état en mémoire.
     pub(crate) sync: Arc<SyncService>,
+    /// Flux des événements métier, consommé par api-internal ([`realtime`](crate::realtime)).
+    /// Par défaut en mémoire, sans consommateur.
+    pub(crate) events: Arc<dyn EventBus>,
+    /// Diffusion temps réel vers les clients WebSocket de toutes les instances. Par défaut en
+    /// mémoire, limitée à ce processus.
+    pub(crate) live: Arc<dyn LiveBus>,
 }
 
 impl AppState {
@@ -92,7 +98,16 @@ impl AppState {
                 Arc::new(MemorySyncStore::new()),
                 SyncPolicy::default(),
             )),
+            events: Arc::new(MemoryBus::new()),
+            live: Arc::new(MemoryLive::new()),
         })
+    }
+
+    /// Branche le bus d'événements et la diffusion temps réel (Redis en production).
+    pub fn with_bus(mut self, events: Arc<dyn EventBus>, live: Arc<dyn LiveBus>) -> Self {
+        self.events = events;
+        self.live = live;
+        self
     }
 
     /// Branche le sous-niveau qui importe et exporte les équipes des tournois.

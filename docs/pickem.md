@@ -12,7 +12,7 @@ leur attribue des points, additionnés dans les classements. Routes et règles :
 | Tables `prediction`, `pickem_question`, `pickem_answer`, `pickem_resolution` | `db/changelog/0019-predictions-pickem.yaml` |
 | Persistance | `api-public/src/store/pickem*.rs` (trait `PickemStore`, en mémoire et PostgreSQL) |
 | Routes | `api-public/src/predictions.rs`, `api-public/src/pickem.rs` |
-| Résolution | `api-public/src/resolution.rs`, lancée par api-internal (`RESOLVE_INTERVAL_SECS`) |
+| Résolution | `api-public/src/resolution.rs`, lancée par api-internal à chaque changement d'un tournoi (bus Redis, `docs/temps-reel.md`) et à intervalle régulier (`RESOLVE_INTERVAL_SECS`) |
 
 Les pronostics sont des données d'Epick'em : ils sont en base même pour un tournoi importé,
 dont les matchs et les inscrits vivent dans Redis (`docs/connecteurs.md`). `match_id` et les
@@ -52,11 +52,8 @@ an explicit event. The worker revisits all tournaments with predictions or quest
 
 ## Limites actuelles
 
-- Pas encore de diffusion temps réel (`live.*` sur WebSocket) : le bus d'événements et le
-  serveur WebSocket d'ADR-002 n'existent pas encore. Les clients relisent pronostics et
-  classements.
-- La résolution passe à intervalle fixe (30 s par défaut), sans être déclenchée par la fin
-  d'un match.
+- Les clients sont prévenus par WebSocket (`leaderboard.updated`, `predictions.updated`,
+  `docs/temps-reel.md`) mais relisent eux-mêmes pronostics et classements.
 - Pas de score exact pronostiqué : les matchs n'ont pas de score de manches dans ce modèle (les
   manches arrivent avec #185).
 - Le classement général additionne tous les tournois, sans saison ni groupe privé.

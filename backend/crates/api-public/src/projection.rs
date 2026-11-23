@@ -6,6 +6,7 @@
 //! tournoi reste en lecture seule ([`crate::external::protect_external`]) : seule la
 //! synchronisation l'écrit.
 
+use crate::realtime::tournament_changed;
 use crate::store::{
     AuthStore, Bracket, MatchResult, MatchStatus, MatchType, ParticipantStatus, ProjectedEntry,
     ProjectedGroup, ProjectedMatch, ProjectedMember, ProjectedParticipant, ProjectedStep,
@@ -18,6 +19,8 @@ use connectors::model::{
     ExternalTournament, MatchState,
 };
 use connectors::sync::{ProjectionEntry, Projector};
+use domain::events::ChangeCause;
+use infra::{EventBus, LiveBus};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -29,16 +32,35 @@ const NAME_MAX: usize = 255;
 /// [`Projector`] qui écrit dans le store de l'API.
 pub struct StoreProjector {
     store: Arc<dyn AuthStore>,
+    bus: Option<(Arc<dyn EventBus>, Arc<dyn LiveBus>)>,
 }
 
 impl StoreProjector {
+    pub fn with_bus(mut self, events: Arc<dyn EventBus>, live: Arc<dyn LiveBus>) -> Self {
+        self.bus = Some((events, live));
+        self
+    }
+
     pub fn new(store: Arc<dyn AuthStore>) -> Self {
-        StoreProjector { store }
+        StoreProjector { store, bus: None }
     }
 }
 
 #[async_trait]
 impl Projector for StoreProjector {
+    async fn committed(&self, tournament_id: Uuid) {
+        if let Some((events, live)) = &self.bus {
+            tournament_changed(
+                events.as_ref(),
+                live.as_ref(),
+                tournament_id,
+                None,
+                ChangeCause::ExternalSync,
+            )
+            .await;
+        }
+    }
+
     async fn prepare(
         &self,
         tournament_id: Uuid,
