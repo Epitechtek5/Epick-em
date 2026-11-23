@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 
 import { makeJwt } from '@/test/jwt'
 import { jsonResponse, mockFetch, renderApp } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 type User = ReturnType<typeof userEvent.setup>
 
@@ -175,13 +176,13 @@ describe('LoginPage', () => {
     const user = userEvent.setup()
     renderApp('/login')
 
-    await user.selectOptions(screen.getByLabelText('Langue'), 'en')
+    await chooseLanguage(user, 'en')
 
     expect(screen.getByRole('heading', { level: 1, name: 'Sign in' })).toBeInTheDocument()
     expect(screen.getByLabelText('Email address')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Forgot your password?' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('2 problems were found')
-    await user.selectOptions(screen.getByLabelText('Language'), 'fr')
+    await chooseLanguage(user, 'fr')
   })
 })

@@ -24,8 +24,8 @@ use crate::match_io::{MatchesPlan, StoreMatches};
 use crate::steps::{check, tiebreak_value};
 use crate::store::{
     AuthStore, Entrant, MatchType, MemberPlan, ScoringRuleImport, StepClosing, StepDefinition,
-    StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepPlan, StepStart, StepStatus,
-    StoreError,
+    StepFormat, StepInput, StepOutcome, StepParticipantStatus, StepPlan, StepRules, StepStart,
+    StepStatus, StoreError,
 };
 use crate::tournament_io::{ChildPlan, FileScope, PlanScope, TournamentChild};
 use async_trait::async_trait;
@@ -84,6 +84,8 @@ pub struct StepScope {
     pub group_size: i32,
     /// Participants de chaque groupe, par rang de groupe.
     pub groups: HashMap<i32, HashSet<Who>>,
+    /// Comptes de chaque équipe du tournoi, par rang dans `teams` (voir [`FileScope`]).
+    pub team_players: HashMap<usize, HashSet<Uuid>>,
 }
 
 /// Import et export des matchs d'une étape.
@@ -106,13 +108,15 @@ pub trait StepMatches: Send + Sync {
         items: &[Value],
     ) -> Result<Option<String>, StoreError>;
 
-    /// Plan d'écriture des matchs `items`, déjà validés, pour l'import atomique : `entrants`
-    /// désigne chaque inscrit du tournoi, `rules` est le barème du tournoi. `None` si ce niveau ne
+    /// Plan d'écriture des matchs `items`, déjà validés, pour l'import atomique : `step_rules`
+    /// sont les réglages de l'étape (son barème), `entrants` désigne chaque inscrit du tournoi,
+    /// `rules` est le barème du tournoi. `None` si ce niveau ne
     /// sait pas se planifier (l'import écrit alors étape par étape).
     async fn plan(
         &self,
         _game_id: Uuid,
         _scope: &StepScope,
+        _step_rules: &StepRules,
         _entrants: &HashMap<Who, Entrant>,
         _rules: &[ScoringRuleImport],
         _items: &[Value],
@@ -201,6 +205,9 @@ pub(crate) struct StepItem {
     advance_per_group: i32,
     #[serde(default)]
     tiebreak: Vec<String>,
+    /// Têtes de série, qualification, séries et barème ; valeurs par défaut s'il est absent.
+    #[serde(default)]
+    rules: StepRules,
     /// `pending` s'il est absent.
     #[serde(default)]
     status: Option<StepStatus>,
@@ -276,6 +283,7 @@ fn definition(step: &StepItem) -> StepDefinition {
         matches_per_group: step.matches_per_group.unwrap_or(1),
         advance_per_group: step.advance_per_group,
         tiebreak: tiebreak_value(step.tiebreak.clone()),
+        rules: step.rules.clone(),
     }
 }
 
@@ -541,6 +549,7 @@ impl TournamentChild for StoreSteps {
                             .collect()
                     })
                     .unwrap_or_default(),
+                rules: step.rules.clone(),
                 status: Some(step.status),
                 groups: group_items,
                 matches,
@@ -627,6 +636,7 @@ impl TournamentChild for StoreSteps {
                         (group.index, members)
                     })
                     .collect(),
+                team_players: scope.team_players.clone(),
             };
             if let Some(problem) = self
                 .matches
@@ -708,16 +718,17 @@ impl TournamentChild for StoreSteps {
                             .iter()
                             .map(|group| group.iter().map(|(id, _)| *id).collect())
                             .collect(),
+                        seeds: {
+                            let mut seeded: Vec<(i32, Uuid)> = resolved
+                                .iter()
+                                .flatten()
+                                .filter_map(|(id, p)| p.seed.map(|seed| (seed, *id)))
+                                .collect();
+                            seeded.sort_unstable();
+                            seeded.into_iter().map(|(_, id)| id).collect()
+                        },
                     })
                     .await?;
-                let seeds: Vec<(Uuid, i32)> = resolved
-                    .iter()
-                    .flatten()
-                    .filter_map(|(id, participant)| participant.seed.map(|seed| (*id, seed)))
-                    .collect();
-                if !seeds.is_empty() {
-                    self.store.set_step_seeds(created.id, seeds).await?;
-                }
                 let mut outcomes = Vec::new();
                 for (id, participant) in resolved.iter().flatten() {
                     if let Some(points) = participant.points.filter(|p| *p != 0.0) {
@@ -734,6 +745,7 @@ impl TournamentChild for StoreSteps {
                 if status == StepStatus::Finished {
                     self.store
                         .close_step(StepClosing {
+                            expected_competition_revision: None,
                             step_id: created.id,
                             outcomes,
                             next: None,
@@ -807,10 +819,18 @@ impl StoreSteps {
                         )
                     })
                     .collect(),
+                team_players: scope.team_players.clone(),
             };
             let Some(matches) = self
                 .matches
-                .plan(game_id, &step_scope, &entrants, &scope.rules, &step.matches)
+                .plan(
+                    game_id,
+                    &step_scope,
+                    &definition.rules,
+                    &entrants,
+                    &scope.rules,
+                    &step.matches,
+                )
                 .await?
             else {
                 return Ok(None);
@@ -857,21 +877,25 @@ impl StoreSteps {
                         }
                         member.points = total;
                     }
-                    if status == StepStatus::Finished {
-                        let ranked = crate::steps::rank_members(
-                            group
+                }
+                if status == StepStatus::Finished {
+                    let ranking = RankingStep::new(&definition, status);
+                    for (group, in_group) in groups.iter().zip(members.iter_mut()) {
+                        let ranked = ranking.rank(
+                            in_group,
+                            finished
                                 .iter()
-                                .enumerate()
-                                .map(|(position, m)| {
-                                    let registered =
-                                        scope.registered_at.get(&m.who).cloned().flatten();
-                                    (position, m.points, registered)
-                                })
-                                .collect(),
-                            step.advance_per_group,
+                                .copied()
+                                .filter(|m| m.group == Some(group.index)),
+                            &scope.registered_at,
                         );
-                        for (position, final_rank, outcome) in ranked {
-                            let member = &mut group[position];
+                        for (position, final_rank) in ranked.into_iter().zip(1i32..) {
+                            let outcome = if final_rank <= step.advance_per_group {
+                                StepParticipantStatus::Qualified
+                            } else {
+                                StepParticipantStatus::Eliminated
+                            };
+                            let member = &mut in_group[position];
                             if member.final_rank != Some(final_rank) || member.status != outcome {
                                 warnings.push(format!(
                                     "{label} : le classement et les qualifications sont recalculés d'après les matchs."
@@ -921,6 +945,127 @@ impl StoreSteps {
         }
         warnings.dedup();
         Ok(Some((planned, warnings)))
+    }
+}
+
+/// Classement d'un groupe planifié par le moteur de l'API ([`crate::standing::rank_group`]) :
+/// points, critères de départage de l'étape, ordre du tableau en élimination, puis inscription
+/// la plus ancienne (un inscrit sans date passe après les autres) et ordre du fichier.
+struct RankingStep(crate::store::Step);
+
+impl RankingStep {
+    fn new(definition: &StepDefinition, status: StepStatus) -> Self {
+        RankingStep(crate::store::Step {
+            id: Uuid::nil(),
+            tournament_id: Uuid::nil(),
+            position: definition.position,
+            format: definition.format,
+            match_type: definition.match_type,
+            group_count: definition.group_count,
+            group_size: definition.group_size,
+            matches_per_group: definition.matches_per_group,
+            advance_per_group: definition.advance_per_group,
+            tiebreak: definition.tiebreak.clone(),
+            rules: definition.rules.clone(),
+            status,
+            created_at: String::new(),
+            updated_at: String::new(),
+        })
+    }
+
+    /// Positions (dans `members`) des participants du groupe, du premier au dernier.
+    fn rank<'a>(
+        &self,
+        members: &[MemberPlan],
+        finished: impl Iterator<Item = &'a crate::store::MatchPlan>,
+        registered_at: &HashMap<Entrant, Option<String>>,
+    ) -> Vec<usize> {
+        use crate::store::{Match, MatchParticipant, StepParticipant};
+        // Identifiants provisoires, croissants dans l'ordre du fichier (dernier départage).
+        let ids: HashMap<Entrant, Uuid> = members
+            .iter()
+            .zip(1u128..)
+            .map(|(m, n)| (m.who, Uuid::from_u128(n)))
+            .collect();
+        let participants: Vec<StepParticipant> = members
+            .iter()
+            .map(|m| StepParticipant {
+                step_id: Uuid::nil(),
+                participant_id: ids[&m.who],
+                group_id: Uuid::nil(),
+                points: m.points,
+                final_rank: None,
+                status: StepParticipantStatus::In,
+                seed: m.seed,
+            })
+            .collect();
+        let mut matches = Vec::new();
+        let mut entries = Vec::new();
+        for planned in finished {
+            let id = Uuid::new_v4();
+            matches.push(Match {
+                id,
+                game_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                group_id: None,
+                round: planned.round,
+                bracket: planned.bracket,
+                next_match_id: planned.next.map(|_| Uuid::nil()),
+                number: planned.number,
+                next_slot: planned.next_slot,
+                loser_next_match_id: planned.loser_next.map(|_| Uuid::nil()),
+                loser_next_slot: planned.loser_next_slot,
+                best_of: planned.best_of,
+                scheduled_at: None,
+                started_at: None,
+                ended_at: None,
+                status: planned.status,
+                created_at: String::new(),
+                updated_at: String::new(),
+            });
+            entries.extend(planned.participants.iter().filter_map(|e| {
+                Some(MatchParticipant {
+                    match_id: id,
+                    participant_id: *ids.get(&e.who)?,
+                    stats: e.stats.clone(),
+                    points: e.points,
+                    rank: e.rank,
+                    result: e.result,
+                    slot: e.slot,
+                    games_won: e.games_won,
+                })
+            }));
+        }
+        let mut by_match: HashMap<Uuid, Vec<&MatchParticipant>> = HashMap::new();
+        for entry in &entries {
+            by_match.entry(entry.match_id).or_default().push(entry);
+        }
+        // Sans date d'inscription, l'inscrit le sera à l'instant de l'import : après les autres.
+        let registered: HashMap<Uuid, String> = members
+            .iter()
+            .map(|m| {
+                let at = registered_at.get(&m.who).cloned().flatten();
+                (
+                    ids[&m.who],
+                    at.unwrap_or_else(|| "9999-12-31T23:59:59Z".to_string()),
+                )
+            })
+            .collect();
+        let position: HashMap<Uuid, usize> = members
+            .iter()
+            .enumerate()
+            .map(|(index, m)| (ids[&m.who], index))
+            .collect();
+        crate::standing::rank_group(
+            &self.0,
+            &participants.iter().collect::<Vec<_>>(),
+            &matches.iter().collect::<Vec<_>>(),
+            &by_match,
+            &registered,
+        )
+        .into_iter()
+        .map(|(id, _)| position[&id])
+        .collect()
     }
 }
 

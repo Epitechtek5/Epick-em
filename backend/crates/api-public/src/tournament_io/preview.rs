@@ -338,7 +338,7 @@ fn changed_fields(current: &Tournament, import: &TournamentImport) -> Vec<&'stat
         "participant_type",
         current.participant_type != input.participant_type,
     );
-    note("team_size", current.team_size != input.team_size);
+    note("settings", current.settings != input.settings);
     note(
         "max_participants",
         current.max_participants != input.max_participants,
@@ -374,6 +374,7 @@ fn resource_change(resource: &str, before: usize, after: usize) -> Option<Resour
 /// Lit, valide et planifie le fichier ; rien n'est écrit. `Err` : les problèmes du fichier.
 pub(super) async fn analyze(
     state: &AppState,
+    importer: Uuid,
     format: Format,
     bytes: &[u8],
 ) -> Result<Result<Analysis, Vec<String>>, ApiError> {
@@ -382,7 +383,7 @@ pub(super) async fn analyze(
         Err(problems) => return Ok(Err(problems)),
     };
     let lookups = Lookups::load(state, &tournaments).await?;
-    let prepared = match prepare(state, &lookups, tournaments).await? {
+    let prepared = match prepare(state, &lookups, tournaments, importer).await? {
         Ok(prepared) => prepared,
         Err(problems) => return Ok(Err(problems)),
     };
@@ -442,6 +443,7 @@ pub(super) async fn analyze(
                             team: p.team,
                             status: p.status,
                             registered_at: p.registered_at.clone(),
+                            responses: p.responses.clone(),
                         })
                         .collect(),
                     steps,
@@ -668,7 +670,7 @@ pub(super) async fn preview(
     format: Format,
     bytes: &[u8],
 ) -> Result<ImportPreview, ApiError> {
-    let analysis = match analyze(state, format, bytes).await? {
+    let analysis = match analyze(state, owner, format, bytes).await? {
         Ok(analysis) => analysis,
         Err(errors) => {
             return Ok(ImportPreview {
@@ -752,7 +754,7 @@ pub(super) async fn confirm(
     } else {
         Format::Json
     };
-    let analysis = match analyze(state, format, stored.text.as_bytes()).await? {
+    let analysis = match analyze(state, owner, format, stored.text.as_bytes()).await? {
         Ok(analysis) if analysis.fingerprint == stored.fingerprint => analysis,
         _ => return Err(ApiError::ImportPreviewStale),
     };
@@ -778,6 +780,7 @@ pub(super) async fn apply(state: &AppState, analysis: Analysis) -> Result<Import
                 StoreError::TournamentLocked => ApiError::TournamentLocked,
                 StoreError::StepPositionTaken => ApiError::StepPositionTaken,
                 StoreError::ImportStale => ApiError::ImportPreviewStale,
+                StoreError::InvalidPlan(problem) => file_error(vec![problem]),
                 other => ApiError::internal(other),
             })?;
         for (_, created) in saved {
@@ -814,6 +817,7 @@ pub(super) async fn apply(state: &AppState, analysis: Analysis) -> Result<Import
                 tournament_team_id: p.team.and_then(|rank| team_ids.get(rank).copied()),
                 status: p.status,
                 registered_at: p.registered_at,
+                responses: p.responses,
             })
             .collect();
         // Les inscrits d'abord : les étapes et les matchs les désignent.

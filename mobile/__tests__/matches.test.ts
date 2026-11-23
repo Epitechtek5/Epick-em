@@ -276,3 +276,24 @@ it('keeps incomplete double-elimination regions separate and uses only stored ed
     [],
   );
 });
+
+it('includes stored loser progression without inventing links', () => {
+  const source = {
+    ...sample,
+    id: 'source',
+    bracket: 'winners' as const,
+    next_match_id: null,
+    loser_next_match_id: 'lower',
+  };
+  const lower = {
+    ...sample,
+    id: 'lower',
+    bracket: 'losers' as const,
+    next_match_id: null,
+  };
+  const graph = layoutBracket([source, lower]);
+  expect(graph.edges.map(({ from, to, kind }) => ({ from, to, kind }))).toEqual(
+    [{ from: 'source', to: 'lower', kind: 'loser' }],
+  );
+  expect(layoutBracket([source]).edges).toEqual([]);
+});

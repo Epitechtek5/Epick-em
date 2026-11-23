@@ -3,7 +3,13 @@ import { createContext, useContext } from 'react'
 import { fr, type Messages } from './fr'
 import { translate, type Params } from './translate'
 
-export type Lang = 'fr' | 'en'
+export type Lang = 'fr' | 'en' | 'es'
+
+export const LANGS: readonly Lang[] = ['fr', 'en', 'es']
+
+export function isLang(value: unknown): value is Lang {
+  return value === 'fr' || value === 'en' || value === 'es'
+}
 
 type Join<K extends string, P extends string> = `${K}.${P}`
 type Paths<T> = {

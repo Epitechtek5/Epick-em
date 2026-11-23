@@ -1,14 +1,21 @@
 import { normalizeStep } from '@/features/steps/api'
 import { uuid } from '@/features/teams/validation'
 import { apiRequest } from '@/lib/api/client'
+import { ApiError } from '@/lib/api/http'
 import type {
+  GameAttributes,
+  GameOutcome,
+  GameResultsInput,
   Match,
   MatchChanges,
+  MatchGame,
+  MatchGameParticipant,
   MatchFilters,
   MatchInput,
   MatchOutcome,
   MatchParticipant,
   MatchTransition,
+  FlatStats,
   ParticipantStats,
   ResultEntry,
 } from './types'
@@ -20,11 +27,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-// `stats` est un JSON libre côté serveur : seules les valeurs numériques sont gardées, à plat
-// ou détaillées par joueur (`{ total, players }`).
-function flat(value: unknown): Record<string, number> {
+// `stats` est un JSON libre côté serveur : seuls les nombres et les choix (clés d'options) sont
+// gardés, à plat ou détaillés par joueur (`{ total, players }`).
+function flat(value: unknown): FlatStats {
   if (!isRecord(value)) return {}
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number'))
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, number | string] => typeof entry[1] === 'number' || typeof entry[1] === 'string'),
+  )
+}
+
+function attributesOf(value: unknown): GameAttributes {
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
 
 export function normalizeStats(value: unknown): ParticipantStats {
@@ -37,7 +51,7 @@ export function normalizeStats(value: unknown): ParticipantStats {
   return flat(value)
 }
 
-function normalizeParticipant(participant: MatchParticipant): MatchParticipant {
+function normalizeParticipant<T extends MatchParticipant | MatchGameParticipant>(participant: T): T {
   return {
     ...participant,
     stats: normalizeStats(participant.stats),
@@ -47,9 +61,21 @@ function normalizeParticipant(participant: MatchParticipant): MatchParticipant {
   }
 }
 
+export function normalizeGame(game: MatchGame): MatchGame {
+  return {
+    ...game,
+    attributes: attributesOf(game.attributes),
+    started_at: game.started_at ?? null,
+    ended_at: game.ended_at ?? null,
+    participants: (game.participants ?? []).map(normalizeParticipant),
+  }
+}
+
 export function normalizeMatch<T extends Match>(match: T): T {
   return {
     ...match,
+    best_of: typeof match.best_of === 'number' ? match.best_of : 1,
+    games: (match.games ?? []).map(normalizeGame).sort((left, right) => left.number - right.number),
     group_id: match.group_id ?? null,
     round: match.round ?? null,
     bracket: match.bracket ?? null,
@@ -112,4 +138,63 @@ export async function setMatchStatus(tournamentId: string, stepId: string, match
       ? { step: normalizeStep(closed.step), next_step: closed.next_step ? normalizeStep(closed.next_step) : null }
       : null,
   })
+}
+
+// ---- Parties d'une série (BO1, BO3, BO5) ---------------------------------------------------------
+// Écriture réservée aux administrateurs globaux (api-public/match_games.rs : require_admin).
+
+const games = (tournamentId: string, stepId: string, matchId: string) => `${one(tournamentId, stepId, matchId)}/games`
+
+function gameNumber(number: number): number {
+  if (!Number.isInteger(number) || number < 1 || number > 5) throw new ApiError(404, { error: 'not_found' })
+  return number
+}
+
+export async function listGames(tournamentId: string, stepId: string, matchId: string, signal?: AbortSignal) {
+  const list = await apiRequest<MatchGame[]>(games(tournamentId, stepId, matchId), { signal })
+  return list.map(normalizeGame)
+}
+
+export async function getGame(tournamentId: string, stepId: string, matchId: string, number: number, signal?: AbortSignal) {
+  return normalizeGame(await apiRequest<MatchGame>(`${games(tournamentId, stepId, matchId)}/${gameNumber(number)}`, { signal }))
+}
+
+// Ouvre la partie suivante (`ongoing`, avec les participants du match) ; 409 si la précédente
+// n'est pas terminée ou si la série est complète.
+export async function createGame(tournamentId: string, stepId: string, matchId: string, attributes?: GameAttributes) {
+  return normalizeGame(
+    await apiRequest<MatchGame>(games(tournamentId, stepId, matchId), {
+      method: 'POST',
+      body: attributes ? { attributes } : {},
+      expectedStatus: 201,
+    }),
+  )
+}
+
+// Points calculés par le serveur d'après le barème ; 400 sur une statistique, une option ou un
+// attribut invalide.
+export async function saveGameResults(tournamentId: string, stepId: string, matchId: string, number: number, input: GameResultsInput) {
+  return normalizeGame(
+    await apiRequest<MatchGame>(`${games(tournamentId, stepId, matchId)}/${gameNumber(number)}/results`, { method: 'PUT', body: input }),
+  )
+}
+
+// Termine la partie ; si elle décide la série, le match se termine avec ses résultats agrégés
+// (et l'étape peut se clôturer).
+export async function finishGame(tournamentId: string, stepId: string, matchId: string, number: number): Promise<GameOutcome> {
+  const outcome = await apiRequest<GameOutcome>(`${games(tournamentId, stepId, matchId)}/${gameNumber(number)}/finish`, { method: 'POST' })
+  const closed = outcome.step_closed
+  return {
+    game: normalizeGame(outcome.game),
+    match: normalizeMatch(outcome.match),
+    series_finished: outcome.series_finished === true,
+    step_closed: closed
+      ? { step: normalizeStep(closed.step), next_step: closed.next_step ? normalizeStep(closed.next_step) : null }
+      : null,
+  }
+}
+
+// 204 ; une partie terminée ne se supprime pas (409).
+export async function deleteGame(tournamentId: string, stepId: string, matchId: string, number: number): Promise<void> {
+  await apiRequest(`${games(tournamentId, stepId, matchId)}/${gameNumber(number)}`, { method: 'DELETE', expectedStatus: 204 })
 }

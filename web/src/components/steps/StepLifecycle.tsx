@@ -13,16 +13,41 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { StateMessage } from '@/components/games/StateMessage'
 import { SectionCard } from '@/components/tournaments/ui'
 import { Icon } from '@/components/ui/icon'
-import { closeStep, startStep } from '@/features/steps/api'
+import { closeStep, getStepRanking, startStep } from '@/features/steps/api'
 import { startDetail, stepErrorKey } from '@/features/steps/errors'
-import { stepStatusLabelKey } from '@/features/steps/labels'
+import { seedingLabelKey, stepStatusLabelKey } from '@/features/steps/labels'
 import { STEP_STATUSES, type Step } from '@/features/steps/types'
 import { canClose, canStart, startBlocker } from '@/features/steps/validation'
+import { listAllParticipants } from '@/features/tournaments/api'
 import type { Tournament } from '@/features/tournaments/types'
+import { useAsyncResource } from '@/hooks/use-async-resource'
+import { useParticipantIdentities } from '@/hooks/use-participant-identities'
 import { useI18n, type MessageKey, type Params } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
 import { cn } from '@/lib/utils'
+import { SeedOrderEditor } from './SeedOrderEditor'
+
+// Participants admis au lancement, dans l'ordre proposé par défaut : inscrits actifs du tournoi
+// (ordre d'inscription) pour la première étape, qualifiés de l'étape précédente (groupe puis
+// rang) ensuite — exactement ce que le serveur attend dans `seed_order`.
+async function entrantsOf(tournament: Tournament, step: Step, steps: readonly Step[], signal: AbortSignal): Promise<string[]> {
+  const previous = steps.filter((other) => other.position < step.position).sort((a, b) => b.position - a.position)[0]
+  if (!previous) {
+    const participants = await listAllParticipants(tournament.id, signal)
+    return participants
+      .filter((participant) => participant.status === 'registered' || participant.status === 'checked_in')
+      .sort((a, b) => a.registered_at.localeCompare(b.registered_at))
+      .map((participant) => participant.id)
+  }
+  const groups = await getStepRanking(tournament.id, previous.id, signal)
+  return groups.flatMap((group) =>
+    [...group.participants]
+      .filter((participant) => participant.status === 'qualified')
+      .sort((a, b) => a.rank - b.rank)
+      .map((participant) => participant.participant_id),
+  )
+}
 
 interface Feedback {
   kind: 'success' | 'error'
@@ -107,6 +132,16 @@ export function StepLifecycle({
   const [busy, setBusy] = useState<'start' | 'close' | null>(null)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
   const blocker = startBlocker(tournament, step, steps)
+  const manual = step.status === 'pending' && step.rules.seeding === 'manual' && canManage && canStart(tournament, step, steps)
+  const entrants = useAsyncResource(
+    (signal) => (manual ? entrantsOf(tournament, step, steps, signal) : Promise.resolve([] as string[])),
+    [tournament.id, step.id, manual],
+  )
+  const people = useParticipantIdentities(tournament, manual)
+  // Ordre modifié par l'organisateur ; oublié si la liste des admis change (actualisation).
+  const loadedEntrants = entrants.state.status === 'success' ? entrants.state.data : null
+  const [seedOrder, setSeedOrder] = useState<{ base: string[] | null; order: string[] } | null>(null)
+  const order = seedOrder && seedOrder.base === loadedEntrants ? seedOrder.order : (loadedEntrants ?? [])
   const following = steps.filter((other) => other.position > step.position).sort((a, b) => a.position - b.position)[0]
 
   async function run(action: 'start' | 'close') {
@@ -114,7 +149,7 @@ export function StepLifecycle({
     setFeedback(null)
     try {
       if (action === 'start') {
-        const started = await startStep(tournament.id, step.id)
+        const started = await startStep(tournament.id, step.id, manual ? order : undefined)
         setFeedback({ kind: 'success', key: 'steps.lifecycle.started', params: { position: started.position } })
         onChanged([started])
       } else {
@@ -182,6 +217,25 @@ export function StepLifecycle({
               {t(blocker)}
             </p>
           ) : null}
+          {manual ? (
+            <div className="grid gap-2">
+              <h3 className="font-semibold">{t('steps.seeding.title')}</h3>
+              <p className="text-sm text-muted-foreground">{t('steps.seeding.hint')}</p>
+              {entrants.state.status === 'loading' ? <StateMessage kind="loading">{t('steps.seeding.loading')}</StateMessage> : null}
+              {entrants.state.status === 'error' ? (
+                <StateMessage kind="error">{t(stepErrorKey(entrants.state.error))}</StateMessage>
+              ) : null}
+              {loadedEntrants && loadedEntrants.length === 0 ? <StateMessage kind="empty">{t('steps.seeding.empty')}</StateMessage> : null}
+              {order.length > 0 ? (
+                <SeedOrderEditor
+                  order={order}
+                  identity={people.identity}
+                  disabled={busy !== null}
+                  onChange={(next) => setSeedOrder({ base: loadedEntrants, order: next })}
+                />
+              ) : null}
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             {step.status === 'pending' ? (
               <ConfirmDialog
@@ -190,9 +244,12 @@ export function StepLifecycle({
                 label={t('steps.lifecycle.start')}
                 busyLabel={t('steps.lifecycle.starting')}
                 title={t('steps.lifecycle.confirmStartTitle', { position: step.position })}
-                description={t('steps.lifecycle.confirmStart', { groups: step.group_count })}
+                description={t('steps.lifecycle.confirmStart', {
+                  groups: step.group_count,
+                  seeding: t(seedingLabelKey(step.rules.seeding)),
+                })}
                 busy={busy === 'start'}
-                disabled={busy !== null || !canStart(tournament, step, steps)}
+                disabled={busy !== null || !canStart(tournament, step, steps) || (manual && order.length === 0)}
                 onConfirm={() => void run('start')}
               />
             ) : null}

@@ -1,6 +1,6 @@
 # Epick’em mobile
 
-Expo SDK 58 / React Native 0.88 application using TypeScript 6 and Expo Router, with backend authentication, account management, bilingual English/French screens and persistent appearance settings.
+Expo SDK 58 / React Native 0.88 application using TypeScript 6 and Expo Router, with backend authentication, account management, English/French/Spanish screens, synchronized settings and native push notifications.
 
 Use Node.js **24.21.0** and npm (the committed lockfile is authoritative):
 
@@ -35,4 +35,4 @@ The flow uses `POST /tournaments/import/preview?format=json|csv`, then `POST /to
 
 All application labels, accessibility labels and recovery messages are available in English and French. Free-text backend validation diagnostics are preserved in their original language and labelled as server-provided details. Detailed placements/results require the additive `tournaments[].steps` preview field; older servers retain resource summaries with an explicit detail-unavailable message.
 
-Only tournament imports currently expose a backend preview API. Game, statistics and team imports retain their existing contracts. Native export, saving and sharing remain available. This branch retains the #186 import backend; integration with the newer bracket/result models in #211 is a separate backend reconciliation, not part of the mobile preview workflow.
+Only tournament imports currently expose a backend preview API. Game, statistics and team imports retain their existing contracts. Native export, saving and sharing remain available. The backend preview plans the newer bracket/result models (series games, slots, stage rules) with the same authoritative engines as live results.

@@ -1,6 +1,8 @@
+import { ArrowLeft01Icon, UserGroupIcon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
 import { TeamForm } from '@/components/teams/TeamForm'
 import { Button } from '@/components/ui/button'
@@ -10,6 +12,7 @@ import type { TeamFieldErrors, TeamValues } from '@/features/teams/types'
 import { changedTeamFields, isUuid, ownsTeam, teamValues, trimmedInput } from '@/features/teams/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { Icon } from '@/components/ui/icon'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -77,13 +80,26 @@ export default function TournamentTeamEditorPage() {
   }
 
   return (
-    <div className="grid w-full max-w-2xl gap-6 self-start">
-      <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
-      {!editing && valid ? (
-        <p className="text-sm text-muted-foreground">
-          {t('tournamentTeams.tournament')} : <span className="break-all font-mono">{tournamentId}</span>
-        </p>
-      ) : null}
+    <div className="grid w-full max-w-3xl gap-6 self-start">
+      <PageHero
+        icon={UserGroupIcon}
+        title={title}
+        description={
+          !editing && valid ? (
+            <p className="text-sm">
+              {t('tournamentTeams.tournament')}{t('common.colon')} <span className="break-all font-mono">{tournamentId}</span>
+            </p>
+          ) : undefined
+        }
+        back={
+          valid && (team || !editing) ? (
+            <Link to={team ? `/tournament-teams/${team.id}` : listPath} className={HERO_BACK}>
+              <Icon icon={ArrowLeft01Icon} size={16} />
+              {team ? t('teams.returnToTeam') : t('tournamentTeams.returnToList')}
+            </Link>
+          ) : undefined
+        }
+      />
 
       {!valid ? (
         <StateMessage kind="error">

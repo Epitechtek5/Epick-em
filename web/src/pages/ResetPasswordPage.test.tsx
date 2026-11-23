@@ -9,6 +9,7 @@ import { AuthProvider } from '@/lib/auth/AuthProvider'
 import { tokenStore } from '@/lib/auth/token-store'
 import { makeJwt } from '@/test/jwt'
 import { jsonResponse, routeFetch } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 const TOKEN = 'test-reset-token'
 
@@ -196,10 +197,10 @@ describe('ResetPasswordPage', () => {
     const user = userEvent.setup()
     renderAt(`/reset-password?token=${TOKEN}`)
 
-    await user.selectOptions(screen.getByLabelText('Langue'), 'en')
+    await chooseLanguage(user, 'en')
 
     expect(screen.getByRole('heading', { level: 1, name: 'Choose a new password' })).toBeInTheDocument()
     expect(screen.getByLabelText('New password')).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Language'), 'fr')
+    await chooseLanguage(user, 'fr')
   })
 })

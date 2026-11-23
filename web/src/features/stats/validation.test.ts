@@ -1,7 +1,7 @@
 import { ApiError } from '@/lib/api/http'
-import { changedStatFields, isValidKey, statId, validateStat } from './validation'
+import { allowedScopes, changedStatFields, isNumericType, isValidKey, normalizeStat, statId, validateStat, withType } from './validation'
 
-const ok = { name: 'Éliminations', key: 'kills', type: 'flat' as const }
+const ok = { name: 'Éliminations', key: 'kills', type: 'flat' as const, scope: 'participant' as const }
 
 describe('validateStat', () => {
   it('accepte une statistique valide', () => {
@@ -34,8 +34,39 @@ describe('validateStat', () => {
     expect(validateStat({ ...ok, key: '  kills  ' }).key).toBeUndefined()
   })
 
-  it('type : flat ou percent uniquement', () => {
+  it('type : flat, percent, select ou mvp uniquement', () => {
     expect(validateStat({ ...ok, type: 'ratio' as never }).type).toBeDefined()
+    expect(validateStat({ ...ok, type: 'select' })).toEqual({})
+    expect(validateStat({ ...ok, type: 'select', scope: 'match' })).toEqual({})
+    expect(validateStat({ ...ok, type: 'mvp', scope: 'match' })).toEqual({})
+  })
+
+  it('portée compatible avec le type (comme check_scope)', () => {
+    expect(validateStat({ ...ok, scope: 'match' }).scope).toBe('stats.validation.scope')
+    expect(validateStat({ ...ok, type: 'mvp', scope: 'participant' }).scope).toBe('stats.validation.scope')
+  })
+
+  it('en modification, une statistique numérique ne devient pas un choix (ni l’inverse)', () => {
+    expect(validateStat({ ...ok, type: 'select' }, { type: 'flat' }).type).toBe('stats.validation.kindChanged')
+    expect(validateStat({ ...ok, type: 'percent' }, { type: 'flat' })).toEqual({})
+    expect(validateStat({ ...ok, type: 'mvp', scope: 'match' }, { type: 'select' })).toEqual({})
+    expect(validateStat({ ...ok, type: 'flat' }, { type: 'mvp' }).type).toBe('stats.validation.kindChanged')
+  })
+})
+
+describe('withType / allowedScopes / normalizeStat', () => {
+  it('ramène la portée à une valeur permise', () => {
+    expect(withType({ ...ok, type: 'select', scope: 'match' }, 'flat').scope).toBe('participant')
+    expect(withType(ok, 'mvp').scope).toBe('match')
+    expect(withType({ ...ok, type: 'select', scope: 'match' }, 'select').scope).toBe('match')
+    expect(allowedScopes('select')).toEqual(['participant', 'match'])
+    expect(isNumericType('percent')).toBe(true)
+    expect(isNumericType('mvp')).toBe(false)
+  })
+
+  it('complète une portée absente et les options d’un choix', () => {
+    expect(normalizeStat({ id: '1', name: 'MVP', key: 'mvp', type: 'mvp' } as never)).toMatchObject({ scope: 'match' })
+    expect(normalizeStat({ id: '1', name: 'Carte', key: 'map', type: 'select', scope: 'match' })).toMatchObject({ options: [] })
   })
 })
 
@@ -46,6 +77,7 @@ describe('changedStatFields', () => {
 
   it('ne renvoie que les champs modifiés', () => {
     expect(changedStatFields(ok, { ...ok, type: 'percent' })).toEqual({ type: 'percent' })
+    expect(changedStatFields({ ...ok, type: 'select' }, { ...ok, type: 'select', scope: 'match' })).toEqual({ scope: 'match' })
     expect(changedStatFields(ok, { ...ok, key: ' frags ', name: 'Frags' })).toEqual({
       key: 'frags',
       name: 'Frags',

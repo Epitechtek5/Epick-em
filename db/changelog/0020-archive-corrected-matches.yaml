@@ -1,0 +1,10 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0020-archive-corrected-matches
+      author: epickem
+      changes:
+        - sql:
+            sql: ALTER TABLE match ADD COLUMN archived boolean NOT NULL DEFAULT false;
+      rollback:
+        - sql:
+            sql: ALTER TABLE match DROP COLUMN archived;

@@ -13,12 +13,19 @@ import type { IconSvgElement } from '@hugeicons/react'
 import { useState, type ChangeEvent, type DragEvent } from 'react'
 import { Link } from 'react-router'
 
-import { ImportConfirmDialog } from '@/components/common/TransferView'
+import { ImportPreviewPanel } from '@/components/common/ImportPreviewPanel'
 import { StateMessage } from '@/components/games/StateMessage'
 import { PageHero, SectionCard } from '@/components/tournaments/ui'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { exportTournaments, importTournaments } from '@/features/tournaments/api'
+import {
+  applyFailure,
+  applyTournamentImport,
+  fileDetail,
+  previewTournamentImport,
+  type TournamentImportPreview,
+} from '@/features/tournaments/import-preview'
 import { tournamentErrorKey } from '@/features/tournaments/errors'
 import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useTransfer } from '@/hooks/use-transfer'
@@ -36,18 +43,29 @@ function transferErrorKey(error: unknown, context?: 'default' | 'file'): Message
 const FILE_ID = 'tournament-import-file'
 
 // Import / export JSON et CSV des tournois (barème et inscrits compris), réservés aux
-// administrateurs. L'import remplace les données d'un tournoi existant : confirmation explicite.
+// administrateurs. Un fichier choisi n'est qu'analysé : le serveur en renvoie un aperçu détaillé
+// (changements, têtes de série, placements, résultats), et seul cet aperçu est importé, après
+// confirmation explicite.
 export default function TournamentTransferPage() {
   const { t } = useI18n()
   useDocumentTitle(t('tournaments.transfer'))
-  const { busy, feedback, pending, runExport, chooseFile, confirmPending, cancelPending } = useTransfer({
-    exportedKey: 'tournaments.exported',
-    importResultKey: 'tournaments.importResult',
-    onExport: exportTournaments,
-    onImport: importTournaments,
-    errorKey: transferErrorKey,
-    confirmImport: true,
-  })
+  const { busy, feedback, preview, runExport, chooseFile, confirmPreview, refreshPreview, cancelPreview } =
+    useTransfer<TournamentImportPreview>({
+      exportedKey: 'tournaments.exported',
+      importResultKey: 'tournaments.importResult',
+      onExport: exportTournaments,
+      onImport: importTournaments,
+      errorKey: transferErrorKey,
+      confirmImport: true,
+      preview: {
+        onPreview: previewTournamentImport,
+        onApply: applyTournamentImport,
+        failure: applyFailure,
+        detail: fileDetail,
+      },
+    })
+  const imported = feedback?.kind === 'success' && feedback.key === 'tournaments.importResult'
+  const uncertain = feedback?.key === 'importPreview.outcome.unknown'
   const [dragging, setDragging] = useState(false)
 
   function onFile(event: ChangeEvent<HTMLInputElement>) {
@@ -80,7 +98,17 @@ export default function TournamentTransferPage() {
       />
 
       {feedback ? (
-        <StateMessage kind={feedback.kind}>
+        <StateMessage
+          kind={feedback.kind}
+          action={
+            imported || uncertain ? (
+              // La liste des tournois se recharge à l'ouverture : elle montre l'état réel.
+              <Link to="/tournaments" className="text-sm font-medium underline underline-offset-4">
+                {t('importPreview.viewTournaments')}
+              </Link>
+            ) : undefined
+          }
+        >
           {t(feedback.key, feedback.params)}
           {feedback.detail ? <span className="mt-1 block font-mono text-xs">{feedback.detail}</span> : null}
         </StateMessage>
@@ -168,10 +196,10 @@ export default function TournamentTransferPage() {
             </label>
           </div>
 
-          {busy === 'import' ? (
+          {busy === 'import' || busy === 'preview' ? (
             <p role="status" className="flex items-center gap-2 text-sm font-medium">
               <span className="size-4 animate-spin rounded-full border-2 border-primary border-t-transparent motion-reduce:animate-none" aria-hidden="true" />
-              {t('tournaments.importing')}
+              {t(busy === 'preview' ? 'importPreview.analyzing' : 'tournaments.importing')}
             </p>
           ) : null}
 
@@ -187,16 +215,17 @@ export default function TournamentTransferPage() {
         </SectionCard>
       </div>
 
-      <ImportConfirmDialog
-        pending={pending}
-        confirmation={{
-          title: t('tournaments.confirmImportTitle'),
-          description: t('tournaments.confirmImport'),
-          confirmLabel: t('tournaments.confirmImportButton'),
-        }}
-        onCancel={cancelPending}
-        onConfirm={confirmPending}
-      />
+      {preview ? (
+        <ImportPreviewPanel
+          key={preview.data?.preview_id ?? `outdated-${preview.file.name}`}
+          preview={preview}
+          busy={busy !== null}
+          applying={busy === 'apply'}
+          onConfirm={(confirmDestructive) => void confirmPreview(confirmDestructive)}
+          onCancel={cancelPreview}
+          onRefresh={refreshPreview}
+        />
+      ) : null}
     </div>
   )
 }

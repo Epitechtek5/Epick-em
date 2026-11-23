@@ -55,6 +55,14 @@ Session tests mock fetch and SecureStore to verify login contracts, restoration,
 
 With a configured emulator, build `npm run build:apk`, install `binaries/epickem.apk` with ADB and use a reachable HTTPS backend according to the existing release network policy. Register a new account, confirm the inbox link, sign in with invalid then valid credentials, restart the app, edit username/password, browse pages/details, and confirm/cancel account deletion. Verify user/watcher cannot open administrative routes and a real backend administrator can edit/delete accounts and safely demote/delete itself. Check refresh after backend access expiry, revoked refresh tokens and logout followed by restart. On macOS repeat these flows on an iOS simulator. Report native testing separately from bundle exports and mocked tests; never use fixture accounts in production code.
 
+## Advanced tournaments (#148)
+
+Use the local demo seed's `seed_admin@example.test` account to review registration requests, waiting lists, custom responses, check-in, roles, invitations, duplication and templates. The password is defined in the root `seed_demo.py`. Existing demo rules and field labels can be updated without resetting registrations with `python3 seed_demo.py --bootstrap-admin --refresh-demo-labels` from the repository root.
+
+Check the public catalog and match schedules/results while signed out; private tournaments must remain inaccessible. Open elimination brackets and inspect their match cards. After signing in, open `DEMO - Registration management` and verify a single page scroll reaches the form, participant cards and management actions, including with the keyboard open and large text. Custom responses must use the organizer's field labels, and the owner must display a username. Removing someone else uses “Remove”; withdrawing your own registration uses “Withdraw”. Check the confirmation before accepting either action.
+
+Check English, French and Spanish UI labels separately from organizer-authored content: custom field labels and rules are stored content, not automatically translated UI resources. Revoke a tournament role and revisit its step/match screens to verify permissions refresh without signing out. Unit tests and bundle builds do not replace these native device checks.
+
 ## Settings, localization and appearance
 
 The preference tests verify immediate System/Light/Dark switching, SecureStore persistence/restoration, French device defaults, unsupported-language fallback, language changes and storage failures. Resource tests compare complete English/French key sets and interpolation variables, and check status-based backend errors. Verification tests cover registration navigation, resend cooldowns, malformed or expired links, successful confirmation and the return to login. Navigation tests mount the real Expo Router stack/tabs, including SVG icons and localized Settings labels; existing authentication, account and permission regressions remain in the suite.
@@ -80,3 +88,34 @@ For real integration, run a backend containing Draft PR #75 and keep the existin
 `stats-api.test.ts` checks paginated and game-specific reads, UUID paths, authenticated create/PATCH/delete, association writes, 204 responses, validation, duplicate and in-use conflicts, raw JSON/CSV imports and exports, 256 KiB limits, `errors.file` details and shared token rotation. `stats-screens.test.tsx` checks game details for user and watcher roles, admin guards, catalog navigation, shared form validation and confirmed association removal. The i18n test verifies matching English/French keys and interpolation variables. Run the complete required suite shown above and build `npm run build:apk`.
 
 For native verification, install the Release APK on a device with a reachable HTTPS backend containing the statistics endpoints. Sign in with real admin, user and watcher accounts. Check game details in both languages/themes; admin catalog paging, create/edit/delete and association changes; JSON/CSV save/share and import, including missing game names, malformed CSV, duplicate keys and the 256 KiB limit. Confirm the import counts, backend file details and refreshed game associations. Revisit game details after an import and test an expired access token during reads and file operations. A build and mocked tests alone do not establish live integration.
+
+## Match games and configurable statistics (#156)
+
+Use an administrator and one ordinary account on a test backend matching this branch. Associate numeric eliminations, a participant selection (champion), a game selection (map), and MVP with one game. Configure their selection values from Game > Manage statistics. Verify renaming a label preserves its key, removing a value requires confirmation, and invalid or blank labels prevent saving.
+
+Create a two-participant tournament with an ongoing stage and a BO3 match. From match details start game 1, select a map, champions and MVP, enter numbers and a winner. Finish must remain disabled while edits are unsaved and after a failed save. Save, then finish with confirmation. Check 1–0 in the series, immutable game details, and that game 2 can now start. Win twice with the same participant: the match must finish at 2–0, expose backend aggregates, and offer no third game. Also check a 1–1 series can play its deciding game, BO1/BO5, free-for-all ranks, and the existing direct-result BO1 flow.
+
+For team tournaments, verify totals and individual player inputs remain separate, only roster members appear in MVP choices, and the saved player statistics and champion labels appear in the finished-game details. Repeat as the ordinary account: details remain readable, but creation, saving, completion, deletion and statistic administration are unavailable, including direct routes. Test offline loading/retry and save errors. Review narrow screens, large text, both themes and FR/EN/ES. Android runtime verification does not establish iOS runtime behavior.
+
+Automated coverage: `match-games.test.ts`, `match-game-screen.test.tsx`, `matches-screens.test.tsx`, and `stats-screens.test.tsx` cover contracts, scopes, options, roster constraints, invalid inputs, permissions, save-before-finish, confirmation, immutable games and existing flows.
+
+## Match operations and advanced brackets (#160)
+
+Automated workflow coverage verifies independent confirmation, server-controlled permissions, same-operation retries after a lost response, per-game drafts and percentage validation. Notification tests cover the exact authenticated workflow route. Backend integration tests cover conflicting reports, free-for-all consensus, private evidence, scheduling overrides, stale correction previews, downstream reset acknowledgement, atomic PostgreSQL writes, forfeit game archives and rejection of imports that would erase an audit trail.
+
+Manual checks use local fixture accounts rather than production data:
+
+1. In a BO3 with two participants, submit two winning games as player A. Confirm the match is still scheduled/ongoing and A cannot confirm their own report. Open it as B, inspect both games and confirm: the official match must finish 2–0.
+2. Submit contradictory reports in another match. Verify finalization is blocked, add a PNG/JPEG/PDF to a reasoned dispute, and resolve as an organizer. Ordinary users must not see the decision controls.
+3. Schedule a match, call participants, announce a delay and record attendance. Check the displayed local date/time and refreshed history. Confirm a forfeit explicitly; previous games must be retained in the audit.
+4. Correct a finished semifinal. Check the identified downstream matches, required replay acknowledgement, rejection of stale previews and the retained old results. Repeat with a completed final.
+5. Exercise generated single/double elimination (including reset final), Swiss next rounds, byes, qualification, manual seeds and BO overrides. Check pan/zoom and names/ranks in both themes and FR/EN/ES.
+6. Disconnect during a write, retry, and verify only one history entry. Open a notification workflow deep link before and after login. Repeat native file selection/share and cancellation on Android and iOS separately.
+
+A successful export or APK build does not replace these device checks. Record native evidence independently; Android verification does not establish iOS runtime behavior.
+
+### Local runtime verification, 2026-11-17
+
+An Android release APK was installed on the running Pixel emulator against an isolated local API/database. Verified: real account login, authenticated workflow deep link, authoritative corrected standings, old results in history, participant calls, a ten-minute delay with reason, native document selection/upload followed by dispute submission, and organizer result validation with a mandatory reason. Server reads confirmed the recorded actions and evidence association. Web integration separately verified independent BO3 confirmation and a reasoned correction. iOS JavaScript export passed; native iOS execution was not available in this Windows environment. Remote push delivery still requires the separately configured notification infrastructure.
+
+The full mobile suite passed 387 tests; the workflow subset was rerun after the final preview invalidation change. Lint, formatting, TypeScript and Expo compatibility checks passed. The upstream picomatch vulnerability remains unfixed; the audit policy has a narrowly scoped, expiring acceptance documented in `security.md`.

@@ -3,6 +3,7 @@ import type { ResultRow } from './types'
 import { DOUBLE_ONGOING, ELIM_ONGOING, GROUP_A, GROUP_B, makeMatch, participant, POOL_GROUPS, POOLS_ONGOING } from '@/test/matches'
 import { P_BOB, P_ME, STEP_POOLS } from '@/test/tournaments'
 import {
+  canChangeFormat,
   canDeleteMatch,
   canEditMatch,
   canEditParticipants,
@@ -10,12 +11,16 @@ import {
   changedMatchFields,
   createsLoop,
   emptyMatch,
+  hasDirectResults,
+  isSeries,
   matchCapacity,
   matchValues,
   nextCandidates,
   partialRanks,
+  participantStatsOf,
   playableProblem,
   resultRows,
+  statValueProblem,
   toMatchInput,
   toResultEntries,
   transitionsOf,
@@ -150,5 +155,51 @@ describe('résultats', () => {
       { participant_id: P_ME.id, stats: { kills: 2.5 }, result: 'win' },
       { participant_id: P_BOB.id, stats: { total: { kills: 7 }, players: { u: { kills: 2 } } }, rank: 2 },
     ])
+  })
+})
+
+describe('séries et choix', () => {
+  const series = makeMatch({ best_of: 3, participants: [participant('m', P_ME.id), participant('m', P_BOB.id)] })
+
+  it('une série ne se termine pas à la main et ne se saisit pas directement', () => {
+    expect(isSeries(series)).toBe(true)
+    expect(isSeries(makeMatch())).toBe(false)
+    expect(transitionsOf(POOLS_ONGOING, series)).toEqual(['ongoing', 'cancelled'])
+    expect(transitionsOf(POOLS_ONGOING, { ...series, status: 'ongoing' })).toEqual(['cancelled'])
+    expect(canEnterResults(POOLS_ONGOING, series)).toBe(false)
+    expect(canEnterResults(POOLS_ONGOING, makeMatch())).toBe(true)
+  })
+
+  it('reconnaît les résultats saisis directement', () => {
+    expect(hasDirectResults(makeMatch({ participants: [participant('m', P_ME.id, { stats: { kills: 1 } })] }))).toBe(true)
+    expect(hasDirectResults(series)).toBe(false)
+  })
+
+  it('valide et envoie le format, figé dès la première partie', () => {
+    expect(validateMatch({ ...emptyMatch(GROUP_A), best_of: '2' }, { step: POOLS_ONGOING, groups: POOL_GROUPS, matches: [] })).toEqual({
+      best_of: 'matches.validation.bestOf',
+    })
+    expect(toMatchInput({ ...emptyMatch(GROUP_A), best_of: '5' }).best_of).toBe(5)
+    expect(matchValues(series).best_of).toBe('3')
+    const bo5 = toMatchInput({ ...matchValues(series), best_of: '5' })
+    expect(changedMatchFields(series, bo5)).toEqual({ best_of: 5 })
+    const started = { ...series, games: [{ ...series, number: 1 } as never] }
+    expect(canChangeFormat(started)).toBe(false)
+    expect(changedMatchFields(started, bo5)).toEqual({})
+  })
+
+  it('ne saisit par participant que le numérique et les choix de participant', () => {
+    const agent = { id: 'a', name: 'Agent', key: 'agent', type: 'select' as const, scope: 'participant' as const, options: [{ key: 'jett', label: 'Jett' }] }
+    const map = { ...agent, id: 'm', key: 'map', scope: 'match' as const }
+    const mvp = { id: 'v', name: 'MVP', key: 'mvp', type: 'mvp' as const, scope: 'match' as const }
+    expect(participantStatsOf([STAT_A, agent, map, mvp]).map((stat) => stat.key)).toEqual(['kills', 'agent'])
+    expect(statValueProblem(agent, 'jett')).toBeNull()
+    expect(statValueProblem(agent, 'reyna')).toBe('matches.validation.statOption')
+    expect(statValueProblem(agent, '')).toBeNull()
+    expect(statValueProblem(undefined, '3')).toBe('matches.validation.statNumber')
+
+    const rows: ResultRow[] = [{ participant_id: P_ME.id, stats: { kills: '3', agent: 'jett' }, rank: '', result: '' }]
+    expect(validateResults(rows, [STAT_A, agent])).toEqual({})
+    expect(toResultEntries(rows, [], [STAT_A, agent])).toEqual([{ participant_id: P_ME.id, stats: { kills: 3, agent: 'jett' } }])
   })
 })

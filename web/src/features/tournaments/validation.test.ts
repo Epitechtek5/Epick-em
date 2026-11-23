@@ -2,20 +2,27 @@ import { ApiError, NetworkError } from '@/lib/api/http'
 import { BOB, GAME_A, ME, TT_MINE } from '@/test/render'
 import { P_BOB, P_ME, SOLO, TEAM_CUP } from '@/test/tournaments'
 import { serverDetail, tournamentErrorKey, tournamentFieldErrors } from './errors'
+import type { RegistrationField } from './types'
 import {
   canActOn,
   canCheckIn,
+  checkInWindow,
+  holdsSeat,
   capacityLocked,
   deletable,
   hasTeamRanking,
   nextStatuses,
   registrationWindow,
   scoringEditable,
+  waitlistPosition,
   withdrawalMode,
 } from './lifecycle'
 import type { TournamentValues } from './types'
 import {
+  buildResponses,
   buildScoringDefinition,
+  invalidFieldIndex,
+  suggestFieldKey,
   changedTournamentFields,
   EMPTY_TOURNAMENT,
   fromLocalInput,
@@ -72,10 +79,26 @@ describe('validateTournament', () => {
     })
   })
 
-  it('exige team_size en équipe et team_scoring_n avec top_n', () => {
-    expect(validateTournament({ ...VALID, participant_type: 'team', team_size: '0' })).toEqual({
-      team_size: 'tournaments.validation.teamSize',
+  it('exige une fourchette de titulaires en équipe et team_scoring_n avec top_n', () => {
+    expect(
+      validateTournament({ ...VALID, participant_type: 'team', team_min_starters: '0', team_max_starters: '2' }),
+    ).toEqual({
+      team_min_starters: 'tournaments.validation.starters',
     })
+    expect(
+      validateTournament({ ...VALID, participant_type: 'team', team_min_starters: '3', team_max_starters: '2' }),
+    ).toEqual({
+      team_max_starters: 'tournaments.validation.maxBelowMin',
+    })
+    expect(
+      validateTournament({
+        ...VALID,
+        participant_type: 'team',
+        team_min_starters: '2',
+        team_max_starters: '2',
+        team_max_substitutes: '-1',
+      }),
+    ).toEqual({ team_max_substitutes: 'tournaments.validation.substitutes' })
     expect(validateTournament({ ...VALID, team_scoring_mode: 'top_n', team_scoring_n: '' })).toEqual({
       team_scoring_n: 'tournaments.validation.scoringN',
     })
@@ -90,7 +113,7 @@ describe('validateTournament', () => {
 
 describe('toTournamentInput', () => {
   it('omet les champs facultatifs vides et ceux sans objet', () => {
-    expect(toTournamentInput({ ...VALID, team_size: '5' })).toEqual({
+    expect(toTournamentInput({ ...VALID, team_min_starters: '5', team_max_starters: '5' })).toEqual({
       game_id: GAME_A.id,
       name: 'TFT Open',
       start_date: fromLocalInput('2026-11-14T18:00'),
@@ -98,26 +121,34 @@ describe('toTournamentInput', () => {
       participant_type: 'solo',
       max_participants: 32,
       team_scoring_mode: 'none',
+      mode: 'online',
+      visibility: 'public',
+      registration_policy: 'open',
+      waiting_list_enabled: false,
+      registration_fields: [],
     })
   })
 
-  it('envoie team_size en équipe et team_scoring_n avec top_n', () => {
+  it('envoie la composition en équipe et team_scoring_n avec top_n', () => {
     const input = toTournamentInput({
       ...VALID,
       description: ' Desc ',
       registration_open_at: '2026-11-01T10:00',
       participant_type: 'team',
-      team_size: '5',
+      team_min_starters: '3',
+      team_max_starters: '5',
       team_scoring_mode: 'top_n',
       team_scoring_n: '3',
     })
     expect(input).toMatchObject({
       description: 'Desc',
       registration_open_at: fromLocalInput('2026-11-01T10:00'),
-      team_size: 5,
+      team_min_starters: 3,
+      team_max_starters: 5,
       team_scoring_n: 3,
     })
     expect(input).not.toHaveProperty('registration_close_at')
+    expect(input).not.toHaveProperty('team_max_substitutes')
   })
 })
 
@@ -139,11 +170,81 @@ describe('changedTournamentFields', () => {
   })
 
   it('n\'envoie que les champs modifiés', () => {
-    const values = { ...tournamentValues(TEAM_CUP), name: 'New', team_size: '3', end_date: '2026-11-20T10:00' }
+    const values = { ...tournamentValues(TEAM_CUP), name: 'New', team_max_starters: '3', end_date: '2026-11-20T10:00' }
     expect(changedTournamentFields(TEAM_CUP, values)).toEqual({
       name: 'New',
-      team_size: 3,
+      team_max_starters: 3,
       end_date: fromLocalInput('2026-11-20T10:00'),
+    })
+  })
+
+  it('n\'envoie que les réglages modifiés (la visibilité n\'est pas réécrite)', () => {
+    const values = {
+      ...tournamentValues(SOLO),
+      rules: ' Pas de triche. ',
+      waiting_list_enabled: true,
+      registration_fields: [{ key: 'ign', label: ' Pseudo ', field_type: 'text' as const, required: true, options: [] }],
+    }
+    expect(changedTournamentFields(SOLO, values)).toEqual({
+      rules: 'Pas de triche.',
+      waiting_list_enabled: true,
+      registration_fields: [{ key: 'ign', label: 'Pseudo', field_type: 'text', required: true, options: [] }],
+    })
+    // Effacer un réglage facultatif envoie null.
+    const cleared = changedTournamentFields({ ...SOLO, location: 'Paris', mode: 'in_person' }, {
+      ...tournamentValues({ ...SOLO, location: 'Paris', mode: 'in_person' }),
+      location: '',
+    })
+    expect(cleared).toEqual({ location: null })
+  })
+})
+
+describe('champs d\'inscription', () => {
+  const field = (patch: Partial<RegistrationField> = {}): RegistrationField => ({
+    key: 'ign',
+    label: 'Pseudo',
+    field_type: 'text',
+    required: false,
+    options: [],
+    ...patch,
+  })
+
+  it('propose une clé à partir du libellé, unique', () => {
+    expect(suggestFieldKey('Pseudo en jeu', [])).toBe('pseudo_en_jeu')
+    expect(suggestFieldKey('Rang', ['rang'])).toBe('rang_2')
+    expect(suggestFieldKey('', [])).toBe('field')
+  })
+
+  it('applique les règles du serveur', () => {
+    expect(invalidFieldIndex([field()])).toBeNull()
+    expect(invalidFieldIndex([field(), field()])).toBe(1)
+    expect(invalidFieldIndex([field({ key: 'pseudo-jeu' })])).toBe(0)
+    expect(invalidFieldIndex([field({ label: '  ' })])).toBe(0)
+    expect(invalidFieldIndex([field({ field_type: 'select', options: [] })])).toBe(0)
+    expect(invalidFieldIndex([field({ field_type: 'select', options: ['A', 'A'] })])).toBe(0)
+    expect(invalidFieldIndex([field({ field_type: 'select', options: ['A', 'B'] })])).toBeNull()
+    expect(invalidFieldIndex([field({ options: ['A'] })])).toBe(0)
+    expect(invalidFieldIndex(Array.from({ length: 31 }, (_, i) => field({ key: `k${i}` })))).toBe(-1)
+  })
+
+  it('valide et convertit les réponses', () => {
+    const fields = [
+      field({ key: 'ign', required: true }),
+      field({ key: 'rank', field_type: 'number' }),
+      field({ key: 'platform', field_type: 'select', options: ['PC', 'PS5'] }),
+      field({ key: 'rules', field_type: 'boolean', required: true }),
+    ]
+    expect(buildResponses(fields, {})).toEqual({
+      responses: {},
+      errors: { ign: 'required', rules: 'required' },
+    })
+    expect(buildResponses(fields, { ign: ' Faker ', rank: '12,5', platform: 'PC', rules: true })).toEqual({
+      responses: { ign: 'Faker', rank: 12.5, platform: 'PC', rules: true },
+      errors: {},
+    })
+    expect(buildResponses(fields, { ign: 'x', rank: 'abc', platform: 'Xbox', rules: true }).errors).toEqual({
+      rank: 'number',
+      platform: 'option',
     })
   })
 })
@@ -273,5 +374,34 @@ describe('erreurs', () => {
       max_participants: 'tournaments.errors.capacityBelowRegistered',
     })
     expect(tournamentFieldErrors(new ApiError(500, {}))).toBeNull()
+  })
+})
+
+describe('inscriptions étendues', () => {
+  const now = new Date('2026-11-10T12:00:00Z')
+  it('fenêtre de pointage', () => {
+    expect(checkInWindow(SOLO, now)).toBe('none')
+    expect(checkInWindow({ ...SOLO, check_in_open_at: '2026-11-11T00:00:00Z' }, now)).toBe('notYetOpen')
+    expect(checkInWindow({ ...SOLO, check_in_close_at: '2026-11-11T00:00:00Z' }, now)).toBe('open')
+    expect(checkInWindow({ ...SOLO, check_in_close_at: '2026-11-09T00:00:00Z' }, now)).toBe('closed')
+    expect(checkInWindow({ ...SOLO, check_in_settled_at: '2026-11-09T00:00:00Z' }, now)).toBe('closed')
+    expect(canCheckIn({ ...SOLO, check_in_open_at: '2026-11-11T00:00:00Z' }, P_ME, now)).toBe(false)
+    expect(canCheckIn({ ...SOLO, check_in_close_at: '2026-11-11T00:00:00Z' }, P_ME, now)).toBe(true)
+  })
+
+  it('places et liste d\'attente', () => {
+    expect(holdsSeat('disqualified')).toBe(true)
+    expect(holdsSeat('waitlisted')).toBe(false)
+    const waiting = [
+      { ...P_BOB, id: 'b', status: 'waitlisted' as const, registered_at: '2026-11-01T12:00:00Z' },
+      { ...P_ME, id: 'a', status: 'waitlisted' as const, registered_at: '2026-11-01T11:00:00Z' },
+      { ...P_ME, id: 'c', status: 'pending' as const, registered_at: '2026-11-01T10:00:00Z' },
+    ]
+    expect(waitlistPosition(waiting, 'a')).toBe(1)
+    expect(waitlistPosition(waiting, 'b')).toBe(2)
+    expect(waitlistPosition(waiting, 'c')).toBeNull()
+    // Une demande en attente ou une place sur liste d'attente se retire avant le début.
+    expect(withdrawalMode(SOLO, { ...P_ME, status: 'pending' })).toBe('delete')
+    expect(withdrawalMode({ ...SOLO, status: 'ongoing' }, { ...P_ME, status: 'waitlisted' })).toBeNull()
   })
 })

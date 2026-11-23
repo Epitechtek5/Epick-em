@@ -135,3 +135,69 @@ describe('statistiques d\'un jeu', () => {
     expect(await screen.findByText('Vous n’avez pas les droits nécessaires pour cette action.')).toBeInTheDocument()
   })
 })
+
+describe('valeurs d’une statistique à choix', () => {
+  const AGENT: Stat = {
+    id: '5a5a5a5a-5a5a-4a5a-8a5a-000000000001',
+    name: 'Agent',
+    key: 'agent',
+    type: 'select',
+    scope: 'participant',
+    options: [{ key: 'jett', label: 'Jett' }],
+  }
+
+  function optionsServer() {
+    let options = [...(AGENT.options ?? [])]
+    const fetchMock = routeFetch((path, init) => {
+      if (path === `/games/${GAME_A.id}/stats/${AGENT.id}/options` && init.method === 'PUT') {
+        options = JSON.parse(init.body as string).options
+        return jsonResponse(200, options)
+      }
+      if (path === `/games/${GAME_A.id}/stats`) return jsonResponse(200, [STAT_A, { ...AGENT, options }])
+      if (path.startsWith('/stats')) return jsonResponse(200, [STAT_A, STAT_B, AGENT])
+      return jsonResponse(200, GAME_A)
+    })
+    return fetchMock
+  }
+
+  it('lecture seule : les valeurs du jeu et la portée sont affichées', async () => {
+    signInAs('user')
+    optionsServer()
+    renderApp(`/games/${GAME_A.id}`)
+    expect(await screen.findByText('Jett')).toBeInTheDocument()
+    expect(screen.getByText(/Choix \(select\) · Chaque participant ou joueur/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Configurer les valeurs de Agent' })).not.toBeInTheDocument()
+  })
+
+  it('administrateur : renomme, ajoute et retire des valeurs, clés stables', async () => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    const fetchMock = optionsServer()
+    renderApp(`/games/${GAME_A.id}`)
+
+    await user.click(await screen.findByRole('button', { name: 'Configurer les valeurs de Agent' }))
+    const label = screen.getByLabelText('Valeur 1')
+    await user.clear(label)
+    await user.type(label, 'Jett (duelliste)')
+    await user.type(screen.getByLabelText('Nouvelle valeur'), 'Kay/O')
+    await user.click(screen.getByRole('button', { name: 'Ajouter la valeur' }))
+    await user.type(screen.getByLabelText('Nouvelle valeur'), 'Sage{Enter}')
+    await user.click(screen.getByRole('button', { name: 'Retirer Sage' }))
+    // Une valeur en cours de saisie doit être ajoutée ou effacée avant l'enregistrement.
+    await user.type(screen.getByLabelText('Nouvelle valeur'), 'Omen')
+    await user.click(screen.getByRole('button', { name: 'Enregistrer les valeurs' }))
+    expect(await screen.findByText('Ajoutez la nouvelle valeur ou videz le champ avant d’enregistrer.')).toBeInTheDocument()
+    await user.clear(screen.getByLabelText('Nouvelle valeur'))
+    await user.click(screen.getByRole('button', { name: 'Enregistrer les valeurs' }))
+
+    expect(await screen.findByText('Les valeurs de Agent ont été enregistrées.')).toBeInTheDocument()
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')!
+    expect(JSON.parse(put[1].body as string)).toEqual({
+      options: [
+        { key: 'jett', label: 'Jett (duelliste)' },
+        { key: 'kay_o', label: 'Kay/O' },
+      ],
+    })
+    expect(await screen.findByText('Jett (duelliste), Kay/O')).toBeInTheDocument()
+  })
+})

@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { GAME_A, GAME_B, jsonResponse, mockFetch, renderApp, routeFetch, signInAs } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 describe('GamesPage', () => {
   it('affiche les jeux du serveur avec nom, description et image principale', async () => {
@@ -121,10 +122,10 @@ describe('GamesPage', () => {
     renderApp('/games')
     await screen.findByText('Aucun jeu trouvé.')
 
-    await user.selectOptions(screen.getByLabelText('Langue'), 'en')
+    await chooseLanguage(user, 'en')
 
     expect(await screen.findByText('No games found.')).toBeInTheDocument()
     expect(document.documentElement.lang).toBe('en')
-    await user.selectOptions(screen.getByLabelText('Language'), 'fr')
+    await chooseLanguage(user, 'fr')
   })
 })

@@ -1,5 +1,7 @@
 import { isUuid } from '@/features/teams/validation'
 import type {
+  RegistrationField,
+  RegistrationResponses,
   ScoringRuleDefinition,
   Tournament,
   TournamentChanges,
@@ -13,6 +15,14 @@ export const NAME_MAX = 128
 export const DESCRIPTION_MAX = 4000
 export const CAPACITY_MAX = 10_000
 export const TEAM_SIZE_MAX = 100
+// Configuration (api-public/tournament_settings.rs).
+export const LOCATION_MAX = 255
+export const RULES_MAX = 20_000
+export const FIELDS_MAX = 30
+export const FIELD_KEY_MAX = 40
+export const FIELD_LABEL_MAX = 100
+export const OPTIONS_MAX = 50
+export const ANSWER_MAX = 500
 
 // ---- Dates ----------------------------------------------------------------------------------
 // Le formulaire utilise <input type="datetime-local"> (heure locale, à la minute) ; l'API reçoit
@@ -48,11 +58,24 @@ export const EMPTY_TOURNAMENT: TournamentValues = {
   registration_open_at: '',
   registration_close_at: '',
   participant_type: 'solo',
-  team_size: '',
   max_participants: '',
   team_scoring_mode: 'none',
   team_scoring_n: '',
+  mode: 'online',
+  location: '',
+  visibility: 'public',
+  rules: '',
+  team_min_starters: '',
+  team_max_starters: '',
+  team_max_substitutes: '',
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: '',
+  check_in_close_at: '',
 }
+
+const text = (value: number | null) => (value === null ? '' : String(value))
 
 export function tournamentValues(tournament: Tournament): TournamentValues {
   return {
@@ -64,11 +87,116 @@ export function tournamentValues(tournament: Tournament): TournamentValues {
     registration_open_at: toLocalInput(tournament.registration_open_at),
     registration_close_at: toLocalInput(tournament.registration_close_at),
     participant_type: tournament.participant_type,
-    team_size: tournament.team_size === null ? '' : String(tournament.team_size),
     max_participants: String(tournament.max_participants),
     team_scoring_mode: tournament.team_scoring_mode,
-    team_scoring_n: tournament.team_scoring_n === null ? '' : String(tournament.team_scoring_n),
+    team_scoring_n: text(tournament.team_scoring_n),
+    mode: tournament.mode ?? 'online',
+    location: tournament.location ?? '',
+    visibility: tournament.visibility ?? 'public',
+    rules: tournament.rules ?? '',
+    team_min_starters: text(tournament.team_min_starters ?? tournament.team_size ?? null),
+    team_max_starters: text(tournament.team_max_starters ?? tournament.team_size ?? null),
+    team_max_substitutes: text(tournament.team_max_substitutes ?? null),
+    registration_policy: tournament.registration_policy ?? 'open',
+    waiting_list_enabled: tournament.waiting_list_enabled ?? false,
+    registration_fields: (tournament.registration_fields ?? []).map((field) => ({ ...field, options: [...field.options] })),
+    check_in_open_at: toLocalInput(tournament.check_in_open_at),
+    check_in_close_at: toLocalInput(tournament.check_in_close_at),
   }
+}
+
+// ---- Champs d'inscription personnalisés ----------------------------------------------------
+
+const KEY_PATTERN = /^[A-Za-z0-9_]+$/
+
+// Clé proposée à partir du libellé (sans accents, `_` entre les mots), unique parmi `taken`.
+export function suggestFieldKey(label: string, taken: readonly string[]): string {
+  const base =
+    label
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, FIELD_KEY_MAX) || 'field'
+  let key = base
+  for (let n = 2; taken.includes(key); n += 1) key = `${base.slice(0, FIELD_KEY_MAX - String(n).length - 1)}_${n}`
+  return key
+}
+
+// Mêmes règles que le serveur : au plus 30 champs, clés uniques (1 à 40 lettres, chiffres ou
+// `_`), libellé de 1 à 100 caractères, options distinctes et non vides pour `select` seulement.
+// Renvoie l'index du premier champ invalide, -1 pour une liste trop longue, null sinon.
+export function invalidFieldIndex(fields: readonly RegistrationField[]): number | null {
+  if (fields.length > FIELDS_MAX) return -1
+  const keys = new Set<string>()
+  for (const [index, field] of fields.entries()) {
+    const key = field.key.trim()
+    if (!key || key.length > FIELD_KEY_MAX || !KEY_PATTERN.test(key) || keys.has(key)) return index
+    keys.add(key)
+    const label = Array.from(field.label.trim()).length
+    if (label < 1 || label > FIELD_LABEL_MAX) return index
+    const options = field.options.map((option) => option.trim())
+    if (field.field_type === 'select') {
+      if (options.length === 0 || options.length > OPTIONS_MAX) return index
+      if (options.some((option) => !option) || new Set(options).size !== options.length) return index
+    } else if (options.length > 0) {
+      return index
+    }
+  }
+  return null
+}
+
+function cleanFields(fields: readonly RegistrationField[]): RegistrationField[] {
+  return fields.map((field) => ({
+    key: field.key.trim(),
+    label: field.label.trim(),
+    field_type: field.field_type,
+    required: field.required,
+    options: field.field_type === 'select' ? field.options.map((option) => option.trim()) : [],
+  }))
+}
+
+// Valeurs saisies dans le formulaire d'inscription : texte, nombre en texte, case à cocher.
+export type ResponseValues = Record<string, string | boolean>
+
+export type ResponseError = 'required' | 'number' | 'option' | 'tooLong'
+
+// Valide les réponses comme le serveur et renvoie le corps à envoyer (champs vides omis).
+export function buildResponses(
+  fields: readonly RegistrationField[],
+  values: ResponseValues,
+): { responses: RegistrationResponses; errors: Record<string, ResponseError> } {
+  const responses: RegistrationResponses = {}
+  const errors: Record<string, ResponseError> = {}
+  for (const field of fields) {
+    const raw = values[field.key]
+    if (field.field_type === 'boolean') {
+      // Une case non cochée vaut `false` ; obligatoire, elle doit être cochée.
+      const checked = raw === true
+      if (field.required && !checked) errors[field.key] = 'required'
+      else responses[field.key] = checked
+      continue
+    }
+    const value = typeof raw === 'string' ? raw.trim() : ''
+    if (!value) {
+      if (field.required) errors[field.key] = 'required'
+      continue
+    }
+    if (field.field_type === 'number') {
+      const number = Number(value.replace(',', '.'))
+      if (!/^-?\d+([.,]\d+)?$/.test(value) || !Number.isFinite(number)) errors[field.key] = 'number'
+      else responses[field.key] = number
+    } else if (field.field_type === 'select') {
+      if (!field.options.includes(value)) errors[field.key] = 'option'
+      else responses[field.key] = value
+    } else if (Array.from(value).length > ANSWER_MAX) {
+      errors[field.key] = 'tooLong'
+    } else {
+      responses[field.key] = value
+    }
+  }
+  return { responses, errors }
 }
 
 // Entier dans [min, max] écrit en chiffres uniquement ; null sinon.
@@ -104,8 +232,27 @@ export function validateTournament(values: TournamentValues, checkGame = true): 
   if (parseBoundedInt(values.max_participants, 1, CAPACITY_MAX) === null) {
     errors.max_participants = 'tournaments.validation.capacity'
   }
-  if (values.participant_type === 'team' && parseBoundedInt(values.team_size, 1, TEAM_SIZE_MAX) === null) {
-    errors.team_size = 'tournaments.validation.teamSize'
+  if (values.participant_type === 'team') {
+    const min = parseBoundedInt(values.team_min_starters, 1, TEAM_SIZE_MAX)
+    const max = parseBoundedInt(values.team_max_starters, 1, TEAM_SIZE_MAX)
+    if (min === null) errors.team_min_starters = 'tournaments.validation.starters'
+    if (max === null) errors.team_max_starters = 'tournaments.validation.starters'
+    else if (min !== null && max < min) errors.team_max_starters = 'tournaments.validation.maxBelowMin'
+    if (values.team_max_substitutes.trim() && parseBoundedInt(values.team_max_substitutes, 0, TEAM_SIZE_MAX) === null) {
+      errors.team_max_substitutes = 'tournaments.validation.substitutes'
+    }
+  }
+  if (Array.from(values.location.trim()).length > LOCATION_MAX) errors.location = 'tournaments.validation.location'
+  if (Array.from(values.rules.trim()).length > RULES_MAX) errors.rules = 'tournaments.validation.rules'
+  if (invalidFieldIndex(values.registration_fields) !== null) {
+    errors.registration_fields = 'tournaments.validation.fields'
+  }
+  const checkOpen = values.check_in_open_at.trim() ? fromLocalInput(values.check_in_open_at) : null
+  const checkClose = values.check_in_close_at.trim() ? fromLocalInput(values.check_in_close_at) : null
+  if (values.check_in_open_at.trim() && !checkOpen) errors.check_in_open_at = 'tournaments.validation.date'
+  if (values.check_in_close_at.trim() && !checkClose) errors.check_in_close_at = 'tournaments.validation.date'
+  if (checkOpen && checkClose && checkClose < checkOpen) {
+    errors.check_in_close_at = 'tournaments.validation.checkInOrder'
   }
   if (values.team_scoring_mode === 'top_n' && parseBoundedInt(values.team_scoring_n, 1, TEAM_SIZE_MAX) === null) {
     errors.team_scoring_n = 'tournaments.validation.scoringN'
@@ -113,8 +260,10 @@ export function validateTournament(values: TournamentValues, checkGame = true): 
   return errors
 }
 
+const optionalDate = (value: string) => (value.trim() ? fromLocalInput(value) : null)
+
 // Corps de POST /tournaments, à partir de valeurs déjà validées. Les champs facultatifs vides
-// sont omis ; team_size n'est envoyé qu'en équipe, team_scoring_n qu'avec top_n.
+// sont omis ; la composition n'est envoyée qu'en équipe, team_scoring_n qu'avec top_n.
 export function toTournamentInput(values: TournamentValues): TournamentInput {
   const description = values.description.trim()
   const open = values.registration_open_at.trim() ? fromLocalInput(values.registration_open_at) : null
@@ -128,10 +277,27 @@ export function toTournamentInput(values: TournamentValues): TournamentInput {
     ...(open ? { registration_open_at: open } : {}),
     ...(close ? { registration_close_at: close } : {}),
     participant_type: values.participant_type,
-    ...(values.participant_type === 'team' ? { team_size: Number(values.team_size.trim()) } : {}),
     max_participants: Number(values.max_participants.trim()),
     team_scoring_mode: values.team_scoring_mode,
     ...(values.team_scoring_mode === 'top_n' ? { team_scoring_n: Number(values.team_scoring_n.trim()) } : {}),
+    mode: values.mode,
+    ...(values.location.trim() ? { location: values.location.trim() } : {}),
+    visibility: values.visibility,
+    ...(values.rules.trim() ? { rules: values.rules.trim() } : {}),
+    ...(values.participant_type === 'team'
+      ? {
+          team_min_starters: Number(values.team_min_starters.trim()),
+          team_max_starters: Number(values.team_max_starters.trim()),
+          ...(values.team_max_substitutes.trim()
+            ? { team_max_substitutes: Number(values.team_max_substitutes.trim()) }
+            : {}),
+        }
+      : {}),
+    registration_policy: values.registration_policy,
+    waiting_list_enabled: values.waiting_list_enabled,
+    registration_fields: cleanFields(values.registration_fields),
+    ...(optionalDate(values.check_in_open_at) ? { check_in_open_at: optionalDate(values.check_in_open_at) ?? '' } : {}),
+    ...(optionalDate(values.check_in_close_at) ? { check_in_close_at: optionalDate(values.check_in_close_at) ?? '' } : {}),
   }
 }
 
@@ -162,8 +328,38 @@ export function changedTournamentFields(original: Tournament, values: Tournament
   const capacity = Number(values.max_participants.trim())
   if (capacity !== original.max_participants) changes.max_participants = capacity
   if (original.participant_type === 'team') {
-    const size = Number(values.team_size.trim())
-    if (size !== original.team_size) changes.team_size = size
+    if (values.team_min_starters !== before.team_min_starters) {
+      changes.team_min_starters = Number(values.team_min_starters.trim())
+    }
+    if (values.team_max_starters !== before.team_max_starters) {
+      changes.team_max_starters = Number(values.team_max_starters.trim())
+    }
+    if (values.team_max_substitutes.trim() !== before.team_max_substitutes) {
+      changes.team_max_substitutes = values.team_max_substitutes.trim()
+        ? Number(values.team_max_substitutes.trim())
+        : null
+    }
+  }
+  // Configuration : seuls les champs modifiés partent (le serveur n'écrit que ceux-là).
+  if (values.mode !== before.mode) changes.mode = values.mode
+  if (values.location.trim() !== before.location) changes.location = values.location.trim() || null
+  if (values.visibility !== before.visibility) changes.visibility = values.visibility
+  if (values.rules.trim() !== before.rules) changes.rules = values.rules.trim() || null
+  if (values.registration_policy !== before.registration_policy) {
+    changes.registration_policy = values.registration_policy
+  }
+  if (values.waiting_list_enabled !== before.waiting_list_enabled) {
+    changes.waiting_list_enabled = values.waiting_list_enabled
+  }
+  const fields = cleanFields(values.registration_fields)
+  if (JSON.stringify(fields) !== JSON.stringify(cleanFields(before.registration_fields))) {
+    changes.registration_fields = fields
+  }
+  if (values.check_in_open_at.trim() !== before.check_in_open_at) {
+    changes.check_in_open_at = optionalDate(values.check_in_open_at)
+  }
+  if (values.check_in_close_at.trim() !== before.check_in_close_at) {
+    changes.check_in_close_at = optionalDate(values.check_in_close_at)
   }
   if (values.team_scoring_mode !== original.team_scoring_mode) changes.team_scoring_mode = values.team_scoring_mode
   const n = values.team_scoring_mode === 'top_n' ? Number(values.team_scoring_n.trim()) : null
