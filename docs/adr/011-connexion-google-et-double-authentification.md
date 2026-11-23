@@ -51,8 +51,8 @@ Contraintes :
   aléatoire de 256 bits haché en Argon2id (jamais renvoyé, journalisé ni stocké en clair),
   `users.password_set = false`. `/forgot-password` permet ensuite d'en choisir un vrai.
   Adresse déjà utilisée → `409 account_exists` : l'utilisateur se connecte et lie Google lui-même.
-- **Liaison / déliaison :** authentification de moins de 10 minutes (claim `auth_time`, conservé
-  par `/refresh`) et second facteur s'il est actif. La déliaison est refusée si le compte n'a pas
+- **Linking / unlinking:** a valid authenticated session, with no additional authentication-age
+  limit, and a second factor when enabled. La déliaison est refusée si le compte n'a pas
   de mot de passe choisi (dernière méthode de connexion) et révoque les sessions.
 - **TOTP :** secret de 160 bits chiffré en AES-256-GCM (`TOTP_ENCRYPTION_KEY`, nonce aléatoire,
   identifiant du compte en donnée associée) ; activé seulement après un premier code valide ;

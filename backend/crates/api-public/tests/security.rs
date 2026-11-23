@@ -603,35 +603,11 @@ async fn the_last_login_method_cannot_be_unlinked() {
 }
 
 #[actix_web::test]
-async fn sensitive_changes_need_a_recent_authentication() {
+async fn older_authenticated_sessions_can_manage_security_but_cannot_skip_second_factors() {
     let (app, google, _) = setup(ALL).await;
     let erin = logged_in_as(&app, "erin", "secret123").await;
     let stale = token_authenticated_ago(&erin, 3600);
-    for path in [
-        "/2fa/setup",
-        "/2fa/enable",
-        "/2fa/disable",
-        "/2fa/recovery-codes",
-        "/account/google/authorize",
-        "/account/google/unlink",
-    ] {
-        let (status, body) = post_as(&app, &stale, path, json!({})).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
-        assert_eq!(body["error"], "reauthentication_required", "{path}");
-    }
-    let (_, authorization) =
-        post_as(&app, access(&erin), "/account/google/authorize", json!({})).await;
-    let (code, state) = consent(&google, &authorization, &who("g-e", "e@gmail.com"), |_| {});
-    let (status, _) = post_as(
-        &app,
-        &stale,
-        "/account/google/link",
-        json!({ "code": code, "state": state }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-
-    // `/refresh` conserve l'instant d'authentification : il ne rajeunit pas la session.
+    // Refreshing an older session must not restore an artificial age restriction.
     let (status, refreshed) = post_as(
         &app,
         &stale,
@@ -640,8 +616,86 @@ async fn sensitive_changes_need_a_recent_authentication() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = post_as(&app, access(&refreshed), "/2fa/setup", json!({})).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    let token = access(&refreshed);
+    let (_, recovery) = enable_2fa(&app, token).await;
+    let (status, _) = link_google!(&app, google, token, who("g-e", "e@gmail.com"), Value::Null);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = link_google!(&app, google, token, who("g-e", "e@gmail.com"), recovery[0]);
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    for path in [
+        "/account/google/unlink",
+        "/2fa/disable",
+        "/2fa/recovery-codes",
+    ] {
+        let (status, body) = post_as(&app, token, path, json!({})).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}: {body}");
+        assert_eq!(body["error"], "invalid_second_factor");
+    }
+    let (status, _) = post_as(
+        &app,
+        token,
+        "/account/google/unlink",
+        json!({"code": recovery[1]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, replacement) = post_as(
+        &app,
+        token,
+        "/2fa/recovery-codes",
+        json!({"code": recovery[2]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_as(&app, token, "/2fa/disable", json!({"code": recovery[3]})).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "replaced recovery codes must stay invalid"
+    );
+    let (status, _) = post_as(
+        &app,
+        token,
+        "/2fa/disable",
+        json!({"code": replacement["recovery_codes"][0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[actix_web::test]
+async fn security_management_still_requires_an_unexpired_access_token() {
+    let (app, _, _) = setup(ALL).await;
+    let erin = logged_in_as(&app, "erin", "secret123").await;
+    let mut claims = api_public::auth::decode_access_token(access(&erin), SECRET).unwrap();
+    claims.exp = now() - 3600;
+    let expired = jsonwebtoken::encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(SECRET.as_bytes()),
+    )
+    .unwrap();
+    for path in [
+        "/2fa/setup",
+        "/2fa/enable",
+        "/2fa/disable",
+        "/2fa/recovery-codes",
+        "/account/google/authorize",
+        "/account/google/link",
+        "/account/google/unlink",
+    ] {
+        let body = json!({"code":"untrusted","state":"untrusted"});
+        assert_eq!(
+            post(&app, path, body.clone()).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+        assert_eq!(
+            post_as(&app, &expired, path, body).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+    }
 }
 
 #[actix_web::test]

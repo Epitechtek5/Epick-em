@@ -34,3 +34,10 @@ export interface TokenResponse {
 export interface StoredSession extends TokenResponse {
   expiresAt: number;
 }
+
+export interface MfaChallenge {
+  mfa_required: true;
+  mfa_token: string;
+  expires_in: number;
+}
+export type LoginResponse = TokenResponse | MfaChallenge;

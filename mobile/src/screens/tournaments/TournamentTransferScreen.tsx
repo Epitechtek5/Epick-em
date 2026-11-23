@@ -187,7 +187,9 @@ function TournamentTransfer({ token }: { token: string }) {
       {flow.stage === 'unknown' || flow.stage === 'success' ? (
         <>
           <Button
-            onPress={() => router.replace('/(authenticated)/tournaments')}
+            onPress={() =>
+              router.replace('/(authenticated)/(tabs)/tournaments')
+            }
           >
             <Text>
               {t(

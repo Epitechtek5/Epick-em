@@ -51,6 +51,9 @@ function session(
     user: role ? { ...user, role } : null,
     token: role ? 'test' : null,
     initializing,
+    secondFactorRequired: false,
+    verifySecondFactor: jest.fn(),
+    completeGoogle: jest.fn(),
     signIn: jest.fn(),
     logout: jest.fn(),
     refreshUser,
@@ -224,7 +227,7 @@ it.each(['user', 'watcher'] as const)(
       `/stats/${user.id}/edit`,
       '/stats/transfer',
       `/games/${user.id}/stats`,
-    ]) {
+    ] as const) {
       await act(async () => {
         router.push(path);
       });

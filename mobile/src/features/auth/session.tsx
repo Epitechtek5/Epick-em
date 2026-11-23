@@ -10,10 +10,14 @@ import { AppState } from 'react-native';
 import { configureSessionRequest } from '@/lib/api';
 import { revokeCurrentPushToken } from '@/features/notifications/registration';
 import { SessionClient } from './client';
-import type { AccountUser, LoginRequest } from './types';
+import { cancelGoogle } from './google';
+import type { AccountUser, LoginRequest, LoginResponse } from './types';
 
 interface AuthSession {
   token: string | null;
+  secondFactorRequired: boolean;
+  verifySecondFactor: (code: string) => Promise<void>;
+  completeGoogle: (request: () => Promise<LoginResponse>) => Promise<void>;
   user: AccountUser | null;
   initializing: boolean;
   signIn: (credentials: LoginRequest) => Promise<void>;
@@ -70,24 +74,36 @@ export function AuthProvider({ children }: PropsWithChildren) {
     <AuthContext.Provider
       value={{
         token: client.session?.access_token ?? null,
+        secondFactorRequired: Boolean(client.challenge),
+        async verifySecondFactor(code) {
+          await client.verifySecondFactor(code);
+          if (client.session) setUser(await client.currentUser());
+        },
+        async completeGoogle(request) {
+          await client.authenticateWith(request);
+          if (client.session) setUser(await client.currentUser());
+        },
         user,
         initializing,
         async signIn(credentials) {
           try {
+            await cancelGoogle();
             await client.authenticate(credentials);
-            setUser(await client.currentUser());
+            if (client.session) setUser(await client.currentUser());
           } catch (error) {
             await client.clear();
             throw error;
           }
         },
         async logout() {
+          await cancelGoogle();
           await revokeCurrentPushToken().catch(() => undefined);
           await client.logout();
         },
         refreshUser,
         updateCurrentUser: setUser,
         async clearSession() {
+          await cancelGoogle();
           await revokeCurrentPushToken().catch(() => undefined);
           await client.clear();
         },

@@ -236,3 +236,139 @@ it('refreshes a server-expired access token before retrying logout with the new 
   );
   expect(client.session).toBeNull();
 });
+
+it('does not store tokens before a password second-factor challenge succeeds', async () => {
+  jest.mocked(fetch).mockResolvedValueOnce(
+    response(200, {
+      mfa_required: true,
+      mfa_token: 'challenge',
+      expires_in: 300,
+    }),
+  );
+  await client.authenticate({
+    email: 'alice@example.com',
+    password: 'password',
+  });
+  expect(client.session).toBeNull();
+  expect(client.challenge?.mfa_token).toBe('challenge');
+  expect(SecureStore.setItemAsync).not.toHaveBeenCalled();
+  jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
+  await client.verifySecondFactor(' 123456 ');
+  expect(fetch).toHaveBeenLastCalledWith(
+    'http://localhost:8080/login/2fa',
+    expect.objectContaining({
+      body: JSON.stringify({ mfa_token: 'challenge', code: '123456' }),
+    }),
+  );
+  expect(client.challenge).toBeNull();
+  expect(client.session?.access_token).toBe(access);
+});
+
+it('accepts recovery codes after a Google challenge and discards old-account tokens', async () => {
+  await authenticate();
+  jest.mocked(SecureStore.setItemAsync).mockClear();
+  await client.authenticateWith(async () => ({
+    mfa_required: true,
+    mfa_token: 'google-challenge',
+    expires_in: 300,
+  }));
+  expect(client.session).toBeNull();
+  expect(SecureStore.setItemAsync).not.toHaveBeenCalled();
+  jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
+  await client.verifySecondFactor('recovery-code');
+  expect(fetch).toHaveBeenLastCalledWith(
+    'http://localhost:8080/login/2fa',
+    expect.objectContaining({
+      body: JSON.stringify({
+        mfa_token: 'google-challenge',
+        code: 'recovery-code',
+      }),
+    }),
+  );
+});
+
+it('preserves a challenge after an invalid code and rejects expired challenges locally', async () => {
+  await client.authenticateWith(async () => ({
+    mfa_required: true,
+    mfa_token: 'challenge',
+    expires_in: 300,
+  }));
+  jest
+    .mocked(fetch)
+    .mockResolvedValueOnce(response(401, { error: 'invalid_second_factor' }));
+  await expect(client.verifySecondFactor('bad')).rejects.toMatchObject({
+    code: 'invalid_second_factor',
+  });
+  expect(client.challenge).not.toBeNull();
+  client.challenge!.expiresAt = 0;
+  jest.mocked(fetch).mockClear();
+  await expect(client.verifySecondFactor('123456')).rejects.toMatchObject({
+    code: 'challenge_expired',
+  });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(client.challenge).toBeNull();
+});
+
+it('does not rotate or clear an authenticated session for an invalid management code', async () => {
+  await authenticate();
+  jest
+    .mocked(fetch)
+    .mockClear()
+    .mockResolvedValueOnce(response(401, { error: 'invalid_second_factor' }));
+  await expect(
+    client.request('/2fa/disable', { method: 'POST' }),
+  ).rejects.toMatchObject({ code: 'invalid_second_factor' });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(client.session).not.toBeNull();
+});
+
+it('ignores late second-factor success after logout', async () => {
+  await client.authenticateWith(async () => ({
+    mfa_required: true,
+    mfa_token: 'challenge',
+    expires_in: 300,
+  }));
+  let finish!: (value: Response) => void;
+  jest.mocked(fetch).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const pending = client.verifySecondFactor('123456');
+  await client.clear();
+  finish(response(200, tokens));
+  await pending;
+  expect(client.session).toBeNull();
+  expect(SecureStore.setItemAsync).not.toHaveBeenCalled();
+});
+
+it('does not expose a session when secure storage fails', async () => {
+  jest.mocked(fetch).mockResolvedValueOnce(response(200, tokens));
+  jest
+    .mocked(SecureStore.setItemAsync)
+    .mockRejectedValueOnce(new Error('Storage unavailable'));
+  await expect(
+    client.authenticate({ email: 'alice@example.com', password: 'password' }),
+  ).rejects.toThrow('Storage unavailable');
+  expect(client.session).toBeNull();
+});
+
+it('ignores an old account login failure after a newer login succeeds', async () => {
+  let rejectOld!: (reason: Error) => void;
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const oldLogin = client.authenticateWith(() => {
+    started();
+    return new Promise((_resolve, reject) => {
+      rejectOld = reject;
+    });
+  });
+  await ready;
+  await client.authenticateWith(async () => tokens);
+  rejectOld(new Error('Old request failed'));
+  await oldLogin;
+  expect(client.session?.access_token).toBe(access);
+});

@@ -1,3 +1,4 @@
+import { GoogleSignInButton } from '@/components/google-sign-in-button';
 import { AuthScreen } from '@/components/auth-screen';
 import { PasswordInput } from '@/components/ui/password-input';
 import { FormMessage } from '@/components/ui/feedback';
@@ -195,6 +196,8 @@ export default function RegisterScreen() {
             <Text>{t('register.submit')}</Text>
           )}
         </Button>
+
+        <GoogleSignInButton disabled={isSubmitting} />
       </View>
 
       <View className="flex-row flex-wrap justify-center gap-1">

@@ -37,6 +37,9 @@ const session = {
   user: { id: 'alice', username: 'alice', role: 'admin' },
   token: 'token',
   initializing: false,
+  secondFactorRequired: false,
+  verifySecondFactor: jest.fn(),
+  completeGoogle: jest.fn(),
   signIn: jest.fn(),
   logout: jest.fn(),
   refreshUser: jest.fn(),
@@ -174,7 +177,9 @@ it('confirms the prepared identifier once, locks repeated taps, and navigates to
   await act(async () => resolve({ created: 0, updated: 1 }));
   expect(screen.getByText('0 created, 1 updated.')).toBeTruthy();
   await act(async () => fireEvent.press(screen.getByText('View tournaments')));
-  expect(router.replace).toHaveBeenCalledWith('/(authenticated)/tournaments');
+  expect(router.replace).toHaveBeenCalledWith(
+    '/(authenticated)/(tabs)/tournaments',
+  );
 });
 
 it('blocks invalid previews and shows all server validation errors', async () => {
