@@ -16,6 +16,7 @@ mod pickem_memory;
 mod pickem_postgres;
 mod postgres;
 mod projection;
+mod security;
 mod settings;
 mod stats;
 mod steps;
@@ -49,6 +50,9 @@ pub use self::postgres::PgStore;
 pub use self::projection::{
     ProjectedEntry, ProjectedGroup, ProjectedMatch, ProjectedMember, ProjectedParticipant,
     ProjectedStep, Projection,
+};
+pub use self::security::{
+    GOOGLE, OAuthPurpose, OAuthState, SecurityStatus, SecurityStore, TotpRecord, Unlink,
 };
 pub use self::settings::{
     Category, Channel, ChannelPreferences, Language, MAX_PUSH_TOKENS, Platform, PushToken,
@@ -213,6 +217,8 @@ pub enum StoreError {
     MatchState,
     /// L'adresse e-mail est déjà utilisée par un autre compte.
     EmailTaken,
+    /// L'identité externe est déjà liée à un compte, ou le compte déjà lié à ce fournisseur.
+    IdentityTaken,
     /// L'import changerait une statistique numérique (`flat`, `percent`) en `select` ou `mvp`,
     /// ou l'inverse (clé de la statistique).
     StatKindChanged(String),
@@ -260,6 +266,7 @@ impl fmt::Display for StoreError {
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
+            StoreError::IdentityTaken => f.write_str("identité externe déjà liée"),
             StoreError::StatKindChanged(key) => write!(
                 f,
                 "la statistique {key} ne peut pas passer de numérique à `select`/`mvp`, ni l'inverse"
@@ -289,7 +296,7 @@ impl From<sqlx::Error> for StoreError {
 }
 
 #[async_trait]
-pub trait AuthStore: Send + Sync {
+pub trait AuthStore: SecurityStore + Send + Sync {
     /// Crée le compte ; [`StoreError::UsernameTaken`] si le nom est déjà utilisé,
     /// [`StoreError::EmailTaken`] si l'adresse e-mail (en minuscules) l'est.
     async fn create_user(

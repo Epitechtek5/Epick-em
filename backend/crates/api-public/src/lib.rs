@@ -1,5 +1,5 @@
 //! API publique : authentification (inscription, connexion, rafraîchissement, déconnexion,
-//! mot de passe oublié), gestion des comptes, des jeux, des statistiques, des équipes et des
+//! mot de passe oublié, connexion Google, double authentification), gestion des comptes, des jeux, des statistiques, des équipes et des
 //! tournois, l'import de tournois externes (start.gg…), les pronostics et le Pick'em.
 //! La documentation OpenAPI est servie sur `/docs` (Swagger UI) et `/openapi.json`.
 //!
@@ -15,6 +15,7 @@ pub mod external;
 pub mod game_io;
 pub mod games;
 pub mod generation;
+pub mod google;
 pub mod guard;
 pub mod invitations;
 pub mod mail;
@@ -37,6 +38,7 @@ pub mod push;
 pub mod ranking;
 pub mod resolution;
 pub mod router;
+pub mod security;
 pub mod settings;
 mod standing;
 pub mod stat_io;
@@ -46,6 +48,7 @@ pub mod steps;
 pub mod store;
 pub mod team_io;
 pub mod teams;
+pub mod totp;
 mod tournament_access;
 pub mod tournament_io;
 pub mod tournament_roles;

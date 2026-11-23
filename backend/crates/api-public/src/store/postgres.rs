@@ -34,6 +34,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
 
+mod security;
+
 /// Code SQLSTATE d'une violation de contrainte d'unicité.
 const UNIQUE_VIOLATION: &str = "23505";
 /// Code SQLSTATE d'une violation de clé étrangère.
@@ -2082,6 +2084,7 @@ impl AuthStore for PgStore {
                     "UPDATE users SET \
                          username = COALESCE($2, username), \
                          password_hash = COALESCE($3, password_hash), \
+                         password_set = password_set OR $3 IS NOT NULL, \
                          role = COALESCE($4, role), \
                          pending_email = CASE WHEN $5::text IS NULL THEN pending_email WHEN $5 = email THEN NULL ELSE $5 END, \
                          picture_url = CASE WHEN $6 THEN $7 ELSE picture_url END \
@@ -5319,7 +5322,7 @@ impl AuthStore for PgStore {
         let Some(user_id) = user_id else {
             return Ok(false);
         };
-        sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+        sqlx::query("UPDATE users SET password_hash = $2, password_set = true WHERE id = $1")
             .bind(user_id)
             .bind(password_hash)
             .execute(&mut *tx)

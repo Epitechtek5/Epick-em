@@ -52,3 +52,5 @@ databaseChangeLog:
       file: changelog/0020-pickem-write-guards.yaml
   - include:
       file: changelog/0021-preserve-spectator-locks.yaml
+  - include:
+      file: changelog/0016-google-oauth-and-totp.yaml
