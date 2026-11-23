@@ -4,6 +4,8 @@ import type { ApiRequestOptions } from '@/lib/api';
 import type {
   AccountUser,
   LoginRequest,
+  LoginResponse,
+  MfaChallenge,
   StoredSession,
   TokenResponse,
 } from './types';
@@ -11,7 +13,7 @@ import type {
 const STORAGE_KEY = 'epickem.session';
 
 export function login(credentials: LoginRequest) {
-  return apiRequest<TokenResponse>('/login', {
+  return apiRequest<LoginResponse>('/login', {
     method: 'POST',
     body: JSON.stringify(credentials),
   });
@@ -22,6 +24,7 @@ export class SessionClient {
   private refreshOperation: Promise<void> | null = null;
   private storageOperation: Promise<unknown> = Promise.resolve();
   private generation = 0;
+  challenge: (MfaChallenge & { expiresAt: number }) | null = null;
   private signingOut = false;
 
   constructor(
@@ -44,15 +47,76 @@ export class SessionClient {
   async clear() {
     this.generation++;
     this.session = null;
+    this.challenge = null;
     this.onChange(this.session);
     await this.store(null);
   }
 
   async authenticate(credentials: LoginRequest) {
-    const generation = ++this.generation;
-    const tokens = await login(credentials);
+    return this.authenticateWith(() => login(credentials));
+  }
+
+  async authenticateWith(request: () => Promise<LoginResponse>) {
+    const generation = this.generation + 1;
+    await this.clear();
     if (generation !== this.generation) return;
-    await this.accept(tokens);
+    let response: LoginResponse;
+    try {
+      response = await request();
+    } catch (error) {
+      if (generation !== this.generation) return;
+      throw error;
+    }
+    if (generation !== this.generation) return;
+    if ('mfa_required' in response) {
+      if (
+        response.mfa_required !== true ||
+        !response.mfa_token ||
+        !Number.isFinite(response.expires_in) ||
+        response.expires_in <= 0
+      )
+        throw new Error('Invalid challenge response');
+      this.challenge = {
+        ...response,
+        expiresAt: Date.now() + response.expires_in * 1000,
+      };
+      this.onChange(null);
+      return;
+    }
+    await this.accept(response);
+  }
+
+  async verifySecondFactor(code: string) {
+    const challenge = this.challenge;
+    const generation = this.generation;
+    if (!challenge || challenge.expiresAt <= Date.now()) {
+      this.challenge = null;
+      this.onChange(this.session);
+      throw new ApiError(401, 'Challenge expired', 'challenge_expired');
+    }
+    try {
+      const tokens = await apiRequest<TokenResponse>('/login/2fa', {
+        method: 'POST',
+        body: JSON.stringify({
+          mfa_token: challenge.mfa_token,
+          code: code.trim(),
+        }),
+      });
+      if (generation !== this.generation || this.challenge !== challenge)
+        return;
+      this.challenge = null;
+      await this.accept(tokens);
+    } catch (error) {
+      if (
+        generation === this.generation &&
+        error instanceof ApiError &&
+        error.code === 'unauthorized'
+      ) {
+        this.challenge = null;
+        this.onChange(this.session);
+      }
+      throw error;
+    }
   }
 
   private async accept(tokens: TokenResponse) {
@@ -65,18 +129,22 @@ export class SessionClient {
     ) {
       throw new Error('Invalid session response');
     }
-    this.session = {
+    const generation = this.generation;
+    const next = {
       ...tokens,
       expiresAt: Date.now() + tokens.expires_in * 1000,
     };
-    await this.store(this.session);
-    this.onChange(this.session);
+    await this.store(next);
+    if (generation !== this.generation) return;
+    this.session = next;
+    this.onChange(next);
   }
 
   async restore() {
+    const generation = this.generation;
     try {
       const stored = await SecureStore.getItemAsync(STORAGE_KEY);
-      if (!stored) return;
+      if (!stored || generation !== this.generation) return;
       const value: StoredSession = JSON.parse(stored);
       if (
         !value.access_token ||
@@ -87,7 +155,7 @@ export class SessionClient {
       this.session = value;
       if (value.expiresAt <= Date.now()) await this.refresh();
     } catch {
-      await this.clear();
+      if (generation === this.generation) await this.clear();
     }
   }
 
@@ -140,7 +208,12 @@ export class SessionClient {
     try {
       return await send();
     } catch (error) {
-      if (!(error instanceof ApiError) || error.status !== 401) throw error;
+      if (
+        !(error instanceof ApiError) ||
+        error.status !== 401 ||
+        error.code === 'invalid_second_factor'
+      )
+        throw error;
       // A late 401 from the old token must reuse the rotation already completed.
       if (generation !== this.generation || this.signingOut) throw error;
       if (this.session === used) await this.refresh();
@@ -191,7 +264,12 @@ export class SessionClient {
       try {
         await revoke();
       } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 401) throw error;
+        if (
+          !(error instanceof ApiError) ||
+          error.status !== 401 ||
+          error.code === 'invalid_second_factor'
+        )
+          throw error;
         // Server expiry can precede our local timestamp slightly; revoke the rotated pair.
         await this.refresh();
         await revoke();

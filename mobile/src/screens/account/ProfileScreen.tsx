@@ -1,3 +1,4 @@
+import { SecuritySection } from '@/components/security-section';
 import { useTranslation } from '@/i18n';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, View } from 'react-native';
@@ -137,6 +138,7 @@ export default function ProfileScreen() {
           </Button>
         </View>
       </View>
+      <SecuritySection key={user.id} />
       <PreferenceSections />
       <View className="gap-3">
         <Text variant="small" role="heading" aria-level={2}>

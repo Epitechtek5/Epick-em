@@ -44,6 +44,7 @@ module.exports = ({ config }) => ({
             ...[
               '/reset-password',
               '/verify-email',
+              '/auth/google/callback',
               '/invite/',
               '/invitations/',
             ].map((path) => ({
@@ -67,6 +68,7 @@ module.exports = ({ config }) => ({
   plugins: [
     ...(config.plugins || []),
     'expo-secure-store',
+    'expo-web-browser',
     'expo-localization',
     'expo-notifications',
     '@react-native-community/datetimepicker',

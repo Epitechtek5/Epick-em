@@ -13,9 +13,8 @@ const localNode = path.join(
 );
 const node = existsSync(localNode) ? localNode : process.execPath;
 
-if (node !== process.execPath) {
-  process.env.PATH = `${path.dirname(node)}:${process.env.PATH}`;
-}
+// Gradle launches node by name, even when this script was invoked by absolute path.
+process.env.PATH = `${path.dirname(node)}${path.delimiter}${process.env.PATH}`;
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, stdio: 'inherit' });

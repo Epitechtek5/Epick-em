@@ -1,3 +1,4 @@
+import { GoogleSignInButton } from '@/components/google-sign-in-button';
 import { AuthScreen } from '@/components/auth-screen';
 import { PasswordInput } from '@/components/ui/password-input';
 import { FormMessage } from '@/components/ui/feedback';
@@ -22,7 +23,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const { signIn, user, initializing } = useAuth();
+  const { signIn, user, initializing, secondFactorRequired } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   async function submit() {
@@ -57,6 +58,7 @@ export default function LoginScreen() {
       setSubmitting(false);
     }
   }
+  if (secondFactorRequired) return <Redirect href="/second-factor" />;
   if (user) return <Redirect href={target ?? '/'} />;
   return (
     <AuthScreen>
@@ -66,6 +68,7 @@ export default function LoginScreen() {
       />
 
       <View className="gap-5">
+        <GoogleSignInButton disabled={submitting || initializing} />
         <View className="gap-2">
           <Text className="text-sm font-medium" nativeID="login-email-label">
             {t('common.email')}

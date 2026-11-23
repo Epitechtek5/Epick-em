@@ -1,3 +1,4 @@
+import { GoogleSignInButton } from '@/components/google-sign-in-button';
 import { AuthScreen } from '@/components/auth-screen';
 import { PasswordInput } from '@/components/ui/password-input';
 import { FormMessage } from '@/components/ui/feedback';
@@ -181,6 +182,8 @@ export default function RegisterScreen() {
             <FormMessage>{t(errors.confirmPassword)}</FormMessage>
           )}
         </View>
+
+        <GoogleSignInButton disabled={isSubmitting} />
 
         {serverError ? <FormMessage>{t(serverError)}</FormMessage> : null}
 
