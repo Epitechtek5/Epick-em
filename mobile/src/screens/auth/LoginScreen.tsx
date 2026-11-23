@@ -68,7 +68,6 @@ export default function LoginScreen() {
       />
 
       <View className="gap-5">
-        <GoogleSignInButton disabled={submitting || initializing} />
         <View className="gap-2">
           <Text className="text-sm font-medium" nativeID="login-email-label">
             {t('common.email')}
@@ -135,6 +134,8 @@ export default function LoginScreen() {
           ) : null}
           <Text>{t(submitting ? 'login.submitting' : 'login.submit')}</Text>
         </Button>
+
+        <GoogleSignInButton disabled={submitting || initializing} />
 
         <Button
           variant="outline"

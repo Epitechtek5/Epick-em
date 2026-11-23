@@ -183,8 +183,6 @@ export default function RegisterScreen() {
           )}
         </View>
 
-        <GoogleSignInButton disabled={isSubmitting} />
-
         {serverError ? <FormMessage>{t(serverError)}</FormMessage> : null}
 
         <Button
@@ -198,6 +196,8 @@ export default function RegisterScreen() {
             <Text>{t('register.submit')}</Text>
           )}
         </Button>
+
+        <GoogleSignInButton disabled={isSubmitting} />
       </View>
 
       <View className="flex-row flex-wrap justify-center gap-1">
