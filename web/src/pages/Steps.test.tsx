@@ -5,6 +5,7 @@ import type { GroupRanking, Step } from '@/features/steps/types'
 import type { Tournament } from '@/features/tournaments/types'
 import { GAME_A, jsonResponse, renderApp, routeFetch, signInAs, TT_MINE, userResponse } from '@/test/render'
 import { fullText, P_BOB, P_ME, SOLO, STEP_FINAL, STEP_POOLS } from '@/test/tournaments'
+import { makeMatch } from '@/test/matches'
 
 interface ServerState {
   tournament: Tournament
@@ -185,18 +186,34 @@ describe('Formulaire d’étape', () => {
     expect(within(preview).getByText('attendu : 16')).toBeInTheDocument()
     expect(within(preview).getAllByText('Conforme')).toHaveLength(2)
 
-    const criterion = screen.getByLabelText('Nouveau critère')
-    await user.type(criterion, 'wins{Enter}')
-    await user.type(criterion, 'Bad Key{Enter}')
-    expect(screen.getByText(/Critère invalide/)).toBeInTheDocument()
-    await user.clear(criterion)
-    await user.type(criterion, 'kills')
+    // Critères choisis parmi ceux que le serveur évalue, puis réordonnés au clavier.
+    const criterion = screen.getByLabelText('Critère à ajouter')
+    await user.selectOptions(criterion, 'Différentiel de manches')
     await user.click(screen.getByRole('button', { name: 'Ajouter le critère' }))
-    await user.click(screen.getByRole('button', { name: 'Monter kills' }))
-    expect(screen.getByText('kills est maintenant en priorité 1.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Descendre kills' })).toHaveFocus()
+    expect(within(criterion).queryByRole('option', { name: 'Différentiel de manches' })).not.toBeInTheDocument()
+    await user.selectOptions(criterion, 'Confrontation directe')
+    await user.click(screen.getByRole('button', { name: 'Ajouter le critère' }))
+    await user.click(screen.getByRole('button', { name: 'Monter Confrontation directe' }))
+    expect(screen.getByText('Confrontation directe est maintenant en priorité 1.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Descendre Confrontation directe' })).toHaveFocus()
     const order = within(screen.getByRole('list', { name: 'Critères par ordre de priorité' })).getAllByRole('listitem')
-    expect(order.map((item) => item.querySelector('code')?.textContent)).toEqual(['kills', 'wins'])
+    expect(order.map((item) => item.textContent)).toEqual([
+      expect.stringContaining('Confrontation directe'),
+      expect.stringContaining('Différentiel de manches'),
+    ])
+
+    // Réglages avancés : têtes de série manuelles, BO3 par défaut, BO5 au tour 4, barème propre.
+    await user.click(screen.getByRole('radio', { name: /Ordre manuel/ }))
+    await user.selectOptions(screen.getByLabelText('Format par défaut'), 'BO3 · 2 victoire(s) nécessaire(s)')
+    await user.click(screen.getByRole('button', { name: 'Configurer une ronde' }))
+    const round = screen.getByLabelText('Ronde')
+    await user.clear(round)
+    await user.type(round, '4')
+    await user.selectOptions(screen.getByLabelText('Format de la ronde 4'), 'BO5 · 3 victoire(s) nécessaire(s)')
+    await user.click(screen.getByRole('radio', { name: /Barème propre à l’étape/ }))
+    const win = screen.getByLabelText('Points d’une victoire')
+    await user.clear(win)
+    await user.type(win, '2,5')
 
     await user.click(screen.getByRole('button', { name: 'Créer l’étape' }))
     expect(await screen.findByText('L’étape 2 a été créée.')).toBeInTheDocument()
@@ -208,7 +225,14 @@ describe('Formulaire d’étape', () => {
       group_size: 16,
       matches_per_group: 1,
       advance_per_group: 1,
-      tiebreak: ['kills', 'wins'],
+      tiebreak: ['head_to_head', 'game_differential'],
+      rules: {
+        seeding: 'manual',
+        qualification: 'random',
+        best_of: 3,
+        best_of_by_round: { '4': 5 },
+        scoring: { win: 2.5, draw: 1, loss: 0, placement: [] },
+      },
     })
   })
 
@@ -360,7 +384,7 @@ describe('Page d’une étape', () => {
     expect(screen.queryByRole('link', { name: 'Modifier l’étape' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Lancer l’étape' }))
-    expect(screen.getByRole('alertdialog')).toHaveTextContent('répartir au hasard les participants admissibles dans 4 groupe(s)')
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('répartir les participants admissibles en serpentin dans 4 groupe(s)')
     await confirm(user, 'Lancer l’étape')
     expect(await screen.findByText('L’étape 1 est lancée : les groupes sont constitués.')).toBeInTheDocument()
     expect(calls(fetchMock, 'POST', '/start')).toHaveLength(1)
@@ -451,5 +475,154 @@ describe('Page d’une étape', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'TFT Open' })).toBeInTheDocument()
     expect(calls(fetchMock, 'DELETE', `/steps/${STEP_FINAL.id}`)).toHaveLength(1)
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Voir l’étape 2' })).not.toBeInTheDocument())
+  })
+
+  it('montre les réglages avancés et les critères évalués par le serveur', async () => {
+    signInAs('user')
+    const step: Step = {
+      ...STEP_FINAL,
+      tiebreak: ['head_to_head', 'wins'],
+      rules: { seeding: 'ranking', qualification: 'rank', best_of: 3, best_of_by_round: { '2': 5 }, scoring: { win: 3, draw: 1, loss: 0, placement: [] } },
+    }
+    server({ steps: [STEP_POOLS, step] })
+    renderApp(`/tournaments/${SOLO.id}/steps/${step.id}`)
+    const tiebreak = await screen.findByRole('list', { name: 'Critères par ordre de priorité' })
+    expect(within(tiebreak).getByText('Confrontation directe')).toBeInTheDocument()
+    expect(within(tiebreak).getByText('wins').tagName).toBe('CODE')
+    const rules = screen.getByRole('heading', { name: 'Réglages avancés' }).parentElement!
+    expect(within(rules).getByText('Classement')).toBeInTheDocument()
+    expect(within(rules).getByText('Classement général')).toBeInTheDocument()
+    expect(within(rules).getByText('BO3 par défaut')).toBeInTheDocument()
+    expect(within(rules).getByText('Ronde 2 : BO5')).toBeInTheDocument()
+    expect(within(rules).getByText('Victoire 3 · Égalité 1 · Défaite 0')).toBeInTheDocument()
+    // Pas de génération pour un joueur.
+    expect(screen.queryByRole('heading', { name: 'Génération des matchs' })).not.toBeInTheDocument()
+  })
+
+  it('administrateur : ordonne les têtes de série à la main avant le lancement', async () => {
+    signInAs('admin')
+    const manual: Step = { ...STEP_POOLS, rules: { ...STEP_POOLS.rules, seeding: 'manual' } }
+    const { fetchMock } = server({ tournament: { ...SOLO, status: 'ongoing' }, steps: [manual, STEP_FINAL] })
+    const user = userEvent.setup()
+    renderApp(`/tournaments/${SOLO.id}/steps/${manual.id}`)
+    const list = await screen.findByRole('list', { name: 'Têtes de série, de la première à la dernière' })
+    // Ordre proposé : inscrits actifs, par ordre d'inscription.
+    await waitFor(() => expect(within(list).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      expect.stringContaining('alice'),
+      expect.stringContaining('bob'),
+    ]))
+    await user.click(within(list).getByRole('button', { name: 'Descendre alice' }))
+    expect(screen.getByText('alice est maintenant tête de série 2.')).toBeInTheDocument()
+    expect(within(list).getByRole('button', { name: 'Monter alice' })).toHaveFocus()
+
+    await user.click(screen.getByRole('button', { name: 'Lancer l’étape' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('fixer les têtes de série (Ordre manuel)')
+    await confirm(user, 'Lancer l’étape')
+    expect(await screen.findByText('L’étape 1 est lancée : les groupes sont constitués.')).toBeInTheDocument()
+    expect(calls(fetchMock, 'POST', '/start')[0].body).toEqual({ seed_order: [P_BOB.id, P_ME.id] })
+  })
+
+  it('administrateur : prévisualise la génération (byes, têtes de série, progression) puis la confirme', async () => {
+    signInAs('admin')
+    const step: Step = { ...STEP_FINAL, status: 'ongoing', group_size: 3 }
+    const group = '17171717-1717-4717-8717-171717171717'
+    const third = 'eeeeeeee-eeee-4eee-8eee-000000000003'
+    let previews = 0
+    let generated = false
+    const preview = (revision: string) => ({
+      revision,
+      matches: [
+        { group_id: group, round: 1, number: 1, bracket: null, best_of: 3, participants: [[P_BOB.id, 1], [P_ME.id, 2]], next: [2, 2], loser_next: null, bye_points: null },
+        { group_id: group, round: 1, number: 2, bracket: null, best_of: 1, participants: [[third, 1]], next: [2, 1], loser_next: null, bye_points: 3 },
+        { group_id: group, round: 2, number: 1, bracket: null, best_of: 3, participants: [], next: null, loser_next: null, bye_points: null },
+      ],
+    })
+    const { fetchMock } = server({
+      tournament: { ...SOLO, status: 'ongoing' },
+      steps: [{ ...STEP_POOLS, status: 'finished' }, step],
+      groups: {
+        [step.id]: [
+          {
+            group_id: group,
+            index: 1,
+            participants: [
+              { participant_id: third, points: 0, rank: 1, status: 'in', seed: 1 },
+              { participant_id: P_BOB.id, points: 0, rank: 1, status: 'in', seed: 2 },
+              { participant_id: P_ME.id, points: 0, rank: 1, status: 'in', seed: 3 },
+            ],
+          },
+        ],
+      },
+      on: (path, method) => {
+        if (path.endsWith('/generation-preview')) {
+          previews += 1
+          return jsonResponse(200, preview(`rev-${previews}`))
+        }
+        if (path.endsWith('/generate') && method === 'POST') {
+          // Premier essai : le plan a changé entre-temps.
+          if (previews === 1) return jsonResponse(409, { error: 'invalid_status_transition' })
+          generated = true
+          return jsonResponse(201, { matches: [makeMatch(), makeMatch(), makeMatch()] })
+        }
+        if (path.endsWith(`/steps/${step.id}/matches`)) return jsonResponse(200, generated ? [makeMatch({ round: 1 })] : [])
+        return undefined
+      },
+    })
+    const user = userEvent.setup()
+    renderApp(`/tournaments/${SOLO.id}/steps/${step.id}`)
+    const section = (await screen.findByRole('heading', { name: 'Génération des matchs' })).closest('section')!
+    await user.click(await within(section).findByRole('button', { name: 'Prévisualiser les matchs' }))
+    expect(await within(section).findByText('3 match(s) prévu(s), dont 1 bye(s).', { exact: false })).toBeInTheDocument()
+    const first = within(section).getByText('Ronde 1 · Match 1').closest('li')!
+    expect(await within(first).findByText('bob')).toBeInTheDocument()
+    expect(within(first).getByText('Tête de série 2')).toBeInTheDocument()
+    expect(within(first).getByText('BO3')).toBeInTheDocument()
+    expect(within(first).getByText('Vainqueur → Ronde 2 · Match 1 (place 2)')).toBeInTheDocument()
+    const bye = within(section).getByText('Ronde 1 · Match 2').closest('li')!
+    expect(within(bye).getByText('Bye : qualifié d’office, 3 pt(s).')).toBeInTheDocument()
+    const final = within(section).getByText('Ronde 2 · Match 1').closest('li')!
+    expect(within(final).getAllByText('Qualifié d’un match précédent')).toHaveLength(2)
+
+    // Plan périmé : refus, nouvel aperçu calculé, puis confirmation avec la nouvelle révision.
+    await user.click(within(section).getByRole('button', { name: 'Générer ces matchs' }))
+    await confirm(user, 'Générer ces matchs')
+    expect(await within(section).findByText(/Le plan a changé depuis l’aperçu/)).toBeInTheDocument()
+    await waitFor(() => expect(previews).toBe(2))
+    await user.click(within(section).getByRole('button', { name: 'Générer ces matchs' }))
+    await confirm(user, 'Générer ces matchs')
+    expect(await within(section).findByText('3 match(s) généré(s).')).toBeInTheDocument()
+    expect(calls(fetchMock, 'POST', '/generate').map((call) => call.body)).toEqual([{ revision: 'rev-1' }, { revision: 'rev-2' }])
+    expect(await within(section).findByText(/la génération n’est plus proposée/)).toBeInTheDocument()
+  })
+
+  it('administrateur : génère la ronde suisse suivante et propose les revanches si l’appariement échoue', async () => {
+    signInAs('admin')
+    const swiss: Step = { ...STEP_FINAL, format: 'swiss', status: 'ongoing', matches_per_group: 3 }
+    let attempts = 0
+    const { fetchMock } = server({
+      tournament: { ...SOLO, status: 'ongoing' },
+      steps: [{ ...STEP_POOLS, status: 'finished' }, swiss],
+      on: (path, method) => {
+        if (path.endsWith(`/steps/${swiss.id}/matches`)) return jsonResponse(200, [makeMatch({ round: 1, status: 'finished' })])
+        if (path.endsWith('/rounds') && method === 'POST') {
+          attempts += 1
+          return attempts === 1
+            ? jsonResponse(400, { error: 'invalid_request', errors: { pairing: 'Aucun appariement sans revanche.' } })
+            : jsonResponse(201, { matches: [makeMatch({ round: 2 })] })
+        }
+        return undefined
+      },
+    })
+    const user = userEvent.setup()
+    renderApp(`/tournaments/${SOLO.id}/steps/${swiss.id}`)
+    const section = (await screen.findByRole('heading', { name: 'Génération des matchs' })).closest('section')!
+    expect(await within(section).findByText(/Ronde 1 terminée sur 3/)).toBeInTheDocument()
+    await user.click(within(section).getByRole('button', { name: 'Générer la ronde suivante' }))
+    expect(await within(section).findByText(/Aucun appariement sans revanche n’est possible/)).toBeInTheDocument()
+    await user.click(within(section).getByRole('button', { name: 'Autoriser des revanches' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('déjà affronté')
+    await confirm(user, 'Autoriser des revanches')
+    expect(await within(section).findByText('Ronde suivante générée : 1 match(s).')).toBeInTheDocument()
+    expect(calls(fetchMock, 'POST', '/rounds').map((call) => call.body)).toEqual([{ allow_rematches: false }, { allow_rematches: true }])
   })
 })

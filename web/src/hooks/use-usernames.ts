@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { getUser } from '@/features/users/api'
+import { getUser, type UserProfile } from '@/features/users/api'
 
-// Noms d'utilisateur des comptes demandés (GET /user/{id}, une requête par compte distinct).
+// Profils publics des comptes demandés (GET /user/{id}, une requête par compte distinct).
 // Un compte introuvable ou une erreur laisse l'entrée absente : l'appelant affiche un repli.
-export function useUsernames(ids: readonly string[]): Record<string, string> {
+export function useUserProfiles(ids: readonly string[]): Record<string, UserProfile> {
   const key = [...new Set(ids)].sort().join(',')
-  const [names, setNames] = useState<Record<string, string>>({})
+  const [profiles, setProfiles] = useState<Record<string, UserProfile>>({})
 
   useEffect(() => {
     if (!key) return
@@ -15,13 +15,13 @@ export function useUsernames(ids: readonly string[]): Record<string, string> {
     void Promise.all(
       key.split(',').map((id) =>
         getUser(id, controller.signal).then(
-          (user) => [id, user.username] as const,
+          (user) => [id, user] as const,
           () => null,
         ),
       ),
     ).then((entries) => {
       if (!active) return
-      setNames((current) => {
+      setProfiles((current) => {
         const next = { ...current }
         for (const entry of entries) if (entry) next[entry[0]] = entry[1]
         return next
@@ -33,5 +33,14 @@ export function useUsernames(ids: readonly string[]): Record<string, string> {
     }
   }, [key])
 
-  return names
+  return profiles
+}
+
+// Noms d'utilisateur des comptes demandés (voir useUserProfiles).
+export function useUsernames(ids: readonly string[]): Record<string, string> {
+  const profiles = useUserProfiles(ids)
+  return useMemo(
+    () => Object.fromEntries(Object.entries(profiles).map(([id, user]) => [id, user.username])),
+    [profiles],
+  )
 }

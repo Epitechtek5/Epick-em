@@ -6,6 +6,8 @@ export interface UserProfile {
   id: string
   username: string
   role: 'user' | 'admin' | 'watcher'
+  // Photo de profil (URL http(s)), null ou absente sans photo.
+  picture_url?: string | null
 }
 
 export async function listUsers(query: { limit?: number; offset?: number } = {}, signal?: AbortSignal) {

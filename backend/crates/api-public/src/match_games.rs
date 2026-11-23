@@ -25,7 +25,7 @@ use crate::store::{
     GameFinish, GameScores, Match, MatchGame, MatchGameParticipant, MatchParticipant, MatchResult,
     MatchScore, MatchStatus, StatType,
 };
-use crate::tournaments::find_tournament;
+use crate::tournaments::{find_tournament, visible_tournament};
 use crate::users::require_admin;
 use actix_web::{HttpResponse, delete, get, post, put, web};
 use serde::{Deserialize, Serialize};
@@ -116,10 +116,11 @@ struct GameOutcome {
 #[get("/tournaments/{id}/steps/{step_id}/matches/{match_id}/games")]
 async fn list_games(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id, match_id) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    visible_tournament(&state, &claims, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let found = find_match(&state, &step, match_id).await?;
     Ok(HttpResponse::Ok().json(games_of(&state, found.id).await?))
@@ -146,10 +147,11 @@ async fn list_games(
 #[get("/tournaments/{id}/steps/{step_id}/matches/{match_id}/games/{number}")]
 async fn get_game(
     state: web::Data<AppState>,
+    claims: web::ReqData<Claims>,
     path: web::Path<(Uuid, Uuid, Uuid, i32)>,
 ) -> Result<HttpResponse, ApiError> {
     let (tournament_id, step_id, match_id, number) = path.into_inner();
-    find_tournament(&state, tournament_id).await?;
+    visible_tournament(&state, &claims, tournament_id).await?;
     let step = find_step(&state, tournament_id, step_id).await?;
     let found = find_match(&state, &step, match_id).await?;
     Ok(HttpResponse::Ok().json(find_game(&state, found.id, number).await?))

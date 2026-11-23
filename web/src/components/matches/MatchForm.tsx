@@ -9,9 +9,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/native-select'
 import { bracketLabelKey } from '@/features/matches/labels'
-import { BRACKETS, type Match, type MatchField, type MatchFieldErrors, type MatchValues } from '@/features/matches/types'
+import { BEST_OF, BRACKETS, type Match, type MatchField, type MatchFieldErrors, type MatchValues } from '@/features/matches/types'
 import {
   bracketAllowed,
+  canChangeFormat,
   canEditParticipants,
   isElimination,
   matchCapacity,
@@ -29,9 +30,10 @@ const IDS: Record<MatchField, string> = {
   round: 'match-round',
   bracket: 'match-bracket',
   next_match_id: 'match-next',
+  best_of: 'match-best-of',
   scheduled_at: 'match-scheduled-at',
 }
-const ORDER: MatchField[] = ['group_id', 'participant_ids', 'round', 'bracket', 'next_match_id', 'scheduled_at']
+const ORDER: MatchField[] = ['group_id', 'participant_ids', 'best_of', 'round', 'bracket', 'next_match_id', 'scheduled_at']
 
 interface MatchFormProps {
   initial: MatchValues
@@ -122,6 +124,7 @@ export function MatchForm({
 
   const group = groups.find((candidate) => candidate.group_id === values.group_id)
   const lockedParticipants = current !== null && !canEditParticipants(current)
+  const formatLocked = current !== null && !canChangeFormat(current)
   const candidates = nextCandidates(step, matches, current)
   const label = (match: Match) => t('matches.number', { number: numbers.get(match.id) ?? 0 })
 
@@ -217,6 +220,26 @@ export function MatchForm({
 
       <FormSection icon={HierarchyIcon} title={t('matches.sections.placement')}>
         <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <Label htmlFor={IDS.best_of}>{t('matches.games.format')}</Label>
+            <NativeSelect
+              id={IDS.best_of}
+              value={values.best_of}
+              disabled={formatLocked}
+              aria-invalid={messages.best_of ? true : undefined}
+              aria-describedby={describe('best_of', 'match-best-of-hint')}
+              onChange={(event) => set('best_of', event.target.value)}
+            >
+              {BEST_OF.map((count) => (
+                <option key={count} value={String(count)}>
+                  {t(count === 1 ? 'matches.games.bestOfOne' : 'matches.games.bestOf', { count })}
+                </option>
+              ))}
+            </NativeSelect>
+            {hint('match-best-of-hint', formatLocked ? t('matches.games.formatLocked') : t('matches.games.formatHint'))}
+            {fieldError('best_of')}
+          </div>
+
           <div className="grid gap-2">
             <Label htmlFor={IDS.round}>{t('matches.round')}</Label>
             <Input

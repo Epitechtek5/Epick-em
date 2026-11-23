@@ -1,7 +1,19 @@
 import { tokenStore } from '@/lib/auth/token-store'
 import { jsonResponse, mockFetch } from '@/test/render'
 import { SOLO, STEP_FINAL, STEP_POOLS } from '@/test/tournaments'
-import { closeStep, createStep, deleteStep, getStep, getStepRanking, listSteps, startStep, updateStep } from './api'
+import {
+  closeStep,
+  createStep,
+  deleteStep,
+  generateMatches,
+  generateNextRound,
+  getStep,
+  getStepRanking,
+  listSteps,
+  previewGeneration,
+  startStep,
+  updateStep,
+} from './api'
 import { toStepInput, stepValues } from './validation'
 
 beforeEach(() => tokenStore.set({ accessToken: 'jwt', refreshToken: 'r' }))
@@ -55,5 +67,36 @@ describe('étapes', () => {
     expect(call(fetchMock, 0).url).toBe(`${base}/${STEP_POOLS.id}/ranking`)
     expect(call(fetchMock, 1)).toMatchObject({ url: `${base}/${STEP_POOLS.id}/start`, method: 'POST' })
     expect(call(fetchMock, 2)).toMatchObject({ url: `${base}/${STEP_POOLS.id}/close`, method: 'POST' })
+  })
+
+  it('donne les réglages par défaut du serveur à une étape historique sans rules', async () => {
+    const { rules: _rules, ...legacy } = STEP_POOLS
+    mockFetch(jsonResponse(200, { ...legacy, rules: { best_of: 3, best_of_by_round: { '2': 5, '3': 7 } } }))
+    const step = await getStep(SOLO.id, STEP_POOLS.id)
+    expect(step.rules).toEqual({
+      seeding: 'random',
+      qualification: 'random',
+      best_of: 3,
+      best_of_by_round: { '2': 5 },
+      scoring: null,
+    })
+  })
+
+  it('lance avec un ordre de têtes de série, prévisualise puis génère avec la révision', async () => {
+    const preview = { revision: 'abc', matches: [] }
+    const fetchMock = mockFetch(
+      jsonResponse(200, { ...STEP_POOLS, status: 'ongoing' }),
+      jsonResponse(200, preview),
+      jsonResponse(201, { matches: [] }),
+      jsonResponse(201, { matches: [] }),
+    )
+    await startStep(SOLO.id, STEP_POOLS.id, ['p2', 'p1'])
+    expect(await previewGeneration(SOLO.id, STEP_POOLS.id)).toEqual(preview)
+    await generateMatches(SOLO.id, STEP_POOLS.id, 'abc')
+    await generateNextRound(SOLO.id, STEP_POOLS.id, true)
+    expect(call(fetchMock, 0)).toMatchObject({ url: `${base}/${STEP_POOLS.id}/start`, method: 'POST', body: { seed_order: ['p2', 'p1'] } })
+    expect(call(fetchMock, 1)).toMatchObject({ url: `${base}/${STEP_POOLS.id}/generation-preview`, method: 'GET' })
+    expect(call(fetchMock, 2)).toMatchObject({ url: `${base}/${STEP_POOLS.id}/generate`, method: 'POST', body: { revision: 'abc' } })
+    expect(call(fetchMock, 3)).toMatchObject({ url: `${base}/${STEP_POOLS.id}/rounds`, method: 'POST', body: { allow_rematches: true } })
   })
 })
