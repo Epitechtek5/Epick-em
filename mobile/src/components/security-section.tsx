@@ -276,7 +276,7 @@ export function SecuritySection() {
                 accessibilityLabel={t('security.recoveryTitle')}
               >
                 <View className="flex-row items-center gap-3">
-                  <View className="rounded-xl bg-primary/10 p-3">
+                  <View className="rounded-xl bg-violet-100 p-3 dark:bg-violet-950">
                     <Icon icon={Shield01Icon} tone="primary" size={26} />
                   </View>
                   <View className="flex-1 gap-1">
@@ -306,7 +306,7 @@ export function SecuritySection() {
                     {codes.map((recoveryCode) => (
                       <View
                         key={recoveryCode}
-                        className="w-[48%] rounded-lg border border-primary/20 bg-primary/5 px-2 py-3"
+                        className="w-[48%] rounded-lg border border-violet-200 bg-violet-50 px-2 py-3 dark:border-violet-800 dark:bg-violet-950"
                       >
                         <Text className="text-center font-mono text-sm font-semibold">
                           {recoveryCode}
