@@ -84,12 +84,15 @@ it('enables TOTP only after verification and displays recovery codes once', asyn
     method: 'POST',
     body: JSON.stringify({ code: '123456' }),
   });
-  await fireEvent.press(screen.getByText('Copy recovery codes'));
+  expect(screen.getByLabelText('Recovery codes')).toBeOnTheScreen();
+  await fireEvent.press(screen.getByLabelText('Copy recovery codes'));
   expect(Clipboard.setStringAsync).toHaveBeenCalledWith('one-use-code', {
     android: { isSensitive: true },
   });
   await fireEvent.press(screen.getByText('I saved my codes'));
   expect(screen.queryByText('one-use-code')).toBeNull();
+  expect(screen.queryByLabelText('Recovery codes')).toBeNull();
+  expect(screen.queryByText('Copied to clipboard.')).toBeNull();
 });
 it('keeps enrollment disabled after a rejected code and hides secrets on background', async () => {
   const listener = jest.spyOn(AppState, 'addEventListener');
@@ -161,3 +164,48 @@ it('does not reveal a setup secret received after the app backgrounds', async ()
   });
   expect(screen.queryByText('HIDDEN-SETUP')).toBeNull();
 });
+
+it.each(['confirm', 'back', 'background'] as const)(
+  'hides regenerated codes after %s and requires signing in again',
+  async (dismissal) => {
+    jest
+      .mocked(authenticatedRequest)
+      .mockResolvedValue({ ...status, two_factor_enabled: true });
+    const confirm = jest.spyOn(Alert, 'alert');
+    await render(<SecuritySection />);
+    await screen.findByText('Replace recovery codes');
+    await fireEvent.changeText(
+      screen.getByLabelText('Authenticator or recovery code'),
+      '123456',
+    );
+    await fireEvent.press(screen.getByText('Replace recovery codes'));
+    jest
+      .mocked(authenticatedRequest)
+      .mockResolvedValueOnce({ recovery_codes: ['new-single-use-code'] })
+      .mockResolvedValueOnce({
+        ...status,
+        two_factor_enabled: true,
+        recovery_codes_remaining: 1,
+      });
+    await act(async () => {
+      confirm.mock.calls.at(-1)![2]![1].onPress!();
+    });
+    expect(await screen.findByText('new-single-use-code')).toBeOnTheScreen();
+    expect(clearSession).not.toHaveBeenCalled();
+    if (dismissal === 'confirm') {
+      await fireEvent.press(screen.getByText('I saved my codes'));
+    } else if (dismissal === 'back') {
+      await fireEvent(screen.getByLabelText('Recovery codes'), 'requestClose');
+    } else {
+      await act(() =>
+        jest
+          .mocked(AppState.addEventListener)
+          .mock.calls.at(-1)![1]('background'),
+      );
+      await fireEvent.press(screen.getByText('Sign in'));
+    }
+    expect(screen.queryByText('new-single-use-code')).toBeNull();
+    expect(clearSession).toHaveBeenCalled();
+    confirm.mockRestore();
+  },
+);

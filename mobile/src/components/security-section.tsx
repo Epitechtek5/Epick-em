@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, AppState, View } from 'react-native';
+import { Alert, AppState, Modal, ScrollView, View } from 'react-native';
+import ClipboardCopyIcon from '@hugeicons/core-free-icons/ClipboardCopyIcon';
+import CheckmarkCircle02Icon from '@hugeicons/core-free-icons/CheckmarkCircle02Icon';
+import GoogleIcon from '@hugeicons/core-free-icons/GoogleIcon';
+import Shield01Icon from '@hugeicons/core-free-icons/Shield01Icon';
 import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Text } from '@/components/ui/text';
+import { Icon } from '@/components/ui/icon';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { FormMessage } from '@/components/ui/feedback';
 import { GoogleSignInButton } from '@/components/google-sign-in-button';
 import { authenticatedRequest } from '@/lib/api';
@@ -119,12 +125,18 @@ export function SecuritySection() {
     ]);
   }
   async function copy(value: string) {
+    const visibleAtStart = visibility.current;
     try {
       await Clipboard.setStringAsync(value, { android: { isSensitive: true } });
-      setCopied(true);
+      if (visibleAtStart === visibility.current) setCopied(true);
     } catch {
       setError('security.failed');
     }
+  }
+  function closeRecoveryCodes() {
+    setCodes([]);
+    setCopied(false);
+    if (mustSignIn) void clearSession();
   }
   return (
     <View className="gap-3">
@@ -143,29 +155,46 @@ export function SecuritySection() {
         </Button>
       ) : (
         <>
-          <Text>
-            {t(
-              status.google_linked
-                ? 'security.googleLinked'
-                : 'security.googleUnlinked',
-            )}
-          </Text>
+          <View className="gap-4 rounded-xl border border-border bg-card p-4">
+            <View className="flex-row flex-wrap items-center justify-between gap-3">
+              <View className="flex-row items-center gap-2">
+                <Icon icon={GoogleIcon} tone="primary" />
+                <Text className="font-semibold">Google</Text>
+              </View>
+              <StatusBadge
+                status={status.google_linked ? 'accepted' : 'withdrawn'}
+                label={t(
+                  status.google_linked
+                    ? 'security.googleLinked'
+                    : 'security.googleUnlinked',
+                )}
+              />
+            </View>
+            <View className="h-px bg-border" />
+            <View className="flex-row flex-wrap items-center justify-between gap-3">
+              <View className="flex-row items-center gap-2">
+                <Icon icon={Shield01Icon} tone="primary" />
+                <Text className="font-semibold">{t('security.challenge')}</Text>
+              </View>
+              <StatusBadge
+                status={status.two_factor_enabled ? 'accepted' : 'pending'}
+                label={t(
+                  status.two_factor_enabled
+                    ? 'security.enabled'
+                    : 'security.disabled',
+                )}
+              />
+            </View>
+            {status.two_factor_enabled ? (
+              <Text className="text-sm text-muted-foreground">
+                {t('security.remaining', {
+                  count: status.recovery_codes_remaining,
+                })}
+              </Text>
+            ) : null}
+          </View>
           {status.google_available && !status.google_linked ? (
             <GoogleSignInButton linking disabled={busy} />
-          ) : null}
-          <Text>
-            {t(
-              status.two_factor_enabled
-                ? 'security.enabled'
-                : 'security.disabled',
-            )}
-          </Text>
-          {status.two_factor_enabled ? (
-            <Text>
-              {t('security.remaining', {
-                count: status.recovery_codes_remaining,
-              })}
-            </Text>
           ) : null}
           {secret ? (
             <>
@@ -234,32 +263,79 @@ export function SecuritySection() {
           {status.google_linked && !status.password_set ? (
             <Text>{t('security.passwordFirst')}</Text>
           ) : null}
-          {codes.length ? (
-            <>
-              <Text>{t('security.recoveryHelp')}</Text>
-              <Text>{codes.join('\n')}</Text>
-              <Button
-                variant="outline"
-                onPress={() => void copy(codes.join('\n'))}
+          <Modal
+            visible={codes.length > 0}
+            transparent
+            animationType="fade"
+            onRequestClose={closeRecoveryCodes}
+          >
+            <View className="flex-1 items-center justify-center bg-black/60 px-5 py-12">
+              <View
+                className="max-h-[85%] w-full max-w-lg gap-5 rounded-2xl border border-border bg-card p-5"
+                accessibilityViewIsModal
+                accessibilityLabel={t('security.recoveryTitle')}
               >
-                <Text>{t('security.copyCodes')}</Text>
-              </Button>
-              <Button
-                onPress={() => {
-                  setCodes([]);
-                  if (mustSignIn) void clearSession();
-                }}
-              >
-                <Text>{t('security.saved')}</Text>
-              </Button>
-            </>
-          ) : null}
+                <View className="flex-row items-center gap-3">
+                  <View className="rounded-xl bg-primary/10 p-3">
+                    <Icon icon={Shield01Icon} tone="primary" size={26} />
+                  </View>
+                  <View className="flex-1 gap-1">
+                    <Text className="text-lg font-bold" role="heading">
+                      {t('security.recoveryTitle')}
+                    </Text>
+                    <Text className="text-xs font-semibold text-primary">
+                      {t('security.oneTimeDisplay')}
+                    </Text>
+                  </View>
+                  <Button
+                    size="icon"
+                    accessibilityLabel={t('security.copyCodes')}
+                    onPress={() => void copy(codes.join('\n'))}
+                  >
+                    <Icon
+                      icon={copied ? CheckmarkCircle02Icon : ClipboardCopyIcon}
+                      tone="primary-foreground"
+                    />
+                  </Button>
+                </View>
+                <ScrollView contentContainerClassName="gap-4" bounces={false}>
+                  <Text className="text-sm text-muted-foreground">
+                    {t('security.recoveryHelp')}
+                  </Text>
+                  <View className="flex-row flex-wrap justify-between gap-y-2">
+                    {codes.map((recoveryCode) => (
+                      <View
+                        key={recoveryCode}
+                        className="w-[48%] rounded-lg border border-primary/20 bg-primary/5 px-2 py-3"
+                      >
+                        <Text className="text-center font-mono text-sm font-semibold">
+                          {recoveryCode}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                  {copied ? (
+                    <Text
+                      className="text-sm font-medium text-primary"
+                      accessibilityLiveRegion="polite"
+                    >
+                      {t('security.copied')}
+                    </Text>
+                  ) : null}
+                  {error ? <FormMessage>{t(error)}</FormMessage> : null}
+                </ScrollView>
+                <Button onPress={closeRecoveryCodes}>
+                  <Text>{t('security.saved')}</Text>
+                </Button>
+              </View>
+            </View>
+          </Modal>
           {mustSignIn && !codes.length ? (
             <Button onPress={() => void clearSession()}>
               <Text>{t('login.submit')}</Text>
             </Button>
           ) : null}
-          {copied ? (
+          {copied && !codes.length ? (
             <Text accessibilityLiveRegion="polite">{t('security.copied')}</Text>
           ) : null}
         </>

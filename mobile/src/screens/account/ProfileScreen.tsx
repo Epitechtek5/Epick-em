@@ -145,7 +145,7 @@ export default function ProfileScreen() {
           {t('settings.session')}
         </Text>
         <Button
-          variant="outline"
+          variant="destructive"
           disabled={loggingOut || deleting}
           onPress={() => void handleLogout()}
           accessibilityLabel={t('settings.logout')}
@@ -153,7 +153,7 @@ export default function ProfileScreen() {
           {loggingOut ? (
             <ActivityIndicator accessibilityLabel={t('settings.loggingOut')} />
           ) : (
-            <Icon icon={Logout01Icon} tone="foreground" />
+            <Icon icon={Logout01Icon} tone="primary-foreground" />
           )}
           <Text>{t('settings.logout')}</Text>
         </Button>

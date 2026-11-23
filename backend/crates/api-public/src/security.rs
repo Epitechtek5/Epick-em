@@ -8,7 +8,7 @@
 //!   `/forgot-password` ;
 //! - un compte existant n'est **jamais** fusionné sur la seule adresse e-mail : si l'adresse est
 //!   prise, la réponse est `409 account_exists` et l'utilisateur lie Google depuis son compte
-//!   (`/account/google/authorize` puis `/account/google/link`), authentifié récemment ;
+//!   (`/account/google/authorize` puis `/account/google/link`), authentifié ;
 //! - la déliaison est refusée si Google est la dernière méthode de connexion du compte.
 //!
 //! **Double authentification** :
@@ -16,8 +16,7 @@
 //!   premier code valide, qui renvoie les codes de récupération (affichés une seule fois) ;
 //! - le mot de passe comme Google n'émettent alors qu'un défi : les jetons ne sont émis qu'après
 //!   `/login/2fa` avec un code TOTP ou un code de récupération (usage unique) ;
-//! - désactiver, régénérer les codes, lier ou délier Google exigent une authentification de
-//!   moins de [`REAUTH_WINDOW_SECS`] secondes et, si elle est active, un code de second facteur.
+//! - Security changes require a valid authenticated session and a second factor when enabled.
 //!
 //! **Protection** : tentatives limitées par adresse IP (Google) et par compte (codes) ; défi à
 //! usage unique limité à [`MFA_MAX_ATTEMPTS`] essais ; pas TOTP déjà utilisé refusé (rejeu) ;
@@ -41,8 +40,6 @@ use utoipa::ToSchema;
 use utoipa_actix_web::service_config::ServiceConfig;
 use uuid::Uuid;
 
-/// Âge maximal de l'authentification pour une action sensible.
-pub const REAUTH_WINDOW_SECS: u64 = 10 * 60;
 /// Durée de validité d'une demande d'autorisation Google.
 pub const OAUTH_STATE_TTL: Duration = Duration::from_secs(10 * 60);
 /// Essais par défi de second facteur.
@@ -140,14 +137,6 @@ fn google(state: &AppState) -> Result<&GoogleAuth, ApiError> {
 
 fn totp_key(state: &AppState) -> Result<&TotpKey, ApiError> {
     state.totp_key.as_ref().ok_or(ApiError::NotConfigured)
-}
-
-fn require_recent(claims: &Claims) -> Result<(), ApiError> {
-    if now_secs().saturating_sub(claims.auth_time) <= REAUTH_WINDOW_SECS {
-        Ok(())
-    } else {
-        Err(ApiError::ReauthenticationRequired)
-    }
 }
 
 /// Compte une tentative pour `key` ; `429` au-delà de `limit` par fenêtre.
@@ -553,7 +542,6 @@ async fn account_security(
     responses(
         (status = 200, description = "URL d'autorisation Google", body = AuthorizationResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
-        (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 429, description = "Trop de tentatives", body = ErrorResponse),
         (status = 503, description = "Connexion Google non configurée", body = ErrorResponse),
     ),
@@ -565,7 +553,6 @@ async fn link_authorize(
     claims: web::ReqData<Claims>,
 ) -> Result<HttpResponse, ApiError> {
     google(&state)?;
-    require_recent(&claims)?;
     limit_link(&state, &http, claims.sub, "authorize").await?;
     let response = authorization(&state, OAuthPurpose::Link, Some(claims.sub)).await?;
     Ok(HttpResponse::Ok().json(response))
@@ -582,7 +569,6 @@ async fn link_authorize(
         (status = 204, description = "Compte Google lié"),
         (status = 400, description = "`state` inconnu, expiré, déjà utilisé ou d'un autre compte", body = ErrorResponse),
         (status = 401, description = "Jeton refusé, ou code de second facteur refusé", body = ErrorResponse),
-        (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 409, description = "Compte Google déjà lié", body = ErrorResponse),
         (status = 502, description = "Google injoignable", body = ErrorResponse),
         (status = 429, description = "Trop de tentatives", body = ErrorResponse),
@@ -597,7 +583,6 @@ async fn link_google(
     request: web::Json<LinkRequest>,
 ) -> Result<HttpResponse, ApiError> {
     google(&state)?;
-    require_recent(&claims)?;
     // Avant tout échange avec Google : les codes refusés comptent aussi.
     limit_link(&state, &http, claims.sub, "link").await?;
     confirm_second_factor(&state, claims.sub, request.second_factor.as_deref()).await?;
@@ -632,7 +617,6 @@ async fn link_google(
     responses(
         (status = 204, description = "Compte Google délié"),
         (status = 401, description = "Jeton refusé, ou code de second facteur refusé", body = ErrorResponse),
-        (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 404, description = "Aucun compte Google lié", body = ErrorResponse),
         (status = 409, description = "Dernière méthode de connexion", body = ErrorResponse),
     ),
@@ -643,7 +627,6 @@ async fn unlink_google(
     claims: web::ReqData<Claims>,
     request: web::Json<SecondFactor>,
 ) -> Result<HttpResponse, ApiError> {
-    require_recent(&claims)?;
     confirm_second_factor(&state, claims.sub, request.code.as_deref()).await?;
     match state
         .store
@@ -666,7 +649,6 @@ async fn unlink_google(
     responses(
         (status = 200, description = "Secret à enregistrer dans l'application d'authentification", body = TotpSetupResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
-        (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 409, description = "Double authentification déjà active", body = ErrorResponse),
         (status = 503, description = "Double authentification non configurée", body = ErrorResponse),
     ),
@@ -677,7 +659,6 @@ async fn setup_totp(
     claims: web::ReqData<Claims>,
 ) -> Result<HttpResponse, ApiError> {
     let key = totp_key(&state)?;
-    require_recent(&claims)?;
     let user = state
         .store
         .find_user_by_id(claims.sub)
@@ -710,7 +691,6 @@ async fn setup_totp(
     responses(
         (status = 200, description = "Double authentification active", body = RecoveryCodesResponse),
         (status = 401, description = "Jeton refusé, ou code refusé", body = ErrorResponse),
-        (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 409, description = "Aucun enrôlement en attente", body = ErrorResponse),
         (status = 429, description = "Trop de tentatives", body = ErrorResponse),
         (status = 503, description = "Double authentification non configurée", body = ErrorResponse),
@@ -723,7 +703,6 @@ async fn enable_totp(
     request: web::Json<SecondFactor>,
 ) -> Result<HttpResponse, ApiError> {
     let key = totp_key(&state)?;
-    require_recent(&claims)?;
     let record = state
         .store
         .find_totp(claims.sub)
@@ -764,7 +743,6 @@ async fn enable_totp(
     responses(
         (status = 204, description = "Double authentification désactivée"),
         (status = 401, description = "Jeton refusé, ou code refusé", body = ErrorResponse),
-        (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 409, description = "Double authentification inactive", body = ErrorResponse),
         (status = 429, description = "Trop de tentatives", body = ErrorResponse),
     ),
@@ -775,7 +753,6 @@ async fn disable_totp(
     claims: web::ReqData<Claims>,
     request: web::Json<SecondFactor>,
 ) -> Result<HttpResponse, ApiError> {
-    require_recent(&claims)?;
     require_enabled(&state, claims.sub).await?;
     confirm_second_factor(&state, claims.sub, request.code.as_deref()).await?;
     if !state
@@ -800,7 +777,6 @@ async fn disable_totp(
     responses(
         (status = 200, description = "Nouveaux codes", body = RecoveryCodesResponse),
         (status = 401, description = "Jeton refusé, ou code refusé", body = ErrorResponse),
-        (status = 403, description = "Authentification trop ancienne", body = ErrorResponse),
         (status = 409, description = "Double authentification inactive", body = ErrorResponse),
         (status = 429, description = "Trop de tentatives", body = ErrorResponse),
     ),
@@ -811,7 +787,6 @@ async fn regenerate_recovery_codes(
     claims: web::ReqData<Claims>,
     request: web::Json<SecondFactor>,
 ) -> Result<HttpResponse, ApiError> {
-    require_recent(&claims)?;
     require_enabled(&state, claims.sub).await?;
     confirm_second_factor(&state, claims.sub, request.code.as_deref()).await?;
     let codes = totp::new_recovery_codes();
@@ -903,20 +878,5 @@ mod tests {
             candidate_username("alice@example.com", 1),
             candidate_username("alice@example.com", 2)
         );
-    }
-
-    #[test]
-    fn reauthentication_window() {
-        let claims = |auth_time| Claims {
-            sub: Uuid::new_v4(),
-            username: "a".into(),
-            role: crate::store::Role::User,
-            iat: 0,
-            exp: 0,
-            auth_time,
-        };
-        assert!(require_recent(&claims(now_secs())).is_ok());
-        assert!(require_recent(&claims(now_secs() - REAUTH_WINDOW_SECS - 5)).is_err());
-        assert!(require_recent(&claims(0)).is_err());
     }
 }

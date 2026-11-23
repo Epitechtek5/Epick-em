@@ -1259,14 +1259,14 @@
     "google": "Continue with Google",
     "linkGoogle": "Link Google",
     "unlinkGoogle": "Unlink Google",
-    "googleLinked": "Google account linked",
-    "googleUnlinked": "No Google account linked",
-    "enabled": "Two-factor authentication enabled",
-    "disabled": "Two-factor authentication disabled",
+    "googleLinked": "Linked",
+    "googleUnlinked": "Not linked",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
     "challenge": "Two-factor authentication",
     "challengeHelp": "Enter a code from your authenticator or an unused recovery code.",
     "code": "Authenticator or recovery code",
-    "optionalCode": "Second factor (if enabled)",
+    "optionalCode": "2FA code (only if enabled)",
     "verify": "Verify code",
     "setup": "Set up two-factor authentication",
     "disable": "Disable two-factor authentication",
@@ -1275,13 +1275,13 @@
     "setupKey": "Authenticator setup key",
     "copyKey": "Copy setup key",
     "copyCodes": "Copy recovery codes",
-    "copied": "Copied. Clear your clipboard after saving securely.",
-    "recoveryHelp": "Save these single-use recovery codes somewhere safe. They are shown only once and hidden when you leave or background the app.",
+    "copied": "Copied to clipboard.",
+    "recoveryHelp": "Keep these single-use codes somewhere safe. They replace your authenticator if you lose access to it. Closing this window or leaving the app hides them permanently.",
     "saved": "I saved my codes",
     "remaining": "Recovery codes remaining: {{count}}",
     "confirmChange": "Confirm this security change. Replacing codes, disabling 2FA or unlinking Google requires signing in again.",
     "passwordFirst": "Set a password using password recovery before unlinking your only sign-in method.",
-    "callbackHelp": "Complete Google authentication. When linking, enter your second factor if enabled.",
+    "callbackHelp": "Signing you in with Google…",
     "failed": "The security request failed. Please try again.",
     "errors": {
       "invalid_second_factor": "Invalid or already used code. Try a new code.",
@@ -1297,6 +1297,9 @@
       "challenge_expired": "The challenge expired or was exhausted. Sign in again.",
       "oauth_cancelled": "Google sign-in cancelled.",
       "oauth_configuration": "Google sign-in requires a configured HTTPS application link."
-    }
+    },
+    "linkHelp": "Confirm that you want to link this Google account. If two-factor authentication is enabled, enter an authenticator or recovery code.",
+    "recoveryTitle": "Recovery codes",
+    "oneTimeDisplay": "Shown only once"
   }
 }

@@ -81,8 +81,8 @@ export default function GoogleCallbackScreen() {
   return (
     <AuthScreen>
       <AuthHeader
-        title={t('security.google')}
-        description={t('security.callbackHelp')}
+        title={t(user ? 'security.linkGoogle' : 'security.google')}
+        description={t(user ? 'security.linkHelp' : 'security.callbackHelp')}
       />
       <View className="gap-4">
         {link ? (

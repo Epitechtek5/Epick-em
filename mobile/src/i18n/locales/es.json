@@ -1259,14 +1259,14 @@
     "google": "Continuar con Google",
     "linkGoogle": "Vincular Google",
     "unlinkGoogle": "Desvincular Google",
-    "googleLinked": "Cuenta Google vinculada",
-    "googleUnlinked": "Ninguna cuenta Google vinculada",
-    "enabled": "Autenticación de dos factores activada",
-    "disabled": "Autenticación de dos factores desactivada",
+    "googleLinked": "Vinculada",
+    "googleUnlinked": "Sin vincular",
+    "enabled": "Activada",
+    "disabled": "Desactivada",
     "challenge": "Autenticación de dos factores",
     "challengeHelp": "Introduce un código de tu autenticador o un código de recuperación sin usar.",
     "code": "Código de autenticación o recuperación",
-    "optionalCode": "Segundo factor (si está activado)",
+    "optionalCode": "Código 2FA (solo si está activada)",
     "verify": "Verificar código",
     "setup": "Configurar dos factores",
     "disable": "Desactivar dos factores",
@@ -1275,13 +1275,13 @@
     "setupKey": "Clave de configuración",
     "copyKey": "Copiar clave",
     "copyCodes": "Copiar códigos",
-    "copied": "Copiado. Borra el portapapeles después de guardar de forma segura.",
-    "recoveryHelp": "Guarda estos códigos de un solo uso en un lugar seguro. Solo se muestran una vez y se ocultan al salir o pasar a segundo plano.",
+    "copied": "Copiado al portapapeles.",
+    "recoveryHelp": "Guarda estos códigos de un solo uso en un lugar seguro. Sustituyen a tu aplicación de autenticación si pierdes el acceso. Se ocultarán definitivamente al cerrar esta ventana o salir de la aplicación.",
     "saved": "He guardado mis códigos",
     "remaining": "Códigos restantes: {{count}}",
     "confirmChange": "Confirma este cambio. Reemplazar códigos, desactivar 2FA o desvincular Google requiere iniciar sesión de nuevo.",
     "passwordFirst": "Establece una contraseña mediante recuperación antes de eliminar tu único método de acceso.",
-    "callbackHelp": "Completa la autenticación Google. Para vincular, introduce el segundo factor si está activado.",
+    "callbackHelp": "Iniciando sesión con Google…",
     "failed": "La solicitud falló. Inténtalo de nuevo.",
     "errors": {
       "invalid_second_factor": "Código incorrecto o ya utilizado. Prueba uno nuevo.",
@@ -1297,6 +1297,9 @@
       "challenge_expired": "El desafío caducó o se agotó. Inicia sesión de nuevo.",
       "oauth_cancelled": "Acceso Google cancelado.",
       "oauth_configuration": "Google requiere un enlace de aplicación HTTPS configurado."
-    }
+    },
+    "linkHelp": "Confirma que deseas vincular esta cuenta de Google. Si la autenticación de dos factores está activada, introduce un código de tu aplicación de autenticación o de recuperación.",
+    "recoveryTitle": "Códigos de recuperación",
+    "oneTimeDisplay": "Se muestran una sola vez"
   }
 }
