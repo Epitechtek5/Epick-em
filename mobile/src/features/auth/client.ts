@@ -221,7 +221,11 @@ export class SessionClient {
       try {
         return await send();
       } catch (retryError) {
-        if (retryError instanceof ApiError && retryError.status === 401)
+        if (
+          generation === this.generation &&
+          retryError instanceof ApiError &&
+          retryError.status === 401
+        )
           await this.clear();
         throw retryError;
       }

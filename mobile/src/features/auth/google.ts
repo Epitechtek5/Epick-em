@@ -123,6 +123,8 @@ export async function consumeGoogle(url: string, accountId: string | null) {
     );
   }
   await cancelGoogle();
+  if (generation !== current + 1)
+    throw new ApiError(400, 'Authorization changed', 'invalid_oauth_state');
   if (callback.searchParams.has('error'))
     throw new ApiError(400, 'Authorization cancelled', 'oauth_cancelled');
   const code = callback.searchParams.get('code');

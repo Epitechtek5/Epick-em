@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -31,6 +31,7 @@ export function SecuritySection() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [mustSignIn, setMustSignIn] = useState(false);
+  const visibility = useRef(0);
   const load = useCallback(async () => {
     setStatus(
       await authenticatedRequest<SecurityStatus>('/account/security', {}),
@@ -48,6 +49,7 @@ export function SecuritySection() {
         });
       return () => {
         active = false;
+        visibility.current++;
         setSecret('');
         setCodes([]);
         setCode('');
@@ -57,6 +59,7 @@ export function SecuritySection() {
   useEffect(() => {
     const listener = AppState.addEventListener('change', (state) => {
       if (state !== 'active') {
+        visibility.current++;
         setSecret('');
         setCodes([]);
         setCode('');
@@ -67,6 +70,7 @@ export function SecuritySection() {
   }, []);
   async function action(path: string) {
     if (busy) return;
+    const visibleAtStart = visibility.current;
     setBusy(true);
     setError('');
     setCopied(false);
@@ -75,7 +79,7 @@ export function SecuritySection() {
         const value = await authenticatedRequest<{ secret: string }>(path, {
           method: 'POST',
         });
-        setSecret(value.secret);
+        if (visibleAtStart === visibility.current) setSecret(value.secret);
       } else if (path === '/2fa/enable' || path === '/2fa/recovery-codes') {
         const value = await authenticatedRequest<{ recovery_codes: string[] }>(
           path,
@@ -85,7 +89,8 @@ export function SecuritySection() {
           },
         );
         setSecret('');
-        setCodes(value.recovery_codes);
+        if (visibleAtStart === visibility.current)
+          setCodes(value.recovery_codes);
         if (path === '/2fa/recovery-codes') setMustSignIn(true);
       } else {
         await authenticatedRequest<void>(path, {

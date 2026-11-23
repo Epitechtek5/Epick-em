@@ -142,3 +142,22 @@ it('requires confirmation before disabling and clears revoked sessions', async (
   await waitFor(() => expect(clearSession).toHaveBeenCalled());
   confirm.mockRestore();
 });
+
+it('does not reveal a setup secret received after the app backgrounds', async () => {
+  const listener = jest.mocked(AppState.addEventListener);
+  await render(<SecuritySection />);
+  await screen.findByText('Set up two-factor authentication');
+  let resolveSetup!: (value: { secret: string }) => void;
+  jest.mocked(authenticatedRequest).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveSetup = resolve;
+      }),
+  );
+  await fireEvent.press(screen.getByText('Set up two-factor authentication'));
+  await act(async () => {
+    listener.mock.calls.at(-1)![1]('background');
+    resolveSetup({ secret: 'HIDDEN-SETUP' });
+  });
+  expect(screen.queryByText('HIDDEN-SETUP')).toBeNull();
+});
