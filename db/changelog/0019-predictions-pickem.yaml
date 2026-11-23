@@ -1,0 +1,72 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0019-predictions-pickem
+      author: epickem
+      changes:
+        - sql:
+            sql: |
+              CREATE TABLE prediction (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                match_id uuid NOT NULL,
+                winner_id uuid,
+                ranking jsonb,
+                outcome varchar(16) NOT NULL DEFAULT 'pending',
+                points double precision NOT NULL DEFAULT 0,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT prediction_user_match_key UNIQUE (user_id, match_id),
+                CONSTRAINT prediction_choice_check CHECK ((winner_id IS NULL) <> (ranking IS NULL)),
+                CONSTRAINT prediction_outcome_check
+                  CHECK (outcome IN ('pending', 'correct', 'partial', 'incorrect', 'void'))
+              );
+              CREATE INDEX prediction_tournament_idx ON prediction (tournament_id);
+              CREATE INDEX prediction_match_idx ON prediction (match_id);
+              COMMENT ON TABLE prediction IS
+                'Pronostic d''un spectateur sur un match. match_id n''a pas de clé étrangère : un match de tournoi importé vit dans Redis (identifiant UUID v5 stable)';
+
+              CREATE TABLE pickem_question (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                kind varchar(32) NOT NULL,
+                params jsonb NOT NULL DEFAULT '{}',
+                points integer NOT NULL CHECK (points BETWEEN 1 AND 100),
+                locks_at timestamptz NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX pickem_question_tournament_idx ON pickem_question (tournament_id);
+              COMMENT ON TABLE pickem_question IS
+                'Question de Pick''em d''un tournoi, tirée d''un modèle (kind) ; les réponses se ferment à locks_at';
+
+              CREATE TABLE pickem_answer (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                question_id uuid NOT NULL REFERENCES pickem_question(id) ON DELETE CASCADE,
+                tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                answer jsonb NOT NULL,
+                outcome varchar(16) NOT NULL DEFAULT 'pending',
+                points double precision NOT NULL DEFAULT 0,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                CONSTRAINT pickem_answer_question_user_key UNIQUE (question_id, user_id),
+                CONSTRAINT pickem_answer_outcome_check
+                  CHECK (outcome IN ('pending', 'correct', 'partial', 'incorrect', 'void'))
+              );
+              CREATE INDEX pickem_answer_tournament_idx ON pickem_answer (tournament_id);
+              CREATE INDEX pickem_answer_user_idx ON pickem_answer (user_id);
+
+              CREATE TABLE pickem_resolution (
+                tournament_id uuid PRIMARY KEY REFERENCES tournaments(id) ON DELETE CASCADE,
+                resolved_at timestamptz NOT NULL,
+                settled boolean NOT NULL DEFAULT false
+              );
+              COMMENT ON TABLE pickem_resolution IS
+                'Dernière résolution des pronostics d''un tournoi ; settled : tournoi local terminé et entièrement résolu, plus rien à recalculer';
+      rollback:
+        - sql:
+            sql: |
+              DROP TABLE pickem_resolution;
+              DROP TABLE pickem_answer;
+              DROP TABLE pickem_question;
+              DROP TABLE prediction;

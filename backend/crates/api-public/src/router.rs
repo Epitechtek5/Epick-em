@@ -6,6 +6,7 @@ use crate::export_cache::evict_on_write;
 use crate::external::protect_external;
 use crate::guard::require_auth;
 use crate::openapi::ApiDoc;
+use crate::realtime::publish_changes;
 use actix_web::body::MessageBody;
 use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::middleware::from_fn;
@@ -35,7 +36,9 @@ fn api_routes(cfg: &mut ServiceConfig) {
         .configure(crate::tournaments::routes)
         .configure(crate::steps::routes)
         .configure(crate::matches::routes)
-        .configure(crate::external::routes);
+        .configure(crate::external::routes)
+        .configure(crate::predictions::routes)
+        .configure(crate::pickem::routes);
 }
 
 /// Spécification OpenAPI complète, sans base de données ni serveur (génération des clients).
@@ -73,8 +76,11 @@ pub fn app(
         .openapi(ApiDoc::openapi())
         .configure(api_routes)
         .split_for_parts();
-    // Exécutés dans l'ordre inverse : authentification, invalidation du cache, lecture seule.
-    app.wrap(from_fn(protect_external))
+    // Exécutés dans l'ordre inverse : authentification, invalidation du cache, lecture seule,
+    // publication des changements.
+    app.route(crate::ws::WS_PATH, web::get().to(crate::ws::connect))
+        .wrap(from_fn(publish_changes))
+        .wrap(from_fn(protect_external))
         .wrap(from_fn(evict_on_write))
         .wrap(from_fn(require_auth))
         .service(

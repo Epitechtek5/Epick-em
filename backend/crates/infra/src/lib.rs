@@ -3,13 +3,20 @@
 //! - [`config`] lit la configuration dans l'environnement ;
 //! - [`db`] ouvre le pool PostgreSQL ;
 //! - [`cache`] définit le trait [`Cache`] et ses implémentations (Redis, mémoire) ;
+//! - [`bus`] transporte les événements métier (Redis Streams) et les messages temps réel
+//!   (Redis Pub/Sub) ;
 //! - [`cached`] associe une requête sqlx à une entrée de cache ([`CachedDb`]).
 
+pub mod bus;
 pub mod cache;
 pub mod cached;
 pub mod config;
 pub mod db;
 
+pub use bus::{
+    BusError, Delivery, EventBus, EventStream, LiveBus, MemoryBus, MemoryLive, RedisEventBus,
+    RedisEventStream, RedisLive,
+};
 pub use cache::{Cache, CacheError, MemoryCache, RedisCache, Ttl};
 pub use cached::CachedDb;
 pub use config::Config;

@@ -34,7 +34,7 @@ const PROFILE_TTL: Ttl = Ttl::from_mins(5);
 /// sont lus dans le cache ([`Imports`]).
 pub struct PgStore {
     db: CachedDb,
-    pool: PgPool,
+    pub(super) pool: PgPool,
     imports: Imports,
 }
 
@@ -132,7 +132,7 @@ fn stat_key_taken(err: sqlx::Error) -> StoreError {
 }
 
 /// Horodatage RFC 3339 en UTC, avec les microsecondes de PostgreSQL : sans perte à l'aller-retour.
-fn ts(column: &str) -> String {
+pub(super) fn ts(column: &str) -> String {
     format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
 }
 
@@ -667,6 +667,10 @@ fn user(row: UserRow) -> Result<UserRecord, StoreError> {
 impl AuthStore for PgStore {
     fn imports(&self) -> &Imports {
         &self.imports
+    }
+
+    fn pickem(&self) -> &dyn super::PickemStore {
+        self
     }
 
     async fn create_user_with_token(
