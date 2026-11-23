@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { router } from 'expo-router';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
@@ -27,7 +27,9 @@ export function GoogleSignInButton({
     try {
       if (!linking) await clearSession();
       const callback = await startGoogle(linking ? (user?.id ?? null) : null);
-      if (callback)
+      // Android already delivers the App Link to Expo Router. Navigating again
+      // remounts the callback screen and tries to consume the same state twice.
+      if (callback && Platform.OS !== 'android')
         router.replace({
           pathname: '/auth/google/callback',
           params: { callback },

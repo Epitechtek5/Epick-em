@@ -119,24 +119,6 @@ export default function ProfileScreen() {
         <AccountEditor>
           <UserForm user={user} allowEmailEdit onSave={saveProfile} />
         </AccountEditor>
-        <View className="gap-3 pt-1">
-          <Text variant="muted">{t('account.irreversible')}</Text>
-          {error ? <FormMessage>{t(error)}</FormMessage> : null}
-          <Button
-            variant="ghost"
-            className="justify-start px-0"
-            disabled={deleting}
-            accessibilityLabel={t('account.deleteMine')}
-            onPress={requestDeletion}
-          >
-            {deleting ? (
-              <ActivityIndicator accessibilityLabel={t('common.loading')} />
-            ) : (
-              <Icon icon={Delete02Icon} tone="destructive" />
-            )}
-            <Text className="text-destructive">{t('account.deleteMine')}</Text>
-          </Button>
-        </View>
       </View>
       <SecuritySection key={user.id} />
       <PreferenceSections />
@@ -157,6 +139,24 @@ export default function ProfileScreen() {
           )}
           <Text>{t('settings.logout')}</Text>
         </Button>
+        <View className="gap-3 pt-1">
+          <Text variant="muted">{t('account.irreversible')}</Text>
+          {error ? <FormMessage>{t(error)}</FormMessage> : null}
+          <Button
+            variant="ghost"
+            className="justify-start px-0"
+            disabled={deleting}
+            accessibilityLabel={t('account.deleteMine')}
+            onPress={requestDeletion}
+          >
+            {deleting ? (
+              <ActivityIndicator accessibilityLabel={t('common.loading')} />
+            ) : (
+              <Icon icon={Delete02Icon} tone="destructive" />
+            )}
+            <Text className="text-destructive">{t('account.deleteMine')}</Text>
+          </Button>
+        </View>
       </View>
     </ScrollView>
   );

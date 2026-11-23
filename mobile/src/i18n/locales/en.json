@@ -1289,7 +1289,7 @@
       "reauthentication_required": "Sign out and sign in again before changing security settings.",
       "invalid_oauth_state": "This Google request is invalid or expired. Start again.",
       "account_exists": "This email already has an account. Sign in with your password, then link Google in Settings.",
-      "identity_taken": "This Google identity is already linked. Try another account.",
+      "identity_taken": "This Google account is already linked to another Epick’em account. Choose a different Google account, or sign in to the existing account.",
       "last_login_method": "Set a password before unlinking Google.",
       "provider_unavailable": "Google is unavailable. Try again later.",
       "provider_email_unverified": "Google must verify your email first.",
@@ -1298,8 +1298,9 @@
       "oauth_cancelled": "Google sign-in cancelled.",
       "oauth_configuration": "Google sign-in requires a configured HTTPS application link."
     },
-    "linkHelp": "Confirm that you want to link this Google account. If two-factor authentication is enabled, enter an authenticator or recovery code.",
+    "linkHelp": "Enter an authenticator or recovery code to link this Google account.",
     "recoveryTitle": "Recovery codes",
-    "oneTimeDisplay": "Shown only once"
+    "oneTimeDisplay": "Shown only once",
+    "enableReminder": "Protect your account: enable two-factor authentication. Google sign-in alone does not enable it."
   }
 }

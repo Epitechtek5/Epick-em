@@ -56,6 +56,11 @@ beforeEach(() => {
 it('enables TOTP only after verification and displays recovery codes once', async () => {
   await render(<SecuritySection />);
   await screen.findByText('Set up two-factor authentication');
+  expect(
+    screen.getByText(
+      'Protect your account: enable two-factor authentication. Google sign-in alone does not enable it.',
+    ),
+  ).toBeOnTheScreen();
   jest
     .mocked(authenticatedRequest)
     .mockResolvedValueOnce({ secret: 'MANUAL-SETUP' })
@@ -93,6 +98,11 @@ it('enables TOTP only after verification and displays recovery codes once', asyn
   expect(screen.queryByText('one-use-code')).toBeNull();
   expect(screen.queryByLabelText('Recovery codes')).toBeNull();
   expect(screen.queryByText('Copied to clipboard.')).toBeNull();
+  expect(
+    screen.queryByText(
+      'Protect your account: enable two-factor authentication. Google sign-in alone does not enable it.',
+    ),
+  ).toBeNull();
 });
 it('keeps enrollment disabled after a rejected code and hides secrets on background', async () => {
   const listener = jest.spyOn(AppState, 'addEventListener');

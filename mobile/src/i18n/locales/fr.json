@@ -1289,7 +1289,7 @@
       "reauthentication_required": "Déconnectez-vous puis reconnectez-vous avant de modifier la sécurité.",
       "invalid_oauth_state": "Demande Google invalide ou expirée. Recommencez.",
       "account_exists": "Cette adresse possède déjà un compte. Connectez-vous avec le mot de passe, puis associez Google dans les réglages.",
-      "identity_taken": "Cette identité Google est déjà associée. Essayez un autre compte.",
+      "identity_taken": "Ce compte Google est déjà associé à un autre compte Epick’em. Choisissez un autre compte Google ou connectez-vous au compte existant.",
       "last_login_method": "Définissez un mot de passe avant de dissocier Google.",
       "provider_unavailable": "Google est indisponible. Réessayez plus tard.",
       "provider_email_unverified": "Google doit d’abord vérifier votre adresse.",
@@ -1298,8 +1298,9 @@
       "oauth_cancelled": "Connexion Google annulée.",
       "oauth_configuration": "La connexion Google nécessite un lien d’application HTTPS configuré."
     },
-    "linkHelp": "Confirmez l’association de ce compte Google. Si la double authentification est activée, saisissez un code de votre application d’authentification ou un code de récupération.",
+    "linkHelp": "Saisissez un code de votre application d’authentification ou un code de récupération pour associer ce compte Google.",
     "recoveryTitle": "Codes de récupération",
-    "oneTimeDisplay": "Affichés une seule fois"
+    "oneTimeDisplay": "Affichés une seule fois",
+    "enableReminder": "Protégez votre compte : activez la double authentification. La connexion Google ne l’active pas automatiquement."
   }
 }

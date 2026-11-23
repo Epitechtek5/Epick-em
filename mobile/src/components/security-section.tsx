@@ -3,6 +3,7 @@ import { Alert, AppState, Modal, ScrollView, View } from 'react-native';
 import ClipboardCopyIcon from '@hugeicons/core-free-icons/ClipboardCopyIcon';
 import CheckmarkCircle02Icon from '@hugeicons/core-free-icons/CheckmarkCircle02Icon';
 import GoogleIcon from '@hugeicons/core-free-icons/GoogleIcon';
+import AlertCircleIcon from '@hugeicons/core-free-icons/AlertCircleIcon';
 import Shield01Icon from '@hugeicons/core-free-icons/Shield01Icon';
 import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -155,6 +156,17 @@ export function SecuritySection() {
         </Button>
       ) : (
         <>
+          {!status.two_factor_enabled ? (
+            <View
+              className="flex-row items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950"
+              accessibilityRole="alert"
+            >
+              <Icon icon={AlertCircleIcon} tone="foreground" size={20} />
+              <Text className="flex-1 text-sm text-amber-800 dark:text-amber-200">
+                {t('security.enableReminder')}
+              </Text>
+            </View>
+          ) : null}
           <View className="gap-4 rounded-xl border border-border bg-card p-4">
             <View className="flex-row flex-wrap items-center justify-between gap-3">
               <View className="flex-row items-center gap-2">

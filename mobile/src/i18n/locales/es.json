@@ -1289,7 +1289,7 @@
       "reauthentication_required": "Cierra e inicia sesión antes de cambiar la seguridad.",
       "invalid_oauth_state": "Solicitud Google incorrecta o caducada. Empieza de nuevo.",
       "account_exists": "Este correo ya tiene una cuenta. Inicia sesión con contraseña y vincula Google en Ajustes.",
-      "identity_taken": "Esta identidad Google ya está vinculada. Prueba otra cuenta.",
+      "identity_taken": "Esta cuenta de Google ya está vinculada a otra cuenta de Epick’em. Elige otra cuenta de Google o inicia sesión en la cuenta existente.",
       "last_login_method": "Establece una contraseña antes de desvincular Google.",
       "provider_unavailable": "Google no está disponible. Inténtalo más tarde.",
       "provider_email_unverified": "Google debe verificar tu correo primero.",
@@ -1298,8 +1298,9 @@
       "oauth_cancelled": "Acceso Google cancelado.",
       "oauth_configuration": "Google requiere un enlace de aplicación HTTPS configurado."
     },
-    "linkHelp": "Confirma que deseas vincular esta cuenta de Google. Si la autenticación de dos factores está activada, introduce un código de tu aplicación de autenticación o de recuperación.",
+    "linkHelp": "Introduce un código de tu aplicación de autenticación o de recuperación para vincular esta cuenta de Google.",
     "recoveryTitle": "Códigos de recuperación",
-    "oneTimeDisplay": "Se muestran una sola vez"
+    "oneTimeDisplay": "Se muestran una sola vez",
+    "enableReminder": "Protege tu cuenta: activa la autenticación de dos factores. Iniciar sesión con Google no la activa automáticamente."
   }
 }

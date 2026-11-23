@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useURL } from 'expo-linking';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { View } from 'react-native';
@@ -21,6 +21,11 @@ export default function GoogleCallbackScreen() {
   const { user, initializing, secondFactorRequired, completeGoogle } =
     useAuth();
   const started = useRef(false);
+  const currentAccount = useRef(user?.id ?? null);
+  useLayoutEffect(() => {
+    currentAccount.current = user?.id ?? null;
+  }, [user?.id]);
+  const [linking, setLinking] = useState(false);
   const linkingAccount = useRef<string | null>(null);
   const [link, setLink] = useState<{ code: string; state: string } | null>(
     null,
@@ -36,8 +41,25 @@ export default function GoogleCallbackScreen() {
     void consumeGoogle(incoming, user?.id ?? null)
       .then(async (result) => {
         if (result.linking) {
-          linkingAccount.current = user?.id ?? null;
-          setLink({ code: result.code, state: result.state });
+          setLinking(true);
+          const accountId = user?.id ?? null;
+          linkingAccount.current = accountId;
+          const security = await authenticatedRequest<{
+            two_factor_enabled: boolean;
+          }>('/account/security', {});
+          if (!accountId || currentAccount.current !== accountId) {
+            throw new Error('Account changed during Google linking');
+          }
+          const payload = { code: result.code, state: result.state };
+          if (security.two_factor_enabled) {
+            setLink(payload);
+          } else {
+            await authenticatedRequest('/account/google/link', {
+              method: 'POST',
+              body: JSON.stringify(payload),
+            });
+            setDone(true);
+          }
           return;
         }
         await completeGoogle(() =>
@@ -51,7 +73,7 @@ export default function GoogleCallbackScreen() {
       .catch((caught: unknown) => setError(securityError(caught)));
   }, [callback, url, initializing, user?.id, completeGoogle]);
   async function submitLink() {
-    if (!link || busy) return;
+    if (!link || busy || !factor.trim()) return;
     if (!user || linkingAccount.current !== user.id) {
       setLink(null);
       setError('security.errors.invalid_oauth_state');
@@ -63,7 +85,7 @@ export default function GoogleCallbackScreen() {
         method: 'POST',
         body: JSON.stringify({
           ...link,
-          second_factor: factor.trim() || undefined,
+          second_factor: factor.trim(),
         }),
       });
       setLink(null);
@@ -81,22 +103,25 @@ export default function GoogleCallbackScreen() {
   return (
     <AuthScreen>
       <AuthHeader
-        title={t(user ? 'security.linkGoogle' : 'security.google')}
-        description={t(user ? 'security.linkHelp' : 'security.callbackHelp')}
+        title={t(linking ? 'security.linkGoogle' : 'security.google')}
+        description={t(linking ? 'security.linkHelp' : 'security.callbackHelp')}
       />
       <View className="gap-4">
         {link ? (
           <>
             <Input
               accessibilityLabel={t('security.code')}
-              placeholder={t('security.optionalCode')}
+              placeholder={t('security.code')}
               value={factor}
               onChangeText={setFactor}
               autoComplete="one-time-code"
               autoCapitalize="none"
               autoCorrect={false}
             />
-            <Button disabled={busy} onPress={() => void submitLink()}>
+            <Button
+              disabled={busy || !factor.trim()}
+              onPress={() => void submitLink()}
+            >
               <Text>{t('security.linkGoogle')}</Text>
             </Button>
           </>
