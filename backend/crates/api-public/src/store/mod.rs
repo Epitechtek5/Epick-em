@@ -5,11 +5,16 @@
 
 mod competition;
 mod games;
+mod imported;
 mod invitations;
 mod match_workflows;
 mod matches;
 mod memory;
+mod pickem;
+mod pickem_memory;
+mod pickem_postgres;
 mod postgres;
+mod projection;
 mod settings;
 mod stats;
 mod steps;
@@ -18,6 +23,7 @@ mod tournaments;
 
 pub use self::competition::*;
 pub use self::games::{Game, GameInput, GameUpdate};
+pub use self::imported::{ImportedSummary, ImportedTournament, Imports};
 pub use self::invitations::{
     Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
     InvitationInput, InvitationStatus, InvitationType,
@@ -30,7 +36,15 @@ pub use self::matches::{
     MatchScore, MatchStatus, MatchUpdate, Placement,
 };
 pub use self::memory::MemoryStore;
+pub use self::pickem::{
+    Answer, AnswerInput, LeaderboardEntry, PickOutcome, PickemStore, Prediction, PredictionInput,
+    Question, QuestionInput, QuestionKind, QuestionUpdate, Resolved,
+};
 pub use self::postgres::PgStore;
+pub use self::projection::{
+    ProjectedEntry, ProjectedGroup, ProjectedMatch, ProjectedMember, ProjectedParticipant,
+    ProjectedStep, Projection,
+};
 pub use self::settings::{
     Category, Channel, ChannelPreferences, Language, MAX_PUSH_TOKENS, Platform, PushToken,
     SettingsUpdate as UserSettingsUpdate, Theme, UserSettings, override_key,
@@ -41,11 +55,11 @@ pub use self::steps::{
     StepFormat, StepGroup, StepInput, StepOutcome, StepParticipant, StepParticipantStatus,
     StepRules, StepScoring, StepStart, StepStatus,
 };
-pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
     MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
     TournamentTeamInput, TournamentTeamMember,
 };
+pub(crate) use self::teams::{now_rfc3339, unix_to_rfc3339};
 pub use self::tournaments::{
     CheckInSettlement, FieldType, NamedParticipant, ParticipantChange, ParticipantImport,
     ParticipantInput, ParticipantStatus, ParticipantType, RegistrationField, RegistrationPolicy,
@@ -149,6 +163,8 @@ pub struct UserUpdate {
 pub enum StoreError {
     /// Le nom d'utilisateur existe déjà (sans tenir compte de la casse).
     UsernameTaken,
+    PredictionLocked,
+    PickemLocked,
     /// Le nom de jeu existe déjà (sans tenir compte de la casse).
     GameNameTaken,
     /// La clé de statistique existe déjà.
@@ -200,6 +216,8 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StoreError::PredictionLocked => f.write_str("prediction locked"),
+            StoreError::PickemLocked => f.write_str("question locked"),
             StoreError::UsernameTaken => f.write_str("nom d'utilisateur déjà pris"),
             StoreError::GameNameTaken => f.write_str("nom de jeu déjà pris"),
             StoreError::StatKeyTaken => f.write_str("clé de statistique déjà prise"),
@@ -241,7 +259,11 @@ impl std::error::Error for StoreError {}
 
 impl From<sqlx::Error> for StoreError {
     fn from(err: sqlx::Error) -> Self {
-        StoreError::Other(err.to_string())
+        match err.as_database_error().and_then(|e| e.code()).as_deref() {
+            Some("P2001") => StoreError::PredictionLocked,
+            Some("P2002") => StoreError::PickemLocked,
+            _ => StoreError::Other(err.to_string()),
+        }
     }
 }
 
@@ -893,10 +915,22 @@ pub trait AuthStore: Send + Sync {
     /// [`StoreError::MatchState`] s'il est déjà `finished` ou `cancelled`.
     async fn finish_match(&self, finish: MatchFinish) -> Result<Option<Match>, StoreError>;
 
+    async fn match_prediction_locked(&self, match_id: Uuid) -> Result<bool, StoreError>;
+    async fn tournament_pickem_locked(&self, tournament_id: Uuid) -> Result<bool, StoreError>;
+
     async fn competition_snapshot(
         &self,
         tournament_id: Uuid,
     ) -> Result<CompetitionSnapshot, StoreError>;
+    /// Publish a local competition resolution only if its source snapshot is still current.
+    async fn commit_competition_resolution(
+        &self,
+        tournament_id: Uuid,
+        expected_revision: String,
+        predictions: Vec<Resolved>,
+        answers: Vec<Resolved>,
+        settled: bool,
+    ) -> Result<(), StoreError>;
     async fn commit_competition_correction(
         &self,
         correction: CompetitionCorrection,
@@ -963,6 +997,57 @@ pub trait AuthStore: Send + Sync {
         &self,
         tournaments: Vec<TournamentImport>,
     ) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Modèles des tournois importés, servis par les lectures à la place de la base.
+    fn imports(&self) -> &Imports;
+
+    /// Pronostics et Pick'em des spectateurs.
+    fn pickem(&self) -> &dyn PickemStore;
+
+    /// Reporte un tournoi importé dans le modèle local : statut, inscrits importés, étapes,
+    /// groupes, matchs et résultats, rangés dans le cache ([`Imports`]) et jamais en base. Les
+    /// identifiants locaux restent stables d'une synchronisation à l'autre ; ce qui a disparu
+    /// de la source disparaît du modèle. `false` si le tournoi n'existe pas.
+    async fn prepare_external(
+        &self,
+        tournament_id: Uuid,
+        projection: Projection,
+    ) -> Result<Option<Vec<connectors::sync::ProjectionEntry>>, StoreError> {
+        let previous = self.imports().tournament(tournament_id).await;
+        // Le jeu ne change pas : seul le premier report lit la ligne du tournoi.
+        let game_id = match &previous {
+            Some(model) => model.game_id,
+            None => match self.find_tournament(tournament_id).await? {
+                Some(tournament) => tournament.game_id,
+                None => return Ok(None),
+            },
+        };
+        let model =
+            ImportedTournament::build(tournament_id, game_id, previous.as_ref(), projection);
+        Ok(Some(Imports::prepare(&model).map_err(StoreError::Other)?))
+    }
+
+    async fn project_external(
+        &self,
+        tournament_id: Uuid,
+        projection: Projection,
+    ) -> Result<bool, StoreError> {
+        let Some(entries) = self.prepare_external(tournament_id, projection).await? else {
+            return Ok(false);
+        };
+        for entry in entries {
+            self.imports()
+                .cache()
+                .set(
+                    &entry.key,
+                    entry.value,
+                    infra::Ttl::from_secs(entry.ttl_secs),
+                )
+                .await
+                .map_err(|e| StoreError::Other(e.to_string()))?;
+        }
+        Ok(true)
+    }
 
     /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
     /// et les équipes existent, et les équipes sont celles du tournoi.

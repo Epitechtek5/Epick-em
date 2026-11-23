@@ -254,7 +254,10 @@ async fn public_ranking(
         ranking.push(PublicPlayerRank {
             rank: entry.rank,
             participant_id: entry.participant_id,
-            username: username(&state, entry.user_id).await?,
+            username: match entry.user_id {
+                Some(user_id) => username(&state, user_id).await?,
+                None => entry.display_name.unwrap_or_default(),
+            },
             points: entry.points,
         });
     }

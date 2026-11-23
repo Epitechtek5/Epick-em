@@ -80,12 +80,12 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /tournaments/{id}/scoring-rules` | JWT valide, **administrateur** | `{ stat_id, mode, coefficient? }` (`linear`) ou `{ stat_id, mode, points_table }` (`table`) | `201` la règle ; `400` si la statistique n'est pas liée au jeu ; `409` si elle a déjà une règle ou si le barème est verrouillé |
 | `PATCH /tournaments/{id}/scoring-rules/{rule_id}` | JWT valide, **administrateur** | `{ mode, coefficient? }` ou `{ mode, points_table }` | `200` la règle ; `409` si le barème est verrouillé |
 | `DELETE /tournaments/{id}/scoring-rules/{rule_id}` | JWT valide, **administrateur** | — | `204` ; `409` si le barème est verrouillé |
-| `GET /tournaments/{id}/participants` | JWT valide | `?limit`, `?offset` | `200` `[{ id, tournament_id, user_id, tournament_team_id, status, registered_at }]` |
+| `GET /tournaments/{id}/participants` | JWT valide | `?limit`, `?offset` | `200` `[{ id, tournament_id, user_id, tournament_team_id, status, registered_at, external_id, display_name }]` (`external_id` et `display_name` : inscrit importé d'une source externe, sans compte) |
 | `POST /tournaments/{id}/participants` | JWT valide | `{ user_id?, tournament_team_id? }` | `201` l'inscription ; `409` si les inscriptions sont fermées, si le participant est déjà inscrit ou si le tournoi est complet |
 | `PATCH /tournaments/{id}/participants/{participant_id}` | JWT valide, **administrateur**, ou l'inscrit pour `withdrawn` | `{ status }` | `200` l'inscription |
 | `DELETE /tournaments/{id}/participants/{participant_id}` | JWT valide, l'inscrit, le propriétaire de son équipe ou un **administrateur** | — | `204` ; `409` une fois le tournoi `ongoing` |
 | `POST /tournaments/{id}/participants/{participant_id}/check-in` | JWT valide, l'inscrit, le propriétaire de son équipe ou un **administrateur** | — | `200` l'inscription au statut `checked_in` |
-| `GET /tournaments/{id}/ranking` | JWT valide | — | `200` `[{ rank, participant_id, user_id, tournament_team_id, points }]` |
+| `GET /tournaments/{id}/ranking` | JWT valide | — | `200` `[{ rank, participant_id, user_id, display_name, tournament_team_id, points }]` (inscrit importé : `user_id` nul, nommé par `display_name`) |
 | `GET /tournaments/{id}/team-ranking` | JWT valide | — | `200` `[{ rank, tournament_team_id, name, points }]` |
 | `GET /tournaments/{id}/steps` | JWT valide | — | `200` `[{ id, tournament_id, position, format, match_type, group_count, group_size, matches_per_group, advance_per_group, tiebreak, rules, status, created_at, updated_at }]` par position |
 | `GET /tournaments/{id}/steps/{step_id}` | JWT valide | — | `200` l'étape |
@@ -119,6 +119,29 @@ Swagger UI est servi sur `/docs` (`/api/docs/` via nginx ou Vite) et la spécifi
 | `POST /invitations/{id}/revoke` | JWT valide, **invitant** ou **administrateur** | — | `200` l'invitation `revoked` ; son lien cesse de fonctionner |
 | `GET /invitation-links/{token}` | JWT valide | — | `200` `{ type, resource_name, inviter_username, role, expires_at }` ; `404` uniforme pour un lien inconnu, expiré, révoqué ou épuisé |
 | `POST /invitation-links/{token}/accept` | JWT valide | — | `200` `{ invitation_id, type, resource_id, role }` ; `404` comme ci-dessus ; `409` comme `accept` |
+
+| `GET /connectors` | JWT valide, **administrateur** | — | `200` `[{ id, display_name, capabilities }]` : sources configurées (start.gg si `STARTGG_TOKEN`, fichiers JSON si `EXTERNAL_JSON_DIR`) |
+| `GET /connectors/{provider}/tournaments` | JWT valide, **administrateur** | `?q=` (2 à 100 caractères) | `200` `[{ provider, external_id, slug, name, url, starts_at, ends_at }]` ; `404` source inconnue ; `503` source indisponible |
+| `POST /connectors/resolve` | JWT valide, **administrateur** | `{ url }` | `200` `{ tournament, events: [{ external_id, name, game, url, starts_at, state, entrant_count }], already_imported }` ; `400` URL non reconnue ; `404` tournoi introuvable chez la source ; `503` |
+| `POST /external-tournaments` | JWT valide, **administrateur** | `{ url, event_ids, game_id, name? }` | `201` le tournoi externe et son premier instantané ; `400` URL, épreuves ou jeu invalides ; `409` `already_imported` ou `tournament_name_taken` ; `503` (rien n'est créé) |
+| `GET /external-tournaments` | JWT valide, **administrateur** | — | `200` état de synchronisation de chaque tournoi externe (sans instantané) |
+| `GET /external-tournaments/{id}` | JWT valide, **administrateur** | — | `200` `{ id, provider, external_id, name, url, tournament_id, event_ids, state, capabilities, last_attempt_at, last_success_at, next_sync_at, last_error, consecutive_failures, stale, snapshot }` |
+| `POST /external-tournaments/{id}/sync` | JWT valide, **administrateur** | — | `200` l'état après synchronisation (`stale: true` et `last_error` si la source a échoué : l'instantané précédent reste servi) ; `409` `sync_in_progress` |
+| `DELETE /external-tournaments/{id}` | JWT valide, **administrateur** | — | `204` : la source, ses événements et le tournoi local |
+| `GET /tournaments/{id}/source` | JWT valide | — | `200` `{ provider, provider_name, url, last_success_at, stale }` : attribution à afficher avec les données ; `404` si le tournoi est local |
+| `GET /tournaments/{id}/matches/{match_id}/prediction` | JWT valide | — | `200` mon pronostic et `locked` ; `404` si je n'en ai pas ou si le match n'est pas de ce tournoi |
+| `PUT /tournaments/{id}/matches/{match_id}/prediction` | JWT valide | `{ winner_id }` (duel) ou `{ ranking }` (FFA, inscrits du match dans l'ordre pronostiqué) | `200` le pronostic (issue `pending`) ; `400` si le choix ne convient pas au match ; `409` `prediction_locked` |
+| `DELETE /tournaments/{id}/matches/{match_id}/prediction` | JWT valide | — | `204` ; `404` sans pronostic ; `409` `prediction_locked` |
+| `GET /tournaments/{id}/matches/{match_id}/predictions` | JWT valide | — | `200` `{ locked, count, distribution, predictions }` : avant le verrouillage, le nombre seulement |
+| `GET /predictions` | JWT valide | `?tournament_id` | `200` mes pronostics, du plus récent au plus ancien |
+| `GET /tournaments/{id}/leaderboard` | JWT valide | `?limit` (1 à 100, 50), `?offset` | `200` `[{ rank, user_id, username, points, correct, resolved }]` : spectateurs du tournoi par points |
+| `GET /leaderboard` | JWT valide | `?limit`, `?offset` | `200` classement général, tous tournois confondus |
+| `GET /tournaments/{id}/pickem` | JWT valide | — | `200` `[{ …question, locked, expected, my_answer }]` |
+| `GET /tournaments/{id}/pickem/templates` | JWT valide, **administrateur** | — | `200` `[{ kind, default_points, available, reason, steps }]` : modèles résolubles avec les données du tournoi |
+| `POST /tournaments/{id}/pickem/questions` | JWT valide, **administrateur** | `{ kind, params?, points?, opens_at?, locks_at? }` | `201` la question ; `400` modèle indisponible, `params` ou `locks_at` invalides |
+| `PATCH /tournaments/{id}/pickem/questions/{question_id}` | JWT valide, **administrateur** | `{ points?, locks_at? }` | `200` ; `409` `pickem_locked` |
+| `DELETE /tournaments/{id}/pickem/questions/{question_id}` | JWT valide, **administrateur** | — | `204` la question et ses réponses ; `409` `pickem_locked` |
+| `PUT /tournaments/{id}/pickem/questions/{question_id}/answer` | JWT valide | `{ participant_id }` ou `{ participant_ids }` (`step_qualifiers`) | `200` ma réponse (issue `pending`) ; `400` si les inscrits ne conviennent pas ; `409` `pickem_locked` |
 | toute autre route | JWT valide | — | — |
 
 L'authentification se fait par `Authorization: Bearer <access_token>`.
@@ -262,6 +285,25 @@ Un moteur unique invite à une équipe globale (`team`), une équipe de tournoi 
 
 Les quatre exports (`/games`, `/stats`, `/teams` et `/tournaments`, en JSON et en CSV) sont gardés **une heure** dans le cache (Redis en production), un fichier par ressource et par format (`export:<ressource>:<json|csv>`) : l'export suivant est servi sans relire la base. Toute requête qui écrit (ni `GET`, `HEAD` ni `OPTIONS`) et qui ne finit pas en erreur du client (`4xx`) vide **tous** les exports : création, modification, suppression, import, changement de statut, résultat de match… Un export dépend de plusieurs tables et une suppression emporte ses dépendances (supprimer un jeu supprime ses équipes), alors invalider ressource par ressource laisserait des fichiers périmés. Les routes `/register`, `/login`, `/refresh` et `/logout` ne vident rien. Le cache n'est qu'une optimisation : s'il est indisponible, l'export est calculé depuis la base. Un export commencé juste avant une écriture peut remettre en cache un fichier périmé jusqu'à la prochaine écriture ou l'expiration de l'heure.
 
+### Tournois externes
+
+Un administrateur importe un tournoi d'une source externe (start.gg, voir ADR-003 et `docs/connecteurs.md`) : `POST /connectors/resolve` reconnaît l'URL et liste les épreuves, puis `POST /external-tournaments` crée un tournoi local (`draft`, solo, dates et capacité reprises de la source, lien vers l'original dans la description) lié à la source, et prend un premier instantané. Le même tournoi externe n'est importé qu'une fois. Seuls les hôtes des sources configurées sont acceptés et l'URL fournie n'est jamais appelée : la requête part vers l'API fixe de la source.
+
+- **Lecture seule :** toute écriture sur un tournoi importé (`/tournaments/{id}/…`, ses équipes `/tournament-teams/{id}/…`, l'import de fichier qui le viserait) renvoie `409 externally_managed` ; il se supprime avec `DELETE /external-tournaments/{id}`.
+- **Synchronisation :** api-internal resynchronise les sources dues (toutes les 2 min pendant le tournoi, 30 min avant, 6 h après), en incrémental quand la source le permet. Si la source ne répond pas, le dernier instantané reste servi avec `stale: true`, l'erreur et la prochaine tentative (backoff de 1 min doublé jusqu'à 1 h) ; la reprise est automatique.
+- **Changements de résultats :** chaque match terminé, corrigé ou rouvert chez la source est enregistré dans la boîte d'envoi (Redis), en même temps que l'instantané, pour les recalculs en aval.
+- **Stockage :** les données de la source n'atteignent jamais la base. PostgreSQL garde la ligne du tournoi et son lien vers la source (`external_sources`) ; l'instantané, l'état de synchronisation et le tournoi importé (inscrits, étapes, matchs, résultats) vivent dans Redis, et les routes du tournoi les y lisent (détails dans `docs/connecteurs.md`).
+
+### Pronostics et Pick'em
+
+Données des spectateurs, en base, y compris pour un tournoi importé : `protect_external` les laisse passer et elles ne vident pas le cache des exports. Guide des modèles de question : `docs/pickem.md`.
+
+- **Pronostic :** un par compte et par match. Un duel se pronostique avec `winner_id`, un FFA avec `ranking` (au moins un inscrit, sans doublon, tous du match), une fois les participants du match connus.
+- **Verrouillage :** par l'horloge du serveur seule (ADR-002) : le match n'est plus `scheduled`, a commencé (`started_at`), son heure prévue (`scheduled_at`) est passée, ou le tournoi est terminé ou annulé. Les pronostics des autres ne sont visibles qu'après.
+- **Pick'em :** un administrateur ajoute des questions tirées d'un modèle (`tournament_winner`, `top_scorer`, `step_qualifiers`) ; seuls les modèles résolubles avec les données du tournoi sont acceptés (`top_scorer` exige un barème, donc un tournoi local). Chaque question ferme à `locks_at` (par défaut le début du tournoi, qui doit être dans le futur) ; `opens_at` defaults to server time. Editing or deleting is permitted only before `opens_at`; answers are accepted during `[opens_at, locks_at)`.
+- **Résolution :** api-internal recalcule toutes les `RESOLVE_INTERVAL_SECS` (30 s) l'issue (`pending`, `correct`, `partial`, `incorrect`, `void`) et les points de chaque pronostic et de chaque réponse **à partir de l'état** des matchs, des étapes et du classement, et n'écrit que ce qui change : rejouer ne compte rien deux fois, et une correction de résultat, locale ou venue de start.gg, est reprise au passage suivant. Un match annulé ou disparu rend son pronostic `void`. Un tournoi local terminé et entièrement résolu est réglé et n'est plus relu ; un tournoi importé ne l'est jamais.
+- **Barème :** duel juste 10 ; FFA 5 par inscrit au rang exact et 2 à un rang près ; une question rapporte ses `points` (30 par défaut pour `tournament_winner`, 20 sinon), partagés entre les qualifiés attendus pour `step_qualifiers`. En cas d'égalité, toutes les réponses ex æquo sont justes.
+
 ### Erreurs
 
 Format `{ "error", "message", "errors"? }` :
@@ -294,6 +336,12 @@ Format `{ "error", "message", "errors"? }` :
 | `409` | `invitation_unavailable` | ressource de l'invitation disparue ou fermée |
 | `410` | `invitation_expired` | invitation expirée |
 | `409` | `invalid_status_transition` | changement de statut impossible depuis le statut actuel |
+| `409` | `prediction_locked` | le match a commencé, est terminé ou annulé : son pronostic ne change plus |
+| `409` | `pickem_locked` | la question de Pick'em est fermée (`locks_at` passé ou tournoi terminé) |
+| `409` | `externally_managed` | tournoi importé d'une source externe : il se modifie chez la source |
+| `409` | `already_imported` | ce tournoi externe est déjà importé |
+| `409` | `sync_in_progress` | une synchronisation de ce tournoi externe est déjà en cours |
+| `503` | `external_unavailable` | la source externe ne répond pas, refuse la requête ou limite le débit (détail journalisé) |
 | `500` | `internal` | erreur serveur (détail journalisé, jamais renvoyé) |
 
 ## Configuration
@@ -307,6 +355,9 @@ Format `{ "error", "message", "errors"? }` :
 | `MAIL_FROM` | `Epick'em <onboarding@resend.dev>` | expéditeur, sur un domaine vérifié chez Resend en production |
 | `INVITATION_DEFAULT_TTL_HOURS` | `168` | validité par défaut d'une invitation |
 | `INVITATION_MAX_TTL_HOURS` | `720` | validité maximale demandable |
+
+| `STARTGG_TOKEN` | — (facultative) | jeton d'API start.gg ; sans lui, la source start.gg n'est pas proposée. Lu aussi par api-internal |
+| `EXTERNAL_JSON_DIR` | — (facultative) | répertoire de la source de démonstration « fichiers JSON » (`jsonfile://<nom>`) |
 | `PUBLIC_URL` | `http://localhost:3000` | origine publique du site, sans chemin ; la route `/reset-password` est fixe (page web, ou app mobile via les liens universels) |
 
 ## Rôles

@@ -128,6 +128,7 @@ export function ParticipantsSection({
   const [feedback, setFeedback] = useState<Feedback | null>(null)
 
   const nameOf = (participant: TournamentParticipant) => {
+    if (participant.display_name) return participant.display_name
     if (participant.user_id) return names[participant.user_id] ?? t('teams.unknownUser')
     const team = participant.tournament_team_id ? teamMap.get(participant.tournament_team_id) : undefined
     return team?.name ?? t('tournaments.participants.unknownTeam')
