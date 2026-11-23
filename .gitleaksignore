@@ -9,3 +9,6 @@ backend/crates/api-public/tests/export_cache.rs:generic-api-key:35
 221f69dbdb7105eb087e5eee87f9c4543c9fea04:backend/crates/api-public/src/totp.rs:generic-api-key:258
 # Clé JWT factice d'un test unitaire (remplacée depuis par "s".repeat(32)), pas un secret.
 a59ff1e56a2dab322af8330a4a8c9ad1847323c4:backend/crates/api-public/src/security.rs:generic-api-key:855
+
+# Same public RFC 6238 test vector after the backend PR was squash-merged.
+f38bcefc6e3f903367136fa801a1de8e47653228:backend/crates/api-public/src/totp.rs:generic-api-key:258
