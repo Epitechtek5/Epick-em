@@ -76,11 +76,17 @@ export function getStepRanking(
   );
 }
 
-export function startStep(token: string, tournamentId: string, stepId: string) {
+export function startStep(
+  token: string,
+  tournamentId: string,
+  stepId: string,
+  seedOrder?: string[],
+) {
   return authenticatedRequest<TournamentStep>(
     `${stepPath(tournamentId, stepId)}/start`,
     {
       method: 'POST',
+      body: JSON.stringify(seedOrder ? { seed_order: seedOrder } : {}),
       headers: authenticatedHeaders(token),
     },
   );
@@ -94,4 +100,62 @@ export function closeStep(token: string, tournamentId: string, stepId: string) {
       headers: authenticatedHeaders(token),
     },
   );
+}
+
+export interface PlannedMatch {
+  group_id: string;
+  round: number;
+  number: number;
+  bracket: import('@/features/matches/types').Bracket | null;
+  best_of: number;
+  participants: [string, number | null][];
+  next: [number, number] | null;
+  loser_next: [number, number] | null;
+  bye_points: number | null;
+}
+
+export interface GenerationPreview {
+  revision: string;
+  matches: PlannedMatch[];
+}
+
+export function previewGeneration(
+  token: string,
+  tournamentId: string,
+  stepId: string,
+) {
+  return authenticatedRequest<GenerationPreview>(
+    `${stepPath(tournamentId, stepId)}/generation-preview`,
+    { headers: authenticatedHeaders(token) },
+  );
+}
+
+export function generateMatches(
+  token: string,
+  tournamentId: string,
+  stepId: string,
+  revision: string,
+) {
+  return authenticatedRequest<{
+    matches: import('@/features/matches/types').Match[];
+  }>(`${stepPath(tournamentId, stepId)}/generate`, {
+    method: 'POST',
+    headers: authenticatedHeaders(token),
+    body: JSON.stringify({ revision }),
+  });
+}
+
+export function generateNextRound(
+  token: string,
+  tournamentId: string,
+  stepId: string,
+  allowRematches: boolean,
+) {
+  return authenticatedRequest<{
+    matches: import('@/features/matches/types').Match[];
+  }>(`${stepPath(tournamentId, stepId)}/rounds`, {
+    method: 'POST',
+    headers: authenticatedHeaders(token),
+    body: JSON.stringify({ allow_rematches: allowRematches }),
+  });
 }

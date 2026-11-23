@@ -31,4 +31,16 @@ databaseChangeLog:
   - include:
       file: changelog/0015-email-verification.yaml
   - include:
-      file: changelog/0016-step-participant-seed.yaml
+      file: changelog/0016-user-settings.yaml
+  - include:
+      file: changelog/0016-extend-tournaments.yaml
+  - include:
+      file: changelog/0017-create-invitations.yaml
+  - include:
+      file: changelog/0018-match-games.yaml
+  - include:
+      file: changelog/0016-bracket-generation.yaml
+  - include:
+      file: changelog/0019-match-workflows.yaml
+  - include:
+      file: changelog/0020-archive-corrected-matches.yaml

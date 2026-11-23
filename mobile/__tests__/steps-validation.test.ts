@@ -17,11 +17,25 @@ const tournament: Tournament = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo',
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 32,
   team_scoring_mode: 'none',
   team_scoring_n: null,
   status: 'draft',
+  owner_id: null,
+  is_template: false,
+  check_in_settled_at: null,
   created_at: '',
   updated_at: '',
 };
@@ -151,4 +165,39 @@ it('preserves tiebreak order and patches only changed fields', () => {
       tiebreak: ['score', 'wins'],
     }),
   ).toEqual({ tiebreak: ['score', 'wins'] });
+});
+
+it('validates advanced series and scoring without changing historical defaults', () => {
+  const base = step(1, 1, 8, 1);
+  const rules = {
+    seeding: 'manual' as const,
+    qualification: 'rank' as const,
+    best_of: 3 as const,
+    best_of_by_round: { '2': 5 as const },
+    scoring: { win: 3, draw: 1, loss: 0, placement: [] },
+  };
+  expect(validateStep({ ...base, match_type: 'duel', rules })).toEqual({});
+  expect(validateStep({ ...base, rules }).rules).toBe(
+    'steps.advanced.unsupported',
+  );
+  expect(
+    validateStep({
+      ...base,
+      match_type: 'duel',
+      rules: { ...rules, best_of_by_round: { '1001': 3 } },
+    }).rules,
+  ).toBeTruthy();
+  expect(
+    validateStep({
+      ...base,
+      match_type: 'duel',
+      rules: { ...rules, scoring: { ...rules.scoring, win: Infinity } },
+    }).rules,
+  ).toBeTruthy();
+  expect(
+    changedStepFields(
+      { ...base, rules },
+      { ...base, rules: structuredClone(rules) },
+    ),
+  ).toEqual({});
 });

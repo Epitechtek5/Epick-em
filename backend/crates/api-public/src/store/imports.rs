@@ -11,8 +11,9 @@
 //! n'écrit que ce que le plan lui donne.
 
 use super::{
-    Bracket, MatchResult, MatchStatus, ParticipantStatus, StepDefinition, StepParticipantStatus,
-    StepStatus, TeamRole, TournamentImport,
+    Bracket, GameImport, MatchImport, MatchResult, MatchSchedule, MatchScore, MatchStatus,
+    ParticipantImport, ParticipantStatus, StepDefinition, StepParticipantStatus, StepStatus,
+    StoreError, TeamRole, TournamentImport,
 };
 use uuid::Uuid;
 
@@ -43,6 +44,31 @@ pub struct ParticipantPlan {
     pub team: Option<usize>,
     pub status: ParticipantStatus,
     pub registered_at: Option<String>,
+    /// Réponses aux champs d'inscription du tournoi.
+    pub responses: serde_json::Value,
+}
+
+impl ParticipantPlan {
+    /// L'inscrit à écrire, son équipe étant résolue dans `team_ids` (identifiants des équipes du
+    /// tournoi, dans l'ordre du plan).
+    pub fn into_import(self, team_ids: &[Uuid]) -> ParticipantImport {
+        ParticipantImport {
+            user_id: self.user_id,
+            tournament_team_id: self.team.and_then(|rank| team_ids.get(rank).copied()),
+            status: self.status,
+            registered_at: self.registered_at,
+            responses: self.responses,
+        }
+    }
+
+    /// Comment les étapes et les matchs du plan désignent cet inscrit.
+    pub fn entrant(&self) -> Option<Entrant> {
+        match (self.user_id, self.team) {
+            (Some(user_id), _) => Some(Entrant::User(user_id)),
+            (None, Some(rank)) => Some(Entrant::Team(rank)),
+            (None, None) => None,
+        }
+    }
 }
 
 /// Participant d'un groupe d'étape.
@@ -64,21 +90,127 @@ pub struct EntryPlan {
     pub points: f64,
     pub rank: Option<i32>,
     pub result: Option<MatchResult>,
+    /// Emplacement (1 ou 2) dans le match.
+    pub slot: Option<i32>,
+    /// Manches gagnées dans une série.
+    pub games_won: Option<i32>,
+}
+
+impl EntryPlan {
+    fn into_score(
+        self,
+        resolve: &impl Fn(&Entrant) -> Result<Uuid, StoreError>,
+    ) -> Result<MatchScore, StoreError> {
+        Ok(MatchScore {
+            participant_id: resolve(&self.who)?,
+            stats: self.stats,
+            points: self.points,
+            rank: self.rank,
+            result: self.result,
+            games_won: self.games_won,
+            slot: self.slot,
+        })
+    }
+}
+
+/// Partie d'une série.
+#[derive(Debug, Clone)]
+pub struct GamePlan {
+    pub status: MatchStatus,
+    /// Attributs de la partie ; les clés de `participant_attributes` y sont ajoutées à
+    /// l'écriture.
+    pub attributes: serde_json::Value,
+    /// Attributs qui désignent un participant du match (MVP...) : clé et inscrit, dont
+    /// l'identifiant n'est connu qu'à l'écriture.
+    pub participant_attributes: Vec<(String, Entrant)>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub participants: Vec<EntryPlan>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MatchPlan {
+    /// Planification (lieu, poste, durée...) exportée avec le match.
+    pub schedule: Option<MatchSchedule>,
     /// Rang (à partir de 1) du groupe de l'étape.
     pub group: Option<i32>,
     pub round: Option<i32>,
+    /// Rang du match dans sa ronde.
+    pub number: Option<i32>,
     pub bracket: Option<Bracket>,
+    /// Longueur de la série (1, 3 ou 5).
+    pub best_of: i32,
     /// Rang, dans les matchs de l'étape, du match où va le vainqueur.
     pub next: Option<usize>,
+    pub next_slot: Option<i32>,
+    /// Rang, dans les matchs de l'étape, du match où va le perdant.
+    pub loser_next: Option<usize>,
+    pub loser_next_slot: Option<i32>,
     pub scheduled_at: Option<String>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub status: MatchStatus,
     pub participants: Vec<EntryPlan>,
+    /// Parties de la série, dans l'ordre.
+    pub games: Vec<GamePlan>,
+}
+
+impl MatchPlan {
+    /// Le match à écrire : `group_id` est son groupe, `resolve` donne l'identifiant de chaque
+    /// inscrit.
+    pub fn into_import(
+        self,
+        group_id: Option<Uuid>,
+        resolve: &impl Fn(&Entrant) -> Result<Uuid, StoreError>,
+    ) -> Result<MatchImport, StoreError> {
+        let participants = self
+            .participants
+            .into_iter()
+            .map(|entry| entry.into_score(resolve))
+            .collect::<Result<_, _>>()?;
+        let mut games = Vec::with_capacity(self.games.len());
+        for game in self.games {
+            let mut attributes = match game.attributes {
+                serde_json::Value::Object(map) => map,
+                _ => serde_json::Map::new(),
+            };
+            for (key, who) in &game.participant_attributes {
+                attributes.insert(
+                    key.clone(),
+                    serde_json::Value::String(resolve(who)?.to_string()),
+                );
+            }
+            games.push(GameImport {
+                status: game.status,
+                attributes: serde_json::Value::Object(attributes),
+                started_at: game.started_at,
+                ended_at: game.ended_at,
+                participants: game
+                    .participants
+                    .into_iter()
+                    .map(|entry| entry.into_score(resolve))
+                    .collect::<Result<_, _>>()?,
+            });
+        }
+        Ok(MatchImport {
+            schedule: self.schedule,
+            group_id,
+            round: self.round,
+            bracket: self.bracket,
+            next: self.next,
+            next_slot: self.next_slot,
+            loser_next: self.loser_next,
+            loser_next_slot: self.loser_next_slot,
+            number: self.number,
+            best_of: self.best_of,
+            scheduled_at: self.scheduled_at,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            status: self.status,
+            participants,
+            games,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

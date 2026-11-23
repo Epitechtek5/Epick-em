@@ -1,6 +1,14 @@
-import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Copy01Icon, RefreshIcon } from '@hugeicons/core-free-icons'
+import {
+  Add01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Copy01Icon,
+  RefreshIcon,
+  UserGroupIcon,
+} from '@hugeicons/core-free-icons'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 
+import { EmptyState, HERO_ACTION, HERO_BACK, HERO_PRIMARY, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
 import { TeamCard } from '@/components/teams/TeamCard'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -14,6 +22,7 @@ import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useUsernames } from '@/hooks/use-usernames'
 import { useI18n } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth/auth-context'
 
 function readPage(raw: string | null): number {
@@ -47,8 +56,8 @@ export default function TournamentTeamsPage() {
 
   if (!valid) {
     return (
-      <div className="grid w-full max-w-5xl gap-4 self-start">
-        <h1 className="text-3xl font-semibold tracking-tight">{t('tournamentTeams.title')}</h1>
+      <div className="grid w-full max-w-6xl gap-6 self-start">
+        <PageHero icon={UserGroupIcon} title={t('tournamentTeams.title')} />
         <StateMessage kind="error">{t('tournamentTeams.errors.invalidTournament')}</StateMessage>
       </div>
     )
@@ -57,33 +66,33 @@ export default function TournamentTeamsPage() {
   const base = `/tournaments/${tournamentId}/teams`
 
   return (
-    <div className="grid w-full max-w-5xl gap-6 self-start">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="grid gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">{t('tournamentTeams.title')}</h1>
-          <p className="text-muted-foreground">{t('tournamentTeams.description')}</p>
-          <p className="text-sm text-muted-foreground">
-            {t('tournamentTeams.tournament')} :{' '}
-            <Link to={`/tournaments/${tournamentId}`} className="break-all font-mono text-primary underline underline-offset-4">
-              {tournamentId}
-            </Link>
-          </p>
-        </div>
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      <PageHero
+        icon={UserGroupIcon}
+        title={t('tournamentTeams.title')}
+        description={t('tournamentTeams.description')}
+        back={
+          <Link to={`/tournaments/${tournamentId}`} className={HERO_BACK}>
+            <Icon icon={ArrowLeft01Icon} size={16} />
+            {t('tournaments.returnToTournament')}
+          </Link>
+        }
+      >
         <div className="flex flex-wrap gap-2" role="group" aria-label={t('tournamentTeams.actions')}>
-          <Button variant="outline" onClick={reload} disabled={state.status === 'loading'}>
+          <Button variant="outline" className={HERO_ACTION} onClick={reload} disabled={state.status === 'loading'}>
             <Icon icon={RefreshIcon} />
             {t('tournamentTeams.refresh')}
           </Button>
-          <Link to={`${base}/copy`} className={buttonVariants({ variant: 'outline' })}>
+          <Link to={`${base}/copy`} className={cn(buttonVariants({ variant: 'outline' }), HERO_ACTION)}>
             <Icon icon={Copy01Icon} />
             {t('tournamentTeams.copy')}
           </Link>
-          <Link to={`${base}/new`} className={buttonVariants()}>
+          <Link to={`${base}/new`} className={cn(buttonVariants(), HERO_PRIMARY)}>
             <Icon icon={Add01Icon} />
             {t('tournamentTeams.create')}
           </Link>
         </div>
-      </div>
+      </PageHero>
 
       {notice ? <StateMessage kind="success">{t(notice.key, notice.params)}</StateMessage> : null}
 
@@ -105,11 +114,11 @@ export default function TournamentTeamsPage() {
       ) : null}
 
       {state.status === 'success' && teams.length === 0 ? (
-        <StateMessage kind="empty">{t('tournamentTeams.empty')}</StateMessage>
+        <EmptyState icon={UserGroupIcon}>{t('tournamentTeams.empty')}</EmptyState>
       ) : null}
 
       {teams.length > 0 ? (
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label={t('tournamentTeams.list')}>
+        <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-label={t('tournamentTeams.list')}>
           {teams.map((team) => (
             <li key={team.id}>
               <TeamCard

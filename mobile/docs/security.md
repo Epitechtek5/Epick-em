@@ -1,10 +1,16 @@
 # Dependency security
 
-## Current audit snapshot: 2026-11-17
+## Temporary picomatch acceptance: 2026-11-17
 
-The audit currently reports picomatch GHSA-fc5q-39xc-vjpf in both dependency trees. Version 4.0.7 is the latest published release and is still affected. Following the explicitly authorized policy already used on the match-workflow branch, CI temporarily accepts only this advisory for picomatch, severity high, affected range <=4.0.7. The exception expires at 2026-12-01T00:00:00Z. The vulnerability remains unfixed; raw npm audit still fails. Different packages, advisories, ranges, severity, expired exceptions and malformed audit reports continue to block CI.
+At the user's explicit request, the CI policy temporarily accepts only `picomatch` [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), with the exact high severity and affected range `<=4.0.7`. The exception expires at **2026-12-01 00:00 UTC**; the same finding blocks CI again from that instant. Its expiration and the fact that the vulnerability remains unfixed are printed in audit logs and the GitHub job summary.
+
+The registry still publishes 4.0.7 as the latest version at verification time. This ReDoS advisory propagates through the existing Expo/Metro/Jest/Tailwind dependency tree. Untrusted glob patterns can exhaust Node.js processing time; passing the CI policy does not remediate this vulnerability or establish that the shipped application is unaffected. Review build inputs and do not expose development tooling publicly.
+
+Both full-tree and production audits still execute. Other advisories (including on picomatch), changed ranges or severity, malformed reports, registry failures and timeouts remain blocking. Raw `npm audit` still reports the vulnerability and exits nonzero. No workflow-wide `continue-on-error`, audit removal, dependency downgrade or forced upgrade was introduced.
 
 The four Expo compatibility patches (expo 58.0.26, expo-file-system 58.0.14, expo-router 58.0.32 and jest-expo 58.0.15) keep SDK 58 compatibility. No SDK downgrade or broad audit fix is applied.
+
+Remove this exception when a compatible upstream fix becomes available, update the lockfile, and rerun both audit trees and Expo compatibility checks. If no fix exists by the deadline, the risk requires a fresh explicit review rather than automatic renewal. Earlier snapshots below are historical.
 
 ## npm advisory range correction: 2026-11-03
 
@@ -23,7 +29,7 @@ installed 10.2.6 continues to fail CI. A global override to minimatch 11 was not
 used because legacy consumers call the pre-v9 CommonJS function export, which
 minimatch 11 no longer provides.
 
-## Historical audit snapshot: 2026-10-28
+## Current audit snapshot: 2026-10-28
 
 The raw npm reports contain 15 affected packages in the full tree and 13 in the production tree; every entry propagates the same low-severity `deepmerge` advisory. The strict gate temporarily accepts only `deepmerge` / `GHSA-gcqx-w48m-w2h4` through the November 28, 2026 review deadline. Raw `npm audit` still exits with status 1. The mobile security job succeeds only if both reports are valid, all findings match existing exceptions, and no exception has expired.
 

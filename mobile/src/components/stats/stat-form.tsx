@@ -1,3 +1,4 @@
+import { StepOptionSelect } from '@/components/steps/option-select';
 import { useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import {
@@ -23,8 +24,10 @@ import type {
 export function StatForm({
   initial,
   onSave,
+  editing = false,
 }: {
   initial: StatValues;
+  editing?: boolean;
   onSave: (values: StatValues) => Promise<void>;
 }) {
   const { t } = useTranslation();
@@ -54,6 +57,8 @@ export function StatForm({
         name: values.name.trim(),
         key: values.key.trim(),
         type: values.type,
+        scope:
+          values.scope ?? (values.type === 'mvp' ? 'match' : 'participant'),
       });
     } catch (caught) {
       setFields(statFieldErrors(caught));
@@ -99,22 +104,51 @@ export function StatForm({
           </View>
           <View className="gap-2" accessibilityRole="radiogroup">
             <Text variant="small">{t('stats.type')}</Text>
-            <View className="flex-row gap-3">
-              {(['flat', 'percent'] as StatType[]).map((type) => (
-                <Button
-                  key={type}
-                  variant={values.type === type ? 'default' : 'outline'}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: values.type === type }}
-                  disabled={saving}
-                  onPress={() => update('type', type)}
-                >
-                  <Text>{t(`stats.types.${type}`)}</Text>
-                </Button>
-              ))}
+            <View className="flex-row flex-wrap gap-3">
+              {(['flat', 'percent', 'select', 'mvp'] as StatType[])
+                .filter(
+                  (type) =>
+                    !editing ||
+                    ['flat', 'percent'].includes(type) ===
+                      ['flat', 'percent'].includes(initial.type),
+                )
+                .map((type) => (
+                  <Button
+                    key={type}
+                    variant={values.type === type ? 'default' : 'outline'}
+                    role="radio"
+                    accessibilityState={{ checked: values.type === type }}
+                    disabled={saving}
+                    onPress={() => {
+                      update('type', type);
+                      update('scope', type === 'mvp' ? 'match' : 'participant');
+                    }}
+                  >
+                    <Text>{t(`stats.types.${type}`)}</Text>
+                  </Button>
+                ))}
             </View>
             {fields.type ? <FormMessage>{t(fields.type)}</FormMessage> : null}
           </View>
+          {values.type === 'select' ? (
+            <StepOptionSelect
+              label={t('stats.scope')}
+              value={values.scope ?? 'participant'}
+              options={['participant', 'match']}
+              labelFor={(scope) => t('stats.scopes.' + scope)}
+              onSelect={(scope) => update('scope', scope)}
+              disabled={saving}
+            />
+          ) : (
+            <Text variant="muted">
+              {t(
+                'stats.scopes.' +
+                  (values.type === 'mvp' ? 'match' : 'participant'),
+              )}
+            </Text>
+          )}
+          {fields.scope ? <FormMessage>{t(fields.scope)}</FormMessage> : null}
+          {editing ? <Text variant="muted">{t('stats.typeHelp')}</Text> : null}
         </CardContent>
       </Card>
       {error ? <FormMessage>{t(error)}</FormMessage> : null}

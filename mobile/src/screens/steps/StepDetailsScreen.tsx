@@ -2,6 +2,8 @@ import { useCallback, useState } from 'react';
 import { Alert, ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StepGeneration } from '@/components/steps/StepGeneration';
+import { defaultStepRules } from '@/features/steps/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
@@ -23,15 +25,18 @@ import { matchApi } from '@/features/matches/api';
 import { statuses } from '@/features/matches/types';
 import { getTournament } from '@/features/tournaments/api';
 import { useTranslation } from '@/i18n';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 export default function StepDetailsScreen() {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const { tournamentId, stepId } = useLocalSearchParams<{
     tournamentId: string;
     stepId: string;
   }>();
+  const { canManage } = useTournamentAccess(tournamentId);
   const insets = useSafeAreaInsets();
+  const [seedOrder, setSeedOrder] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [success, setSuccess] = useState(false);
@@ -48,7 +53,22 @@ export default function StepDetailsScreen() {
             .list()
             .catch(() => null),
         ]);
+      const previous = steps
+        .filter((candidate) => candidate.position < step.position)
+        .sort((a, b) => b.position - a.position)[0];
+      const entrants = previous
+        ? (
+            await getStepRanking(accessToken, tournamentId, previous.id)
+          ).flatMap((group) =>
+            group.participants
+              .filter((p) => p.status === 'qualified')
+              .map((p) => p.participant_id),
+          )
+        : identities.participants
+            .filter((p) => ['registered', 'checked_in'].includes(p.status))
+            .map((p) => p.id);
       return {
+        entrants,
         tournament,
         step,
         ranking: [...ranking].sort((a, b) => a.index - b.index),
@@ -86,7 +106,15 @@ export default function StepDetailsScreen() {
         text: t('steps.start'),
         onPress: () =>
           void run(
-            () => startStep(token, tournamentId, stepId),
+            () =>
+              startStep(
+                token,
+                tournamentId,
+                stepId,
+                data?.step.rules?.seeding === 'manual'
+                  ? (seedOrder ?? data.entrants)
+                  : undefined,
+              ),
             'steps.startSuccess',
           ),
       },
@@ -147,17 +175,16 @@ export default function StepDetailsScreen() {
 
   const { tournament, step, ranking, names, matches } = data;
   const editable =
-    user?.role === 'admin' &&
-    ['draft', 'registration'].includes(tournament.status);
+    canManage && ['draft', 'registration'].includes(tournament.status);
   const canStart =
-    user?.role === 'admin' &&
+    canManage &&
     tournament.status === 'ongoing' &&
     step.status === 'pending' &&
     !data.steps.some(
       (candidate) =>
         candidate.position < step.position && candidate.status !== 'finished',
     );
-  const canClose = user?.role === 'admin' && step.status === 'ongoing';
+  const canClose = canManage && step.status === 'ongoing';
 
   return (
     <ScrollView
@@ -189,7 +216,7 @@ export default function StepDetailsScreen() {
       <Card>
         <CardContent className="gap-2 pt-5">
           <Text className="font-semibold">{t('steps.matches.title')}</Text>
-          <Text variant="muted">{t('steps.matches.limitation')}</Text>
+
           {matches && (
             <Text>
               {statuses
@@ -217,9 +244,35 @@ export default function StepDetailsScreen() {
         </CardContent>
       </Card>
 
+      {canManage && token && matches ? (
+        <StepGeneration
+          token={token}
+          step={step}
+          matches={matches}
+          names={names}
+          onChanged={reload}
+        />
+      ) : null}
+
       <Card>
         <CardContent className="gap-2 pt-5">
           <Text className="font-semibold">{t('steps.configuration')}</Text>
+          <InfoRow
+            label={t('steps.advanced.seeding')}
+            value={t(
+              `steps.advanced.seedingOptions.${(step.rules ?? defaultStepRules).seeding}`,
+            )}
+          />
+          <InfoRow
+            label={t('steps.advanced.qualification')}
+            value={t(
+              `steps.advanced.qualificationOptions.${(step.rules ?? defaultStepRules).qualification}`,
+            )}
+          />
+          <InfoRow
+            label={t('steps.advanced.defaultSeries')}
+            value={`BO${(step.rules ?? defaultStepRules).best_of}`}
+          />
           <InfoRow
             label={t('steps.fields.groupCount')}
             value={String(step.group_count)}
@@ -249,13 +302,17 @@ export default function StepDetailsScreen() {
           {step.tiebreak.length ? (
             step.tiebreak.map((criterion, index) => (
               <Text key={criterion}>
-                {index + 1}. {criterion}
+                {index + 1}.{' '}
+                {['head_to_head', 'game_differential', 'buchholz'].includes(
+                  criterion,
+                )
+                  ? t(`steps.advanced.criteria.${criterion}`)
+                  : criterion}
               </Text>
             ))
           ) : (
             <Text variant="muted">{t('steps.tiebreak.empty')}</Text>
           )}
-          <Text variant="muted">{t('steps.tiebreak.limitation')}</Text>
         </CardContent>
       </Card>
 
@@ -279,6 +336,11 @@ export default function StepDetailsScreen() {
                         {names[participant.participant_id] ??
                           t('steps.unknownParticipant')}
                       </Text>
+                      {participant.seed ? (
+                        <Text variant="muted">
+                          {t('steps.advanced.seed', { seed: participant.seed })}
+                        </Text>
+                      ) : null}
                       <StatusBadge
                         status={participant.status}
                         label={t(
@@ -299,7 +361,7 @@ export default function StepDetailsScreen() {
         )}
       </View>
 
-      {user?.role === 'admin' ? (
+      {canManage ? (
         <View className="gap-2">
           {editable ? (
             <>
@@ -323,6 +385,39 @@ export default function StepDetailsScreen() {
                 <Text>{t('common.delete')}</Text>
               </Button>
             </>
+          ) : null}
+          {canStart && step.rules?.seeding === 'manual' ? (
+            <Card>
+              <CardContent className="gap-3 pt-5">
+                <Text className="font-semibold">
+                  {t('steps.advanced.manualOrder')}
+                </Text>
+                {(seedOrder ?? data.entrants).map((id, index) => (
+                  <View key={id} className="flex-row items-center gap-3">
+                    <Text className="flex-1">
+                      {index + 1}. {names[id] ?? t('steps.unknownParticipant')}
+                    </Text>
+                    <Button
+                      variant="outline"
+                      disabled={busy || index === 0}
+                      accessibilityLabel={t('steps.tiebreak.moveUp', {
+                        item: names[id],
+                      })}
+                      onPress={() => {
+                        const order = [...(seedOrder ?? data.entrants)];
+                        [order[index - 1], order[index]] = [
+                          order[index],
+                          order[index - 1],
+                        ];
+                        setSeedOrder(order);
+                      }}
+                    >
+                      <Text>{t('steps.advanced.moveUp')}</Text>
+                    </Button>
+                  </View>
+                ))}
+              </CardContent>
+            </Card>
           ) : null}
           {canStart ? (
             <Button disabled={busy} onPress={confirmStart}>

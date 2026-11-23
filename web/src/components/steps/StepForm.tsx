@@ -32,6 +32,7 @@ import {
 } from '@/features/steps/validation'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { cn } from '@/lib/utils'
+import { StepRulesFields } from './StepRulesFields'
 import { TiebreakEditor } from './TiebreakEditor'
 
 const IDS: Record<StepField, string> = {
@@ -43,6 +44,7 @@ const IDS: Record<StepField, string> = {
   matches_per_group: 'step-matches',
   advance_per_group: 'step-advance',
   tiebreak: 'step-tiebreak',
+  rules: 'step-seeding',
 }
 const ORDER: StepField[] = [
   'position',
@@ -52,6 +54,7 @@ const ORDER: StepField[] = [
   'group_size',
   'matches_per_group',
   'advance_per_group',
+  'rules',
   'tiebreak',
 ]
 
@@ -209,7 +212,7 @@ export function StepForm({ initial, others, submitLabel, busy, serverErrors, for
             {hint('step-format-hint', t('steps.formatHint'))}
           </fieldset>
 
-          <fieldset className="grid gap-2" aria-describedby="step-match-hint">
+          <fieldset className="grid gap-2" aria-describedby={describe('match_type', 'step-match-hint')}>
             <legend className="text-sm font-medium">{t('steps.matchTypeLabel')}</legend>
             <div className="grid gap-3 sm:grid-cols-2">
               {MATCH_TYPES.map((type) => (
@@ -237,6 +240,7 @@ export function StepForm({ initial, others, submitLabel, busy, serverErrors, for
               ))}
             </div>
             {hint('step-match-hint', t('steps.matchTypeHint'))}
+            {fieldError('match_type')}
           </fieldset>
         </FormSection>
 
@@ -261,6 +265,17 @@ export function StepForm({ initial, others, submitLabel, busy, serverErrors, for
             )}
           </div>
         </FormSection>
+
+        <StepRulesFields
+          id={IDS.rules}
+          value={values.rules}
+          format={values.format}
+          matchType={values.match_type}
+          isLast={!others.some((step) => step.position > (Number.parseInt(values.position, 10) || 0))}
+          onChange={(rules) => set('rules', rules)}
+          error={fieldError('rules')}
+          describedBy={describe('rules')}
+        />
 
         <FormSection
           icon={RankingIcon}
