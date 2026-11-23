@@ -6,6 +6,7 @@
 mod competition;
 mod games;
 mod imported;
+mod imports;
 mod invitations;
 mod match_workflows;
 mod matches;
@@ -24,6 +25,10 @@ mod tournaments;
 pub use self::competition::*;
 pub use self::games::{Game, GameInput, GameUpdate};
 pub use self::imported::{ImportedSummary, ImportedTournament, Imports};
+pub use self::imports::{
+    Entrant, EntryPlan, GamePlan, ImportPlan, MatchPlan, MemberPlan, ParticipantPlan, StepPlan,
+    TeamPlan, TournamentPlan,
+};
 pub use self::invitations::{
     Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
     InvitationInput, InvitationStatus, InvitationType,
@@ -159,6 +164,10 @@ pub struct UserUpdate {
     pub picture_url: Option<Option<String>>,
 }
 
+/// Refus d'un import qui remplacerait des matchs ayant un historique d'audit.
+pub(crate) const AUDITED_MATCHES: &str =
+    "Matches with an audit history cannot be replaced by an import; use a result correction.";
+
 #[derive(Debug)]
 pub enum StoreError {
     /// Le nom d'utilisateur existe déjà (sans tenir compte de la casse).
@@ -191,6 +200,13 @@ pub enum StoreError {
     ParticipantState,
     /// Une étape occupe déjà cette position dans le tournoi.
     StepPositionTaken,
+    /// Le tournoi est `ongoing` ou `finished` : ses résultats sont verrouillés.
+    TournamentLocked,
+    /// Le contenu d'un fichier d'import est incohérent : détecté en planifiant l'import, pas une
+    /// panne.
+    InvalidPlan(String),
+    /// Le tournoi a changé depuis l'aperçu de l'import : rien n'est écrit.
+    ImportStale,
     /// L'étape n'est pas dans l'état attendu pour cette opération.
     StepState,
     /// Le match n'est pas dans l'état attendu pour cette opération.
@@ -236,6 +252,11 @@ impl fmt::Display for StoreError {
             StoreError::TournamentFull => f.write_str("tournoi complet"),
             StoreError::ParticipantState => f.write_str("l'inscrit n'est pas dans l'état attendu"),
             StoreError::StepPositionTaken => f.write_str("position d'étape déjà prise"),
+            StoreError::InvalidPlan(detail) => f.write_str(detail),
+            StoreError::ImportStale => f.write_str("le tournoi a changé depuis l'aperçu"),
+            StoreError::TournamentLocked => {
+                f.write_str("tournoi en cours ou terminé : résultats verrouillés")
+            }
             StoreError::StepState => f.write_str("l'étape n'est pas dans l'état attendu"),
             StoreError::MatchState => f.write_str("le match n'est pas dans l'état attendu"),
             StoreError::EmailTaken => f.write_str("adresse e-mail déjà utilisée"),
@@ -998,6 +1019,18 @@ pub trait AuthStore: Send + Sync {
         tournaments: Vec<TournamentImport>,
     ) -> Result<Vec<(Tournament, bool)>, StoreError>;
 
+    /// Écrit tout le plan d'import en **une seule transaction** : en cas d'erreur, rien n'est
+    /// modifié. Un tournoi existant (même jeu et même nom) est mis à jour et ses barème, équipes,
+    /// inscrits, étapes et matchs sont remplacés ; sinon il est créé. Un tournoi existant
+    /// `ongoing` ou `finished` est refusé ([`StoreError::TournamentLocked`]). Sous le verrou du
+    /// tournoi, son état doit être celui de l'aperçu (`expected`, ou absent s'il devait être créé),
+    /// sinon [`StoreError::ImportStale`]. Renvoie chaque tournoi avec `true` s'il vient d'être
+    /// créé, dans l'ordre du plan.
+    async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Empreinte de tout ce que contient le tournoi (lui-même, barème, inscrits, équipes, étapes,
+    /// groupes, matchs et leurs participants) : elle change à la moindre modification.
+    async fn tournament_digest(&self, tournament_id: Uuid) -> Result<String, StoreError>;
     /// Modèles des tournois importés, servis par les lectures à la place de la base.
     fn imports(&self) -> &Imports;
 

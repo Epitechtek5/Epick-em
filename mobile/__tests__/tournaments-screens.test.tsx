@@ -16,7 +16,7 @@ import TournamentTransferScreen from '../src/screens/tournaments/TournamentTrans
 import { useAuth } from '../src/features/auth/session';
 import { useGameResource } from '../src/features/games/use-game-resource';
 import * as tournamentApi from '../src/features/tournaments/api';
-import * as tournamentFiles from '../src/features/tournaments/files';
+import { pickImportFile } from '../src/features/games/files';
 import i18n from '../src/i18n';
 
 jest.mock('../src/features/auth/session', () => ({ useAuth: jest.fn() }));
@@ -25,6 +25,11 @@ jest.mock('../src/features/games/use-game-resource', () => ({
 }));
 jest.mock('../src/features/tournaments/api');
 jest.mock('../src/features/tournaments/files');
+jest.mock('../src/features/games/files', () => ({
+  pickImportFile: jest.fn(),
+  GameFileError: class extends Error {},
+  fileErrorKey: jest.fn(() => null),
+}));
 jest.mock('../src/components/teams/game-filter-select', () => ({
   GameFilterSelect: () => null,
 }));
@@ -473,18 +478,18 @@ it('blocks transfer controls for a regular account', async () => {
   alert.mockRestore();
 });
 
-it('requires confirmation before opening an import file', async () => {
+it('opens the picker without a destructive confirmation and does not import on cancellation', async () => {
   jest
     .mocked(useAuth)
     .mockReturnValue({ ...session, user: { ...session.user, role: 'admin' } });
+  jest.mocked(pickImportFile).mockResolvedValue(null);
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
   await render(<TournamentTransferScreen />);
-  fireEvent.press(screen.getByText('Choose JSON / CSV file'));
-  expect(alert).toHaveBeenCalledWith(
-    expect.any(String),
-    expect.stringContaining('replace'),
-    expect.any(Array),
+  await act(async () =>
+    fireEvent.press(screen.getByText('Choose JSON / CSV file')),
   );
-  expect(tournamentFiles.pickAndImportTournaments).not.toHaveBeenCalled();
+  expect(pickImportFile).toHaveBeenCalledWith('tournaments');
+  expect(alert).not.toHaveBeenCalled();
+  expect(tournamentApi.importTournaments).not.toHaveBeenCalled();
   alert.mockRestore();
 });

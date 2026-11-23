@@ -1195,5 +1195,63 @@
     "previousResults": "Resultados anteriores",
     "acceptClaim": "Aceptar reclamación",
     "rejectClaim": "Rechazar reclamación"
+  },
+  "importPreview": {
+    "title": "Revisar importación",
+    "intro": "Elija un archivo, revise los cambios previstos y luego confirme.",
+    "readOnly": "No se ha modificado ningún dato. Cancelar deja los datos guardados sin cambios.",
+    "fileInfo": "{{format}} · {{size}} KiB",
+    "expires": "Esta vista previa es válida durante {{minutes}} minutos como máximo.",
+    "destructive": "Se reemplazarán o eliminarán datos existentes. Revise todos los recursos afectados antes de confirmar.",
+    "consent": "He revisado los reemplazos y eliminaciones de datos existentes.",
+    "confirm": "Confirmar importación",
+    "changeFile": "Elegir otro archivo",
+    "refresh": "Actualizar vista previa",
+    "invalid": "Corrija el archivo y genere una nueva vista previa antes de confirmar.",
+    "success": "Importación completada",
+    "verify": "Comprobar torneos",
+    "view": "Ver torneos",
+    "show": "Mostrar",
+    "hide": "Ocultar",
+    "more_one": "Mostrar más ({{count}} restante)",
+    "more_other": "Mostrar más ({{count}} restantes)",
+    "seed": "Cabeza de serie n.º {{seed}}",
+    "unseeded": "Sin cabeza de serie manual",
+    "rank": "Puesto {{rank}}",
+    "progression": "El ganador avanza al partido {{number}}",
+    "placements": "Cabezas de serie, ubicación y resultados",
+    "matchResults_one": "Resultados de partidos ({{count}} partido)",
+    "matchResults_other": "Resultados de partidos ({{count}} partidos)",
+    "impacts": "Impactos posteriores",
+    "countChange": "Antes: {{before}} → Después: {{after}}",
+    "serverDetail": "Detalles del servidor: {{detail}}",
+    "serverLanguage": "Los diagnósticos siguientes los proporciona el servidor en su idioma original.",
+    "detailsUnavailable": "Este servidor solo proporciona totales por recurso; las ubicaciones y los resultados detallados no están disponibles.",
+    "resourceCounts": "Número de operaciones previstas por categoría de recurso, no de registros individuales.",
+    "validationErrors_one": "{{count}} error de validación",
+    "validationErrors_other": "{{count}} errores de validación",
+    "warnings_one": "{{count}} advertencia",
+    "warnings_other": "{{count}} advertencias",
+    "states": {
+      "loading": "Preparando la vista previa…",
+      "applying": "Aplicando la importación confirmada…",
+      "stale": "Los datos han cambiado desde esta vista previa. No se importó nada. Genere una nueva vista previa y vuelva a revisar los cambios.",
+      "expired": "Esta vista previa ha caducado o ya no está disponible. Genere una nueva vista previa antes de confirmar.",
+      "unknown": "La conexión falló durante la confirmación. Es posible que la importación ya se haya aplicado. Compruebe los torneos antes de iniciar otra importación; la confirmación no se volverá a enviar automáticamente."
+    },
+    "actions": {
+      "create": "Creación",
+      "update": "Actualización",
+      "replace": "Reemplazo",
+      "delete": "Eliminación"
+    },
+    "resources": {
+      "tournament": "Torneo",
+      "scoring_rules": "Reglas de puntuación",
+      "participants": "Participantes",
+      "teams": "Equipos",
+      "steps": "Etapas",
+      "matches": "Partidos"
+    }
   }
 }

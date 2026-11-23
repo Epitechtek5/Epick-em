@@ -33,6 +33,76 @@ const CSV_EXPORT =
   'game,name,description,start_date,end_date,registration_open_at,registration_close_at,participant_type,team_size,max_participants,team_scoring_mode,team_scoring_n,status,scoring_rules,participants,teams,steps,matches\r\n' +
   'Alpha Quest,TFT Open,,2026-11-14T18:00:00Z,2026-11-15T22:00:00Z,,,solo,,32,none,,draft,[],[],[],[],[]\r\n'
 
+const PREVIEW_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+
+// Aperçu d'un tournoi créé : une étape terminée, ses têtes de série et ses résultats.
+const PREVIEW = {
+  preview_id: PREVIEW_ID,
+  expires_in: 600,
+  valid: true,
+  requires_confirmation: false,
+  tournaments: [
+    {
+      game: 'Alpha Quest',
+      name: 'TFT Open',
+      action: 'create',
+      destructive: false,
+      changes: [
+        { resource: 'tournament', action: 'create', before: 0, after: 1 },
+        { resource: 'participants', action: 'create', before: 0, after: 4 },
+      ],
+      downstream: ['étape 1 (finished) : 4 participant(s).'],
+      steps: [
+        {
+          position: 1,
+          status: 'finished',
+          groups: [
+            {
+              index: 1,
+              participants: [
+                { name: 'alice', seed: 1, points: 9.5, rank: 1, status: 'qualified' },
+                { name: 'bob', seed: 2, points: 3, rank: 2, status: 'eliminated' },
+              ],
+            },
+          ],
+          matches: [
+            {
+              index: 1,
+              status: 'finished',
+              next: 2,
+              participants: [
+                { name: 'alice', points: 9.5, rank: 1, result: 'win' },
+                { name: 'bob', points: 3, rank: 2, result: 'loss' },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  warnings: ['Les points de bob sont recalculés.'],
+  errors: [],
+}
+
+// Aperçu d'un tournoi existant dont les données sont remplacées.
+const DESTRUCTIVE = {
+  ...PREVIEW,
+  requires_confirmation: true,
+  tournaments: [
+    {
+      ...PREVIEW.tournaments[0],
+      action: 'update',
+      destructive: true,
+      changes: [
+        { resource: 'tournament', action: 'update', before: 1, after: 1, details: 'description' },
+        { resource: 'participants', action: 'replace', before: 4, after: 4 },
+        { resource: 'matches', action: 'delete', before: 3, after: 0 },
+      ],
+      downstream: ['3 résultat(s) de match terminé(s) existant(s) seront écrasés.'],
+    },
+  ],
+}
+
 function stubDownload() {
   const create = vi.fn(() => 'blob:x')
   vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: vi.fn() })
@@ -89,51 +159,173 @@ describe('TournamentTransferPage', () => {
   it.each([
     ['tournaments.json', JSON_EXPORT, 'json', 'application/json'],
     ['tournaments.csv', CSV_EXPORT, 'csv', 'text/csv'],
-  ] as const)('importe %s seulement après confirmation explicite', async (name, content, format, mime) => {
+  ] as const)('analyse %s, montre l’aperçu, puis n’importe que cet aperçu', async (name, content, format, mime) => {
     signInAs('admin')
     const user = userEvent.setup()
-    const fetchMock = mockFetch(jsonResponse(200, { created: 1, updated: 2 }))
+    const fetchMock = mockFetch(jsonResponse(200, PREVIEW), jsonResponse(200, { created: 1, updated: 0 }))
     renderApp('/tournaments/transfer')
 
     await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([content], name))
-    const dialog = await screen.findByRole('alertdialog', { name: 'Importer ce fichier ?' })
-    expect(within(dialog).getByText(name)).toBeInTheDocument()
-    expect(fetchMock).not.toHaveBeenCalled()
-    await user.click(within(dialog).getByRole('button', { name: 'Importer et remplacer' }))
-
-    expect(await screen.findByText('Import terminé : 1 créés, 2 mis à jour.')).toBeInTheDocument()
+    const panel = await screen.findByRole('region', { name: 'Aperçu de l’import' })
+    expect(within(panel).getByText(`Fichier : ${name} (${format.toUpperCase()})`)).toBeInTheDocument()
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe(`/api/tournaments/import?format=${format}`)
+    expect(url).toBe(`/api/tournaments/import/preview?format=${format}`)
     expect(init.headers['Content-Type']).toBe(mime)
     expect(await (init.body as Blob).text()).toBe(content)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // Changements groupés par action, avec leurs effectifs.
+    const tournament = within(panel).getByRole('article', { name: 'TFT Open (Alpha Quest)' })
+    expect(within(tournament).getAllByText('Création').length).toBeGreaterThan(0)
+    expect(within(tournament).getByText('Inscrits')).toBeInTheDocument()
+    expect(within(tournament).getByText('avant : 0, après : 4')).toBeInTheDocument()
+    expect(within(tournament).getByText('étape 1 (finished) : 4 participant(s).')).toBeInTheDocument()
+    // Têtes de série, placements et résultats calculés par le serveur.
+    await user.click(within(tournament).getByText('Étape 1 (Terminée)'))
+    const group = within(tournament).getByRole('table', { name: 'Groupe 1' })
+    expect(within(group).getByRole('row', { name: /alice/ })).toHaveTextContent('1alice9.51Qualifié')
+    expect(within(tournament).getByText('alice : 9.5 pts, rang 1, résultat Victoire')).toBeInTheDocument()
+    expect(within(tournament).getByText('vainqueur vers le match 2')).toBeInTheDocument()
+    expect(within(panel).getByText('Les points de bob sont recalculés.')).toBeInTheDocument()
+
+    await user.click(within(panel).getByRole('button', { name: 'Confirmer l’import' }))
+    expect(await screen.findByText('Import terminé : 1 créés, 0 mis à jour.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Voir les tournois' })).toHaveAttribute('href', '/tournaments')
+    expect(screen.queryByRole('region', { name: 'Aperçu de l’import' })).not.toBeInTheDocument()
+    const [applyUrl, applyInit] = fetchMock.mock.calls[1]
+    expect(applyUrl).toBe('/api/tournaments/import/apply')
+    expect(JSON.parse(applyInit.body as string)).toEqual({ preview_id: PREVIEW_ID, confirm_destructive: false })
   })
 
-  it('n\'importe rien si l\'administrateur annule', async () => {
+  it('exige le consentement pour un import destructif et ne confirme qu’une fois', async () => {
     signInAs('admin')
     const user = userEvent.setup()
-    const fetchMock = mockFetch()
+    let release: (response: Response) => void = () => {}
+    const fetchMock = routeFetch((path) =>
+      path.startsWith('/tournaments/import/preview')
+        ? jsonResponse(200, DESTRUCTIVE)
+        : new Promise<Response>((resolve) => {
+            release = resolve
+          }),
+    )
     renderApp('/tournaments/transfer')
     await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([JSON_EXPORT], 'tournaments.json'))
-    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Annuler' }))
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    expect(fetchMock).not.toHaveBeenCalled()
+    const panel = await screen.findByRole('region', { name: 'Aperçu de l’import' })
+
+    expect(within(panel).getByText('Opérations destructives')).toBeInTheDocument()
+    expect(within(panel).getByText('Remplace des données existantes')).toBeInTheDocument()
+    expect(within(panel).getByText('3 résultat(s) de match terminé(s) existant(s) seront écrasés.')).toBeInTheDocument()
+    expect(within(panel).getAllByText('Remplacement').length).toBeGreaterThan(0)
+    expect(within(panel).getAllByText('Suppression').length).toBeGreaterThan(0)
+    expect(within(panel).getAllByText('Mise à jour').length).toBeGreaterThan(0)
+    expect(within(panel).getByText('(description)')).toBeInTheDocument()
+    const confirm = within(panel).getByRole('button', { name: 'Confirmer l’import' })
+    expect(confirm).toBeDisabled()
+
+    await user.click(within(panel).getByRole('checkbox', { name: /J’ai vérifié les remplacements/ }))
+    expect(confirm).toBeEnabled()
+    await user.dblClick(confirm)
+    expect(await within(panel).findByText('Import de l’aperçu confirmé…')).toBeInTheDocument()
+    release(jsonResponse(200, { created: 0, updated: 1 }))
+    expect(await screen.findByText('Import terminé : 0 créés, 1 mis à jour.')).toBeInTheDocument()
+    const applies = fetchMock.mock.calls.filter(([url]) => url === '/api/tournaments/import/apply')
+    expect(applies).toHaveLength(1)
+    expect(JSON.parse(applies[0][1].body as string)).toEqual({ preview_id: PREVIEW_ID, confirm_destructive: true })
   })
 
-  it('affiche errors.file renvoyé par le serveur (tournoi en cours refusé…)', async () => {
+  it('n’importe rien si l’administrateur annule l’aperçu', async () => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    const fetchMock = mockFetch(jsonResponse(200, PREVIEW))
+    renderApp('/tournaments/transfer')
+    await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([JSON_EXPORT], 'tournaments.json'))
+    const panel = await screen.findByRole('region', { name: 'Aperçu de l’import' })
+    await user.click(within(panel).getByRole('button', { name: 'Annuler l’import' }))
+    expect(screen.queryByRole('region', { name: 'Aperçu de l’import' })).not.toBeInTheDocument()
+    expect(screen.getByText('Import annulé : rien n’a été importé.')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('montre les erreurs de validation et ne propose pas de confirmer un fichier invalide', async () => {
     signInAs('admin')
     const user = userEvent.setup()
     mockFetch(
-      jsonResponse(400, {
-        error: 'invalid_request',
-        errors: { file: 'Tournoi n° 1 : le tournoi « TFT Open » est en cours ou terminé.' },
+      jsonResponse(200, {
+        valid: false,
+        requires_confirmation: false,
+        tournaments: [],
+        warnings: [],
+        errors: ['Tournoi 1 : game : jeu inconnu « Nope ».'],
       }),
     )
     renderApp('/tournaments/transfer')
+    await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([JSON_EXPORT], 'tournaments.json'))
+    const panel = await screen.findByRole('region', { name: 'Aperçu de l’import' })
+    const alert = within(panel).getByRole('alert')
+    expect(alert).toHaveTextContent('Erreurs de validation : 1')
+    expect(alert).toHaveTextContent('Tournoi 1 : game : jeu inconnu « Nope ».')
+    expect(within(panel).queryByRole('button', { name: 'Confirmer l’import' })).not.toBeInTheDocument()
+  })
+
+  it('affiche errors.file renvoyé par le serveur pendant l’analyse', async () => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    mockFetch(jsonResponse(400, { error: 'invalid_request', errors: { file: 'Ligne 1 : en-tête inattendu.' } }))
+    renderApp('/tournaments/transfer')
     await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([CSV_EXPORT], 'tournaments.csv'))
-    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Importer et remplacer' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Le serveur a refusé ce fichier')
-    expect(alert).toHaveTextContent('Tournoi n° 1 : le tournoi « TFT Open » est en cours ou terminé.')
+    expect(alert).toHaveTextContent('Ligne 1 : en-tête inattendu.')
+    expect(screen.queryByRole('region', { name: 'Aperçu de l’import' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    [409, { error: 'import_preview_stale' }, 'Les données ont changé depuis l’aperçu'],
+    [410, { error: 'import_preview_expired' }, 'Cet aperçu a expiré ou a déjà été utilisé'],
+  ])('un aperçu refusé (%i) n’importe rien et se refait sur le même fichier', async (status, body, message) => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    const fetchMock = mockFetch(jsonResponse(200, PREVIEW), jsonResponse(status, body), jsonResponse(200, PREVIEW))
+    renderApp('/tournaments/transfer')
+    await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([JSON_EXPORT], 'tournaments.json'))
+    let panel = await screen.findByRole('region', { name: 'Aperçu de l’import' })
+    await user.click(within(panel).getByRole('button', { name: 'Confirmer l’import' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message)
+    panel = screen.getByRole('region', { name: 'Aperçu de l’import' })
+    expect(within(panel).queryByRole('button', { name: 'Confirmer l’import' })).not.toBeInTheDocument()
+    await user.click(within(panel).getByRole('button', { name: 'Refaire l’aperçu' }))
+    expect(await screen.findByRole('button', { name: 'Confirmer l’import' })).toBeEnabled()
+    const [url, init] = fetchMock.mock.calls[2]
+    expect(url).toBe('/api/tournaments/import/preview?format=json')
+    expect(await (init.body as Blob).text()).toBe(JSON_EXPORT)
+  })
+
+  it('ne renvoie jamais une confirmation dont l’issue est inconnue', async () => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    const fetchMock = mockFetch(jsonResponse(200, PREVIEW), new TypeError('Failed to fetch'))
+    renderApp('/tournaments/transfer')
+    await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([JSON_EXPORT], 'tournaments.json'))
+    const panel = await screen.findByRole('region', { name: 'Aperçu de l’import' })
+    await user.click(within(panel).getByRole('button', { name: 'Confirmer l’import' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('l’import a peut-être eu lieu')
+    expect(screen.getByRole('link', { name: 'Voir les tournois' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Aperçu de l’import' })).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('signale un serveur qui ne détaille pas les placements', async () => {
+    signInAs('admin')
+    const user = userEvent.setup()
+    const { steps: _steps, ...summary } = PREVIEW.tournaments[0]
+    mockFetch(jsonResponse(200, { ...PREVIEW, tournaments: [summary] }))
+    renderApp('/tournaments/transfer')
+    await user.upload(screen.getByLabelText('Choisir un fichier JSON / CSV'), new File([JSON_EXPORT], 'tournaments.json'))
+    expect(
+      await screen.findByText('Le serveur ne détaille pas les placements ni les résultats de ce fichier.'),
+    ).toBeInTheDocument()
   })
 
   it('refuse localement un JSON invalide, une mauvaise extension ou un fichier trop gros', async () => {

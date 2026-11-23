@@ -8,6 +8,8 @@ The registry still publishes 4.0.7 as the latest version at verification time. T
 
 Both full-tree and production audits still execute. Other advisories (including on picomatch), changed ranges or severity, malformed reports, registry failures and timeouts remain blocking. Raw `npm audit` still reports the vulnerability and exits nonzero. No workflow-wide `continue-on-error`, audit removal, dependency downgrade or forced upgrade was introduced.
 
+The four Expo compatibility patches (expo 58.0.26, expo-file-system 58.0.14, expo-router 58.0.32 and jest-expo 58.0.15) keep SDK 58 compatibility. No SDK downgrade or broad audit fix is applied.
+
 Remove this exception when a compatible upstream fix becomes available, update the lockfile, and rerun both audit trees and Expo compatibility checks. If no fix exists by the deadline, the risk requires a fresh explicit review rather than automatic renewal. Earlier snapshots below are historical.
 
 ## npm advisory range correction: 2026-11-03

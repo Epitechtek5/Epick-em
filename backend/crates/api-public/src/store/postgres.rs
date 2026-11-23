@@ -7,18 +7,19 @@ use super::{
 #[path = "postgres_competition.rs"]
 mod competition;
 use super::{
-    AuthStore, CheckInSettlement, Game, GameFinish, GameInput, GameScores, GameUpdate, Generation,
-    Imports, Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
-    InvitationInput, InvitationStatus, InvitationType, Match, MatchFinish, MatchGame,
-    MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchScore, MatchStatus,
-    MatchUpdate, NamedParticipant, ParticipantChange, ParticipantImport, ParticipantInput,
-    ParticipantStatus, RegistrationField, Role, RoleAssignment, RoleAuditEntry, ScoringRule,
-    ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput, StatOption, StatUpdate, Step,
-    StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant, StepStart, StoreError,
-    Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
-    TournamentInput, TournamentInvitation, TournamentParticipant, TournamentRole,
-    TournamentSettings, TournamentStatus, TournamentTeam, TournamentTeamInput,
-    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
+    AUDITED_MATCHES, AuthStore, CheckInSettlement, Entrant, Game, GameFinish, GameInput,
+    GameScores, GameUpdate, Generation, ImportPlan, Imports, Invitation, InvitationAction,
+    InvitationEvent, InvitationEventKind, InvitationFilter, InvitationInput, InvitationStatus,
+    InvitationType, Match, MatchFinish, MatchGame, MatchGameParticipant, MatchImport, MatchInput,
+    MatchParticipant, MatchScore, MatchStatus, MatchUpdate, NamedParticipant, ParticipantChange,
+    ParticipantImport, ParticipantInput, ParticipantStatus, RegistrationField, Role,
+    RoleAssignment, RoleAuditEntry, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat,
+    StatInput, StatOption, StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput,
+    StepParticipant, StepStart, StepStatus, StoreError, Team, TeamImport, TeamInput, TeamMember,
+    TeamRole, TeamUpdate, Tournament, TournamentImport, TournamentInput, TournamentInvitation,
+    TournamentParticipant, TournamentPlan, TournamentRole, TournamentSettings, TournamentStatus,
+    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
+    UserRecord, UserUpdate,
 };
 use super::{
     Channel, Language, MAX_PUSH_TOKENS, Platform, PushToken, Theme, UserSettings,
@@ -747,6 +748,230 @@ async fn start_step_in(
         }
     }
     Ok(Some(step))
+}
+
+/// Crée ou met à jour (par jeu et nom) un tournoi et **remplace** son barème. Le propriétaire
+/// d'un tournoi existant ne change pas.
+async fn upsert_tournament_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    import: TournamentImport,
+) -> Result<(Tournament, bool), StoreError> {
+    let TournamentImport {
+        input,
+        status,
+        rules,
+    } = import;
+    // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour.
+    let settings = input.settings;
+    let (id, created) = sqlx::query_as::<_, (Uuid, bool)>(
+        "INSERT INTO tournaments (game_id, name, description, start_date, end_date, \
+                 registration_open_at, registration_close_at, participant_type, \
+                 max_participants, team_scoring_mode, team_scoring_n, status, mode, \
+                 location, visibility, rules, team_min_starters, team_max_starters, \
+                 team_max_substitutes, registration_policy, waiting_list_enabled, \
+                 registration_fields, check_in_open_at, check_in_close_at, owner_id) \
+             VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6::timestamptz, \
+                 $7::timestamptz, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, \
+                 $20, $21, $22::jsonb, $23::timestamptz, $24::timestamptz, $25) \
+             ON CONFLICT (game_id, lower(name)) DO UPDATE SET \
+                 name = EXCLUDED.name, description = EXCLUDED.description, \
+                 start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date, \
+                 registration_open_at = EXCLUDED.registration_open_at, \
+                 registration_close_at = EXCLUDED.registration_close_at, \
+                 participant_type = EXCLUDED.participant_type, \
+                 max_participants = EXCLUDED.max_participants, \
+                 team_scoring_mode = EXCLUDED.team_scoring_mode, \
+                 team_scoring_n = EXCLUDED.team_scoring_n, status = EXCLUDED.status, \
+                 mode = EXCLUDED.mode, location = EXCLUDED.location, \
+                 visibility = EXCLUDED.visibility, rules = EXCLUDED.rules, \
+                 team_min_starters = EXCLUDED.team_min_starters, \
+                 team_max_starters = EXCLUDED.team_max_starters, \
+                 team_max_substitutes = EXCLUDED.team_max_substitutes, \
+                 registration_policy = EXCLUDED.registration_policy, \
+                 waiting_list_enabled = EXCLUDED.waiting_list_enabled, \
+                 registration_fields = EXCLUDED.registration_fields, \
+                 check_in_open_at = EXCLUDED.check_in_open_at, \
+                 check_in_close_at = EXCLUDED.check_in_close_at, \
+                 updated_at = now() \
+             RETURNING id, (xmax = 0)",
+    )
+    .bind(input.game_id)
+    .bind(input.name)
+    .bind(input.description)
+    .bind(input.start_date)
+    .bind(input.end_date)
+    .bind(input.registration_open_at)
+    .bind(input.registration_close_at)
+    .bind(input.participant_type.as_str())
+    .bind(input.max_participants)
+    .bind(input.team_scoring_mode.as_str())
+    .bind(input.team_scoring_n)
+    .bind(status.as_str())
+    .bind(settings.mode.as_str())
+    .bind(settings.location)
+    .bind(settings.visibility.as_str())
+    .bind(settings.rules)
+    .bind(settings.team_min_starters)
+    .bind(settings.team_max_starters)
+    .bind(settings.team_max_substitutes)
+    .bind(settings.registration_policy.as_str())
+    .bind(settings.waiting_list_enabled)
+    .bind(fields_json(&settings.registration_fields))
+    .bind(settings.check_in_open_at)
+    .bind(settings.check_in_close_at)
+    .bind(input.owner_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query("DELETE FROM scoring_rule WHERE tournament_id = $1")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    for rule in rules {
+        sqlx::query(
+                "INSERT INTO scoring_rule (tournament_id, game_id, stat_id, mode, coefficient, points_table) \
+                 VALUES ($1, $2, $3, $4, $5::float8::numeric, $6::jsonb)",
+            )
+            .bind(id)
+            .bind(input.game_id)
+            .bind(rule.stat_id)
+            .bind(rule.definition.mode.as_str())
+            .bind(rule.definition.coefficient)
+            .bind(rule.definition.points_table.map(|table| table.to_string()))
+            .execute(&mut **tx)
+            .await?;
+    }
+    let row = sqlx::query_as::<_, TournamentRow>(&format!(
+        "SELECT {} FROM tournaments WHERE id = $1",
+        tournament_columns()
+    ))
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok((tournament(row)?, created))
+}
+
+/// Inscrit `participants` au tournoi ; renvoie leurs identifiants, dans l'ordre donné.
+async fn insert_participants_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tournament_id: Uuid,
+    participants: Vec<ParticipantImport>,
+) -> Result<Vec<Uuid>, StoreError> {
+    let mut ids = Vec::with_capacity(participants.len());
+    for participant in participants {
+        ids.push(
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO tournament_participant \
+                     (tournament_id, user_id, tournament_team_id, status, registered_at, responses) \
+                 VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6::jsonb) RETURNING id",
+            )
+            .bind(tournament_id)
+            .bind(participant.user_id)
+            .bind(participant.tournament_team_id)
+            .bind(participant.status.as_str())
+            .bind(participant.registered_at)
+            .bind(participant.responses.to_string())
+            .fetch_one(&mut **tx)
+            .await?,
+        );
+    }
+    Ok(ids)
+}
+
+/// Remplace les matchs de l'étape `step_id` (qui existe) par `matches`. Des matchs qui ont un
+/// historique d'audit ne se remplacent pas.
+async fn replace_step_matches_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    step_id: Uuid,
+    game_id: Uuid,
+    matches: Vec<MatchImport>,
+) -> Result<(), StoreError> {
+    let has_history = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM match_workflow w JOIN match m ON m.id = w.match_id WHERE m.step_id = $1 AND jsonb_array_length(COALESCE(w.document->'history', '[]'::jsonb)) > 0)",
+    ).bind(step_id).fetch_one(&mut **tx).await?;
+    if has_history {
+        return Err(StoreError::Other(AUDITED_MATCHES.into()));
+    }
+    sqlx::query("DELETE FROM match WHERE step_id = $1")
+        .bind(step_id)
+        .execute(&mut **tx)
+        .await?;
+    let mut ids = Vec::with_capacity(matches.len());
+    for import in &matches {
+        let id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO match (game_id, step_id, group_id, round, bracket, scheduled_at, \
+                 started_at, ended_at, status, number, next_slot, loser_next_slot, best_of) \
+             VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, \
+                 $8::timestamptz, $9, $10, $11::int4::smallint, $12::int4::smallint, $13) \
+             RETURNING id",
+        )
+        .bind(game_id)
+        .bind(step_id)
+        .bind(import.group_id)
+        .bind(import.round)
+        .bind(import.bracket.map(|b| b.as_str()))
+        .bind(&import.scheduled_at)
+        .bind(&import.started_at)
+        .bind(&import.ended_at)
+        .bind(import.status.as_str())
+        .bind(import.number)
+        .bind(import.next_slot)
+        .bind(import.loser_next_slot)
+        .bind(import.best_of)
+        .fetch_one(&mut **tx)
+        .await?;
+        ids.push(id);
+    }
+    for (import, id) in matches.into_iter().zip(&ids) {
+        if let Some(schedule) = import.schedule {
+            let workflow = MatchWorkflow {
+                revision: 1,
+                schedule,
+                ..Default::default()
+            };
+            sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2)")
+                .bind(id)
+                .bind(serde_json::to_value(workflow).map_err(|e| StoreError::Other(e.to_string()))?)
+                .execute(&mut **tx)
+                .await?;
+        }
+        let next = import.next.and_then(|next| ids.get(next));
+        let loser_next = import.loser_next.and_then(|next| ids.get(next));
+        if next.is_some() || loser_next.is_some() {
+            sqlx::query(
+                "UPDATE match SET next_match_id = $2, loser_next_match_id = $3 WHERE id = $1",
+            )
+            .bind(id)
+            .bind(next)
+            .bind(loser_next)
+            .execute(&mut **tx)
+            .await?;
+        }
+        for score in import.participants {
+            insert_match_participant(tx, *id, score.participant_id, score.slot).await?;
+            save_match_scores_in(tx, *id, vec![score]).await?;
+        }
+        for (index, game) in import.games.into_iter().enumerate() {
+            let game_id = sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO match_game (match_id, number, status, attributes, started_at, \
+                     ended_at) \
+                 VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz) \
+                 RETURNING id",
+            )
+            .bind(id)
+            .bind(i32::try_from(index + 1).unwrap_or(i32::MAX))
+            .bind(game.status.as_str())
+            .bind(game.attributes.to_string())
+            .bind(&game.started_at)
+            .bind(&game.ended_at)
+            .fetch_one(&mut **tx)
+            .await?;
+            for score in game.participants {
+                insert_game_participant(tx, game_id, score.participant_id).await?;
+                save_game_scores_in(tx, game_id, vec![score]).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Une génération concurrente a déjà créé cette ronde : l'index d'unicité la refuse.
@@ -4691,95 +4916,7 @@ impl AuthStore for PgStore {
             .bind(step_id)
             .execute(&mut *tx)
             .await?;
-        let has_history = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM match_workflow w JOIN match m ON m.id = w.match_id WHERE m.step_id = $1 AND jsonb_array_length(COALESCE(w.document->'history', '[]'::jsonb)) > 0)",
-        ).bind(step_id).fetch_one(&mut *tx).await?;
-        if has_history {
-            return Err(StoreError::Other("Matches with an audit history cannot be replaced by an import; use a result correction.".into()));
-        }
-        sqlx::query("DELETE FROM match WHERE step_id = $1")
-            .bind(step_id)
-            .execute(&mut *tx)
-            .await?;
-        let mut ids = Vec::with_capacity(matches.len());
-        for import in &matches {
-            let id = sqlx::query_scalar::<_, Uuid>(
-                "INSERT INTO match (game_id, step_id, group_id, round, bracket, scheduled_at, \
-                     started_at, ended_at, status, number, next_slot, loser_next_slot, best_of) \
-                 VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, \
-                     $8::timestamptz, $9, $10, $11::int4::smallint, $12::int4::smallint, $13) \
-                 RETURNING id",
-            )
-            .bind(game_id)
-            .bind(step_id)
-            .bind(import.group_id)
-            .bind(import.round)
-            .bind(import.bracket.map(|b| b.as_str()))
-            .bind(&import.scheduled_at)
-            .bind(&import.started_at)
-            .bind(&import.ended_at)
-            .bind(import.status.as_str())
-            .bind(import.number)
-            .bind(import.next_slot)
-            .bind(import.loser_next_slot)
-            .bind(import.best_of)
-            .fetch_one(&mut *tx)
-            .await?;
-            ids.push(id);
-        }
-        for (import, id) in matches.into_iter().zip(&ids) {
-            if let Some(schedule) = import.schedule {
-                let workflow = MatchWorkflow {
-                    revision: 1,
-                    schedule,
-                    ..Default::default()
-                };
-                sqlx::query("INSERT INTO match_workflow (match_id, document) VALUES ($1, $2)")
-                    .bind(id)
-                    .bind(
-                        serde_json::to_value(workflow)
-                            .map_err(|e| StoreError::Other(e.to_string()))?,
-                    )
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            let next = import.next.and_then(|next| ids.get(next));
-            let loser_next = import.loser_next.and_then(|next| ids.get(next));
-            if next.is_some() || loser_next.is_some() {
-                sqlx::query(
-                    "UPDATE match SET next_match_id = $2, loser_next_match_id = $3 WHERE id = $1",
-                )
-                .bind(id)
-                .bind(next)
-                .bind(loser_next)
-                .execute(&mut *tx)
-                .await?;
-            }
-            for score in import.participants {
-                insert_match_participant(&mut tx, *id, score.participant_id, score.slot).await?;
-                save_match_scores_in(&mut tx, *id, vec![score]).await?;
-            }
-            for (index, game) in import.games.into_iter().enumerate() {
-                let game_id = sqlx::query_scalar::<_, Uuid>(
-                    "INSERT INTO match_game (match_id, number, status, attributes, started_at, \
-                         ended_at) \
-                     VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz) \
-                     RETURNING id",
-                )
-                .bind(id)
-                .bind(i32::try_from(index + 1).unwrap_or(i32::MAX))
-                .bind(game.status.as_str())
-                .bind(game.attributes.to_string())
-                .bind(&game.started_at)
-                .bind(&game.ended_at)
-                .fetch_one(&mut *tx)
-                .await?;
-                for score in game.participants {
-                    insert_game_participant(&mut tx, game_id, score.participant_id).await?;
-                    save_game_scores_in(&mut tx, game_id, vec![score]).await?;
-                }
-            }
-        }
+        replace_step_matches_in(&mut tx, step_id, game_id, matches).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -4896,98 +5033,212 @@ impl AuthStore for PgStore {
         let mut tx = self.pool.begin().await?;
         let mut result = Vec::with_capacity(tournaments.len());
         for import in tournaments {
-            let TournamentImport {
-                input,
-                status,
-                rules,
-            } = import;
-            // `xmax = 0` distingue une ligne insérée d'une ligne mise à jour.
-            let settings = input.settings;
-            let (id, created) = sqlx::query_as::<_, (Uuid, bool)>(
-                "INSERT INTO tournaments (game_id, name, description, start_date, end_date, \
-                     registration_open_at, registration_close_at, participant_type, \
-                     max_participants, team_scoring_mode, team_scoring_n, status, mode, \
-                     location, visibility, rules, team_min_starters, team_max_starters, \
-                     team_max_substitutes, registration_policy, waiting_list_enabled, \
-                     registration_fields, check_in_open_at, check_in_close_at, owner_id) \
-                 VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6::timestamptz, \
-                     $7::timestamptz, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, \
-                     $20, $21, $22::jsonb, $23::timestamptz, $24::timestamptz, $25) \
-                 ON CONFLICT (game_id, lower(name)) DO UPDATE SET \
-                     name = EXCLUDED.name, description = EXCLUDED.description, \
-                     start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date, \
-                     registration_open_at = EXCLUDED.registration_open_at, \
-                     registration_close_at = EXCLUDED.registration_close_at, \
-                     participant_type = EXCLUDED.participant_type, \
-                     max_participants = EXCLUDED.max_participants, \
-                     team_scoring_mode = EXCLUDED.team_scoring_mode, \
-                     team_scoring_n = EXCLUDED.team_scoring_n, status = EXCLUDED.status, \
-                     mode = EXCLUDED.mode, location = EXCLUDED.location, \
-                     visibility = EXCLUDED.visibility, rules = EXCLUDED.rules, \
-                     team_min_starters = EXCLUDED.team_min_starters, \
-                     team_max_starters = EXCLUDED.team_max_starters, \
-                     team_max_substitutes = EXCLUDED.team_max_substitutes, \
-                     registration_policy = EXCLUDED.registration_policy, \
-                     waiting_list_enabled = EXCLUDED.waiting_list_enabled, \
-                     registration_fields = EXCLUDED.registration_fields, \
-                     check_in_open_at = EXCLUDED.check_in_open_at, \
-                     check_in_close_at = EXCLUDED.check_in_close_at, \
-                     updated_at = now() \
-                 RETURNING id, (xmax = 0)",
+            result.push(upsert_tournament_in(&mut tx, import).await?);
+        }
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    async fn tournament_digest(&self, tournament_id: Uuid) -> Result<String, StoreError> {
+        tournament_digest_in(&self.pool, tournament_id).await
+    }
+
+    async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        // Child updates do not necessarily lock their tournament. Freeze all imported tables
+        // before reading the digest, including inserts into a previously empty tournament.
+        // Imports are rare administrative operations; readers remain unblocked.
+        sqlx::query(
+            "LOCK TABLE tournaments, scoring_rule, tournament_participant, tournament_teams, \
+             tournament_team_member, step, step_group, step_participant, match, match_participant, \
+             match_game, match_game_participant, match_workflow IN SHARE ROW EXCLUSIVE MODE",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let mut result = Vec::with_capacity(plan.tournaments.len());
+        for tournament_plan in plan.tournaments {
+            let TournamentPlan {
+                import,
+                teams,
+                participants,
+                steps,
+                expected,
+            } = tournament_plan;
+            let game_id = import.input.game_id;
+            // Le verrou d'un tournoi existant interdit toute modification concurrente pendant
+            // l'import ; son statut et tout son contenu sont revérifiés sous ce verrou.
+            let locked = sqlx::query_as::<_, (Uuid, String)>(
+                "SELECT id, status FROM tournaments WHERE game_id = $1 AND lower(name) = lower($2) \
+                 FOR UPDATE",
             )
-            .bind(input.game_id)
-            .bind(input.name)
-            .bind(input.description)
-            .bind(input.start_date)
-            .bind(input.end_date)
-            .bind(input.registration_open_at)
-            .bind(input.registration_close_at)
-            .bind(input.participant_type.as_str())
-            .bind(input.max_participants)
-            .bind(input.team_scoring_mode.as_str())
-            .bind(input.team_scoring_n)
-            .bind(status.as_str())
-            .bind(settings.mode.as_str())
-            .bind(settings.location)
-            .bind(settings.visibility.as_str())
-            .bind(settings.rules)
-            .bind(settings.team_min_starters)
-            .bind(settings.team_max_starters)
-            .bind(settings.team_max_substitutes)
-            .bind(settings.registration_policy.as_str())
-            .bind(settings.waiting_list_enabled)
-            .bind(fields_json(&settings.registration_fields))
-            .bind(settings.check_in_open_at)
-            .bind(settings.check_in_close_at)
-            .bind(input.owner_id)
-            .fetch_one(&mut *tx)
+            .bind(game_id)
+            .bind(&import.input.name)
+            .fetch_optional(&mut *tx)
             .await?;
-            sqlx::query("DELETE FROM scoring_rule WHERE tournament_id = $1")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-            for rule in rules {
-                sqlx::query(
-                    "INSERT INTO scoring_rule (tournament_id, game_id, stat_id, mode, coefficient, points_table) \
-                     VALUES ($1, $2, $3, $4, $5::float8::numeric, $6::jsonb)",
+            if matches!(
+                locked.as_ref().map(|(_, s)| s.as_str()),
+                Some("ongoing" | "finished")
+            ) {
+                return Err(StoreError::TournamentLocked);
+            }
+            let found = match &locked {
+                Some((id, _)) => Some(tournament_digest_in(&mut *tx, *id).await?),
+                None => None,
+            };
+            if found != expected {
+                return Err(StoreError::ImportStale);
+            }
+            if let Some((id, _)) = &locked
+                && sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM match_workflow w JOIN match m ON m.id = w.match_id \
+                     JOIN step s ON s.id = m.step_id WHERE s.tournament_id = $1 \
+                     AND jsonb_array_length(COALESCE(w.document->'history', '[]'::jsonb)) > 0)",
                 )
                 .bind(id)
-                .bind(input.game_id)
-                .bind(rule.stat_id)
-                .bind(rule.definition.mode.as_str())
-                .bind(rule.definition.coefficient)
-                .bind(rule.definition.points_table.map(|table| table.to_string()))
-                .execute(&mut *tx)
-                .await?;
+                .fetch_one(&mut *tx)
+                .await?
+            {
+                return Err(StoreError::InvalidPlan(AUDITED_MATCHES.into()));
             }
-            let row = sqlx::query_as::<_, TournamentRow>(&format!(
-                "SELECT {} FROM tournaments WHERE id = $1",
-                tournament_columns()
-            ))
-            .bind(id)
-            .fetch_one(&mut *tx)
+            let (saved, created) = upsert_tournament_in(&mut tx, import).await?;
+            let id = saved.id;
+            // Les enfants sont remplacés : étapes (et leurs matchs), puis inscrits, puis équipes.
+            for table in ["step", "tournament_participant", "tournament_teams"] {
+                sqlx::query(&format!("DELETE FROM {table} WHERE tournament_id = $1"))
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            let mut team_ids = Vec::with_capacity(teams.len());
+            for team in teams {
+                let team_id = sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO tournament_teams (tournament_id, team_id, name, tag, picture_url, \
+                         owner_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                )
+                .bind(id)
+                .bind(team.origin)
+                .bind(team.name)
+                .bind(team.tag)
+                .bind(team.picture_url)
+                .bind(team.owner_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(team_conflict)?;
+                for (user_id, role) in team.members {
+                    sqlx::query(
+                        "INSERT INTO tournament_team_member \
+                             (tournament_team_id, tournament_id, user_id, role) \
+                         VALUES ($1, $2, $3, $4)",
+                    )
+                    .bind(team_id)
+                    .bind(id)
+                    .bind(user_id)
+                    .bind(role.as_str())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(team_conflict)?;
+                }
+                team_ids.push(team_id);
+            }
+            let whos: Vec<Option<Entrant>> = participants.iter().map(|p| p.entrant()).collect();
+            let ids = insert_participants_in(
+                &mut tx,
+                id,
+                participants
+                    .into_iter()
+                    .map(|p| p.into_import(&team_ids))
+                    .collect(),
+            )
             .await?;
-            result.push((tournament(row)?, created));
+            let entrants: HashMap<Entrant, Uuid> = whos
+                .into_iter()
+                .zip(ids)
+                .filter_map(|(who, id)| Some((who?, id)))
+                .collect();
+            let resolve = |who: &Entrant| -> Result<Uuid, StoreError> {
+                entrants
+                    .get(who)
+                    .copied()
+                    .ok_or_else(|| StoreError::Other(format!("inscrit {who:?} introuvable")))
+            };
+            for step_plan in steps {
+                let definition = step_plan.definition;
+                let created_step = sqlx::query_as::<_, StepRow>(&format!(
+                    "INSERT INTO step (tournament_id, position, format, match_type, group_count, \
+                         group_size, matches_per_group, advance_per_group, tiebreak, rules) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb) RETURNING {}",
+                    step_columns()
+                ))
+                .bind(id)
+                .bind(definition.position)
+                .bind(definition.format.as_str())
+                .bind(definition.match_type.as_str())
+                .bind(definition.group_count)
+                .bind(definition.group_size)
+                .bind(definition.matches_per_group)
+                .bind(definition.advance_per_group)
+                .bind(definition.tiebreak.to_string())
+                .bind(rules_json(&definition.rules))
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(step_conflict)?;
+                let step_id = created_step.0;
+                if step_plan.status == StepStatus::Pending {
+                    continue;
+                }
+                let mut group_ids = HashMap::new();
+                for (index, members) in step_plan.groups.iter().enumerate() {
+                    let rank = i32::try_from(index + 1).unwrap_or(i32::MAX);
+                    let group_id = sqlx::query_scalar::<_, Uuid>(
+                        "INSERT INTO step_group (step_id, index) VALUES ($1, $2) RETURNING id",
+                    )
+                    .bind(step_id)
+                    .bind(rank)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    group_ids.insert(rank, group_id);
+                    for member in members {
+                        sqlx::query(
+                            "INSERT INTO step_participant (step_id, tournament_id, participant_id, \
+                                 group_id, points, final_rank, status, seed) \
+                             VALUES ($1, $2, $3, $4, $5::float8::numeric, $6, $7, $8)",
+                        )
+                        .bind(step_id)
+                        .bind(id)
+                        .bind(resolve(&member.who)?)
+                        .bind(group_id)
+                        .bind(member.points)
+                        .bind(member.final_rank)
+                        .bind(member.status.as_str())
+                        .bind(member.seed)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|err| match &err {
+                            sqlx::Error::Database(db)
+                                if db.constraint() == Some("step_participant_step_seed_key") =>
+                            {
+                                StoreError::Other("tête de série déjà prise dans l'étape".into())
+                            }
+                            _ => err.into(),
+                        })?;
+                    }
+                }
+                let imports = step_plan
+                    .matches
+                    .into_iter()
+                    .map(|planned| {
+                        let group_id = planned.group.and_then(|rank| group_ids.get(&rank).copied());
+                        planned.into_import(group_id, &resolve)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                replace_step_matches_in(&mut tx, step_id, game_id, imports).await?;
+                sqlx::query("UPDATE step SET status = $2, updated_at = now() WHERE id = $1")
+                    .bind(step_id)
+                    .bind(step_plan.status.as_str())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            result.push((saved, created));
         }
         tx.commit().await?;
         Ok(result)
@@ -5003,21 +5254,7 @@ impl AuthStore for PgStore {
             .bind(tournament_id)
             .execute(&mut *tx)
             .await?;
-        for participant in participants {
-            sqlx::query(
-                "INSERT INTO tournament_participant \
-                     (tournament_id, user_id, tournament_team_id, status, registered_at, responses) \
-                 VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6::jsonb)",
-            )
-            .bind(tournament_id)
-            .bind(participant.user_id)
-            .bind(participant.tournament_team_id)
-            .bind(participant.status.as_str())
-            .bind(participant.registered_at)
-            .bind(participant.responses.to_string())
-            .execute(&mut *tx)
-            .await?;
-        }
+        insert_participants_in(&mut tx, tournament_id, participants).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -5316,4 +5553,56 @@ impl AuthStore for PgStore {
         tx.commit().await?;
         Ok(expired)
     }
+}
+
+/// Empreinte du contenu complet d'un tournoi, lue par `executor` (le pool, ou la transaction
+/// d'un import pour la revérifier sous verrou). Chaque table est réduite à ses lignes JSON triées.
+async fn tournament_digest_in<'e, E>(executor: E, tournament_id: Uuid) -> Result<String, StoreError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let steps = "SELECT id FROM step WHERE tournament_id = $1";
+    let rows = |table: &str, filter: &str| {
+        format!(
+            "(SELECT coalesce(string_agg(x, ',' ORDER BY x), '') FROM \
+               (SELECT row_to_json(r)::text AS x FROM {table} r WHERE {filter}) s)"
+        )
+    };
+    let parts = [
+        rows("tournaments", "r.id = $1"),
+        rows("scoring_rule", "r.tournament_id = $1"),
+        rows("tournament_participant", "r.tournament_id = $1"),
+        rows("tournament_teams", "r.tournament_id = $1"),
+        rows("tournament_team_member", "r.tournament_id = $1"),
+        rows("step", "r.tournament_id = $1"),
+        rows("step_group", &format!("r.step_id IN ({steps})")),
+        rows("step_participant", &format!("r.step_id IN ({steps})")),
+        rows("match", &format!("r.step_id IN ({steps})")),
+        rows(
+            "match_participant",
+            &format!("r.match_id IN (SELECT id FROM match WHERE step_id IN ({steps}))"),
+        ),
+        rows(
+            "match_game",
+            &format!("r.match_id IN (SELECT id FROM match WHERE step_id IN ({steps}))"),
+        ),
+        rows(
+            "match_game_participant",
+            &format!(
+                "r.game_id IN (SELECT g.id FROM match_game g JOIN match m ON m.id = g.match_id \
+                 WHERE m.step_id IN ({steps}))"
+            ),
+        ),
+        rows(
+            "match_workflow",
+            &format!("r.match_id IN (SELECT id FROM match WHERE step_id IN ({steps}))"),
+        ),
+    ];
+    Ok(sqlx::query_scalar::<_, String>(&format!(
+        "SELECT md5(concat_ws('|', {}))",
+        parts.join(", ")
+    ))
+    .bind(tournament_id)
+    .fetch_one(executor)
+    .await?)
 }

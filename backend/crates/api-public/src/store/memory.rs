@@ -3,25 +3,26 @@
 use super::ParticipantType;
 use super::teams::{now_rfc3339, rfc3339_in};
 use super::{
-    AuthStore, CheckInSettlement, Game, GameFinish, GameInput, GameScores, GameUpdate, Generation,
-    Imports, Invitation, InvitationAction, InvitationEvent, InvitationEventKind, InvitationFilter,
-    InvitationInput, InvitationStatus, InvitationType, Match, MatchFinish, MatchGame,
-    MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchResult, MatchScore,
-    MatchStatus, MatchUpdate, NamedParticipant, ParticipantChange, ParticipantImport,
-    ParticipantInput, ParticipantStatus, Placement, RegistrationPolicy, Role, RoleAssignment,
-    RoleAuditAction, RoleAuditEntry, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat,
-    StatInput, StatOption, StatType, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
-    StepInput, StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Team,
-    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
-    TournamentInput, TournamentInvitation, TournamentParticipant, TournamentRole, TournamentStatus,
-    TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate, UserProfile,
-    UserRecord, UserUpdate,
+    AUDITED_MATCHES, CompetitionCorrection, CompetitionSnapshot, MatchEvidence, MatchWorkflow,
+    WorkflowCommit,
+};
+use super::{
+    AuthStore, CheckInSettlement, Entrant, Game, GameFinish, GameInput, GameScores, GameUpdate,
+    Generation, ImportPlan, Imports, Invitation, InvitationAction, InvitationEvent,
+    InvitationEventKind, InvitationFilter, InvitationInput, InvitationStatus, InvitationType,
+    Match, MatchFinish, MatchGame, MatchGameParticipant, MatchImport, MatchInput, MatchParticipant,
+    MatchResult, MatchScore, MatchStatus, MatchUpdate, NamedParticipant, ParticipantChange,
+    ParticipantImport, ParticipantInput, ParticipantStatus, Placement, RegistrationPolicy, Role,
+    RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringRule, ScoringRuleDefinition,
+    ScoringRuleInput, Stat, StatInput, StatOption, StatType, StatUpdate, Step, StepClosing,
+    StepDefinition, StepGroup, StepInput, StepParticipant, StepParticipantStatus, StepStart,
+    StepStatus, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate,
+    Tournament, TournamentImport, TournamentInput, TournamentInvitation, TournamentParticipant,
+    TournamentPlan, TournamentRole, TournamentStatus, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
 use super::{
     Channel, MAX_PUSH_TOKENS, Platform, PushToken, UserSettings, UserSettingsUpdate, override_key,
-};
-use super::{
-    CompetitionCorrection, CompetitionSnapshot, MatchEvidence, MatchWorkflow, WorkflowCommit,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -30,6 +31,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+#[derive(Clone)]
 struct RefreshToken {
     user_id: Uuid,
     expires_at: Instant,
@@ -43,13 +45,14 @@ enum VerificationStatus {
     Retired,
 }
 
+#[derive(Clone)]
 struct ResetToken {
     user_id: Uuid,
     expires_at: Instant,
     used: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct State {
     users: Vec<UserRecord>,
     settings: HashMap<Uuid, UserSettings>,
@@ -2967,87 +2970,7 @@ impl AuthStore for MemoryStore {
         if !state.steps.iter().any(|s| s.id == step_id) {
             return Ok(false);
         }
-        let doomed: Vec<Uuid> = state
-            .matches
-            .iter()
-            .filter(|m| m.step_id == step_id)
-            .map(|m| m.id)
-            .collect();
-        if doomed.iter().any(|id| {
-            state
-                .match_workflows
-                .get(id)
-                .is_some_and(|w| !w.history.is_empty())
-        }) {
-            return Err(StoreError::Other("Matches with an audit history cannot be replaced by an import; use a result correction.".into()));
-        }
-        for id in doomed {
-            state.remove_match(id);
-        }
-        let ids: Vec<Uuid> = matches.iter().map(|_| Uuid::new_v4()).collect();
-        let now = now_rfc3339();
-        for (index, import) in matches.into_iter().enumerate() {
-            if let Some(schedule) = import.schedule {
-                state.match_workflows.insert(
-                    ids[index],
-                    MatchWorkflow {
-                        revision: 1,
-                        schedule,
-                        ..Default::default()
-                    },
-                );
-            }
-            state.matches.push(Match {
-                id: ids[index],
-                game_id,
-                step_id,
-                group_id: import.group_id,
-                round: import.round,
-                bracket: import.bracket,
-                next_match_id: import.next.and_then(|next| ids.get(next).copied()),
-                number: import.number,
-                next_slot: import.next_slot,
-                loser_next_match_id: import.loser_next.and_then(|next| ids.get(next).copied()),
-                loser_next_slot: import.loser_next_slot,
-                best_of: import.best_of,
-                scheduled_at: import.scheduled_at,
-                started_at: import.started_at,
-                ended_at: import.ended_at,
-                status: import.status,
-                created_at: now.clone(),
-                updated_at: now.clone(),
-            });
-            for score in import.participants {
-                state.match_participants.push(MatchParticipant {
-                    match_id: ids[index],
-                    participant_id: score.participant_id,
-                    stats: score.stats,
-                    points: score.points,
-                    rank: score.rank,
-                    result: score.result,
-                    slot: score.slot,
-                    games_won: score.games_won,
-                });
-            }
-            for (number, game) in import.games.into_iter().enumerate() {
-                state.match_games.push(MatchGame {
-                    id: Uuid::new_v4(),
-                    match_id: ids[index],
-                    number: i32::try_from(number + 1).unwrap_or(i32::MAX),
-                    status: game.status,
-                    attributes: game.attributes,
-                    started_at: game.started_at,
-                    ended_at: game.ended_at,
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                    participants: game
-                        .participants
-                        .into_iter()
-                        .map(game_participant)
-                        .collect(),
-                });
-            }
-        }
+        state.replace_step_matches(step_id, game_id, matches)?;
         Ok(true)
     }
 
@@ -3264,77 +3187,25 @@ impl AuthStore for MemoryStore {
         tournaments: Vec<TournamentImport>,
     ) -> Result<Vec<(Tournament, bool)>, StoreError> {
         let mut state = self.state();
-        let mut result = Vec::with_capacity(tournaments.len());
-        for import in tournaments {
-            let TournamentImport {
-                input,
-                status,
-                rules,
-            } = import;
-            let now = now_rfc3339();
-            let existing = state.tournaments.iter().position(|t| {
-                t.game_id == input.game_id && t.name.to_lowercase() == input.name.to_lowercase()
-            });
-            let (tournament, created) = match existing {
-                Some(index) => {
-                    let t = &mut state.tournaments[index];
-                    t.name = input.name;
-                    t.description = input.description;
-                    t.start_date = input.start_date;
-                    t.end_date = input.end_date;
-                    t.registration_open_at = input.registration_open_at;
-                    t.registration_close_at = input.registration_close_at;
-                    t.participant_type = input.participant_type;
-                    t.max_participants = input.max_participants;
-                    t.team_scoring_mode = input.team_scoring_mode;
-                    t.team_scoring_n = input.team_scoring_n;
-                    t.settings = input.settings;
-                    t.status = status;
-                    t.updated_at = now;
-                    (t.clone(), false)
-                }
-                None => {
-                    let t = Tournament {
-                        id: Uuid::new_v4(),
-                        game_id: input.game_id,
-                        name: input.name,
-                        description: input.description,
-                        start_date: input.start_date,
-                        end_date: input.end_date,
-                        registration_open_at: input.registration_open_at,
-                        registration_close_at: input.registration_close_at,
-                        participant_type: input.participant_type,
-                        max_participants: input.max_participants,
-                        team_scoring_mode: input.team_scoring_mode,
-                        team_scoring_n: input.team_scoring_n,
-                        settings: input.settings,
-                        status,
-                        owner_id: input.owner_id,
-                        is_template: false,
-                        check_in_settled_at: None,
-                        created_at: now.clone(),
-                        updated_at: now,
-                    };
-                    state.tournaments.push(t.clone());
-                    (t, true)
-                }
-            };
-            state
-                .scoring_rules
-                .retain(|r| r.tournament_id != tournament.id);
-            state
-                .scoring_rules
-                .extend(rules.into_iter().map(|rule| ScoringRule {
-                    id: Uuid::new_v4(),
-                    tournament_id: tournament.id,
-                    stat_id: rule.stat_id,
-                    mode: rule.definition.mode,
-                    coefficient: rule.definition.coefficient,
-                    points_table: rule.definition.points_table,
-                }));
-            result.push((tournament, created));
+        Ok(tournaments
+            .into_iter()
+            .map(|import| state.upsert_tournament(import))
+            .collect())
+    }
+
+    async fn tournament_digest(&self, tournament_id: Uuid) -> Result<String, StoreError> {
+        Ok(self.state().tournament_digest(tournament_id))
+    }
+
+    async fn apply_import(&self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
+        let mut state = self.state();
+        // Tout ou rien : l'état d'avant est restauré si une écriture échoue.
+        let snapshot = state.clone();
+        let outcome = state.apply_import(plan);
+        if outcome.is_err() {
+            *state = snapshot;
         }
-        Ok(result)
+        outcome
     }
 
     async fn replace_participants(
@@ -3342,36 +3213,8 @@ impl AuthStore for MemoryStore {
         tournament_id: Uuid,
         participants: Vec<ParticipantImport>,
     ) -> Result<(), StoreError> {
-        let mut state = self.state();
-        let replaced: Vec<Uuid> = state
-            .participants
-            .iter()
-            .filter(|p| p.tournament_id == tournament_id)
-            .map(|p| p.id)
-            .collect();
-        state
-            .step_participants
-            .retain(|p| !replaced.contains(&p.participant_id));
-        state
-            .match_participants
-            .retain(|p| !replaced.contains(&p.participant_id));
-        state
-            .participants
-            .retain(|p| p.tournament_id != tournament_id);
-        let now = now_rfc3339();
-        state
-            .participants
-            .extend(participants.into_iter().map(|p| TournamentParticipant {
-                id: Uuid::new_v4(),
-                tournament_id,
-                user_id: p.user_id,
-                tournament_team_id: p.tournament_team_id,
-                status: p.status,
-                registered_at: p.registered_at.unwrap_or_else(|| now.clone()),
-                responses: p.responses,
-                external_id: None,
-                display_name: None,
-            }));
+        self.state()
+            .replace_participants(tournament_id, participants);
         Ok(())
     }
 
@@ -4249,6 +4092,476 @@ impl State {
                 m.loser_next_match_id = None;
             }
         }
+    }
+
+    /// Empreinte de tout le contenu d'un tournoi (voir `AuthStore::tournament_digest`).
+    fn tournament_digest(&self, id: Uuid) -> String {
+        use sha2::{Digest, Sha256};
+        let steps: HashSet<Uuid> = self
+            .steps
+            .iter()
+            .filter(|s| s.tournament_id == id)
+            .map(|s| s.id)
+            .collect();
+        let matches: Vec<&Match> = self
+            .matches
+            .iter()
+            .filter(|m| steps.contains(&m.step_id))
+            .collect();
+        let match_ids: HashSet<Uuid> = matches.iter().map(|m| m.id).collect();
+        let participants: Vec<_> = self
+            .participants
+            .iter()
+            .filter(|p| p.tournament_id == id)
+            .collect();
+        let mut points: Vec<_> = participants
+            .iter()
+            .filter_map(|p| self.points.get(&p.id).map(|v| (p.id, *v)))
+            .collect();
+        points.sort_by_key(|(id, _)| *id);
+        let mut workflows: Vec<_> = self
+            .match_workflows
+            .iter()
+            .filter(|(m, _)| match_ids.contains(m))
+            .collect();
+        workflows.sort_by_key(|(m, _)| **m);
+        let mut archived: Vec<_> = self
+            .archived_matches
+            .iter()
+            .filter(|m| match_ids.contains(m))
+            .collect();
+        archived.sort();
+        let content = format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            self.tournaments.iter().find(|t| t.id == id),
+            self.scoring_rules
+                .iter()
+                .filter(|r| r.tournament_id == id)
+                .collect::<Vec<_>>(),
+            participants,
+            points,
+            self.tournament_teams
+                .iter()
+                .filter(|t| t.tournament_id == id)
+                .collect::<Vec<_>>(),
+            self.tournament_team_members
+                .iter()
+                .filter(|(team, _)| {
+                    self.tournament_teams
+                        .iter()
+                        .any(|t| t.id == *team && t.tournament_id == id)
+                })
+                .collect::<Vec<_>>(),
+            self.steps
+                .iter()
+                .filter(|s| steps.contains(&s.id))
+                .collect::<Vec<_>>(),
+            self.step_groups
+                .iter()
+                .filter(|g| steps.contains(&g.step_id))
+                .collect::<Vec<_>>(),
+            self.step_participants
+                .iter()
+                .filter(|p| steps.contains(&p.step_id))
+                .collect::<Vec<_>>(),
+            matches,
+            self.match_participants
+                .iter()
+                .filter(|p| match_ids.contains(&p.match_id))
+                .collect::<Vec<_>>(),
+            self.match_games
+                .iter()
+                .filter(|g| match_ids.contains(&g.match_id))
+                .collect::<Vec<_>>(),
+            workflows,
+            archived,
+        );
+        format!("{:x}", Sha256::digest(content.as_bytes()))
+    }
+
+    /// Écrit tout le plan d'import ; l'appelant restaure l'état en cas d'erreur.
+    fn apply_import(&mut self, plan: ImportPlan) -> Result<Vec<(Tournament, bool)>, StoreError> {
+        let mut result = Vec::with_capacity(plan.tournaments.len());
+        for tournament_plan in plan.tournaments {
+            let TournamentPlan {
+                import,
+                teams,
+                participants,
+                steps,
+                expected,
+            } = tournament_plan;
+            let game_id = import.input.game_id;
+            let existing = self
+                .tournaments
+                .iter()
+                .find(|t| {
+                    t.game_id == game_id
+                        && t.name.to_lowercase() == import.input.name.to_lowercase()
+                })
+                .cloned();
+            if existing.as_ref().is_some_and(|t| {
+                matches!(
+                    t.status,
+                    TournamentStatus::Ongoing | TournamentStatus::Finished
+                )
+            }) {
+                return Err(StoreError::TournamentLocked);
+            }
+            if existing.as_ref().map(|t| self.tournament_digest(t.id)) != expected {
+                return Err(StoreError::ImportStale);
+            }
+            let doomed_steps: Vec<Uuid> = existing
+                .as_ref()
+                .map(|t| {
+                    self.steps
+                        .iter()
+                        .filter(|s| s.tournament_id == t.id)
+                        .map(|s| s.id)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if self.matches.iter().any(|m| {
+                doomed_steps.contains(&m.step_id)
+                    && self
+                        .match_workflows
+                        .get(&m.id)
+                        .is_some_and(|w| !w.history.is_empty())
+            }) {
+                return Err(StoreError::InvalidPlan(AUDITED_MATCHES.into()));
+            }
+            let (saved, created) = self.upsert_tournament(import);
+            let id = saved.id;
+            for step_id in doomed_steps {
+                self.remove_step(step_id);
+            }
+            let doomed_teams: Vec<Uuid> = self
+                .tournament_teams
+                .iter()
+                .filter(|t| t.tournament_id == id)
+                .map(|t| t.id)
+                .collect();
+            self.tournament_teams.retain(|t| t.tournament_id != id);
+            self.tournament_team_members
+                .retain(|(team, _)| !doomed_teams.contains(team));
+            let now = now_rfc3339();
+            let mut team_ids = Vec::with_capacity(teams.len());
+            for team in teams {
+                let team_id = Uuid::new_v4();
+                if let Some(origin) = team.origin
+                    && self
+                        .tournament_teams
+                        .iter()
+                        .any(|t| t.tournament_id == id && t.team_id == Some(origin))
+                {
+                    return Err(StoreError::TeamAlreadyRegistered);
+                }
+                self.tournament_teams.push(TournamentTeam {
+                    id: team_id,
+                    tournament_id: id,
+                    team_id: team.origin,
+                    name: team.name,
+                    tag: team.tag,
+                    picture_url: team.picture_url,
+                    owner_id: team.owner_id,
+                    created_at: now.clone(),
+                });
+                self.tournament_team_members.extend(
+                    team.members
+                        .into_iter()
+                        .map(|(user_id, role)| (team_id, TournamentTeamMember { user_id, role })),
+                );
+                team_ids.push(team_id);
+            }
+            let whos: Vec<Option<Entrant>> = participants.iter().map(|p| p.entrant()).collect();
+            let ids = self.replace_participants(
+                id,
+                participants
+                    .into_iter()
+                    .map(|p| p.into_import(&team_ids))
+                    .collect(),
+            );
+            let entrants: HashMap<Entrant, Uuid> = whos
+                .into_iter()
+                .zip(ids)
+                .filter_map(|(who, id)| Some((who?, id)))
+                .collect();
+            let resolve = |who: &Entrant| -> Result<Uuid, StoreError> {
+                entrants
+                    .get(who)
+                    .copied()
+                    .ok_or_else(|| StoreError::Other(format!("inscrit {who:?} introuvable")))
+            };
+            for step_plan in steps {
+                if self
+                    .steps
+                    .iter()
+                    .any(|s| s.tournament_id == id && s.position == step_plan.definition.position)
+                {
+                    return Err(StoreError::StepPositionTaken);
+                }
+                let step_id = Uuid::new_v4();
+                let definition = step_plan.definition;
+                self.steps.push(Step {
+                    id: step_id,
+                    tournament_id: id,
+                    position: definition.position,
+                    format: definition.format,
+                    match_type: definition.match_type,
+                    group_count: definition.group_count,
+                    group_size: definition.group_size,
+                    matches_per_group: definition.matches_per_group,
+                    advance_per_group: definition.advance_per_group,
+                    tiebreak: definition.tiebreak,
+                    rules: definition.rules,
+                    status: step_plan.status,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                });
+                if step_plan.status == StepStatus::Pending {
+                    continue;
+                }
+                let mut seeds = HashSet::new();
+                let mut group_ids = HashMap::new();
+                for (index, members) in step_plan.groups.iter().enumerate() {
+                    let rank = i32::try_from(index + 1).unwrap_or(i32::MAX);
+                    let group_id = Uuid::new_v4();
+                    self.step_groups.push(StepGroup {
+                        id: group_id,
+                        step_id,
+                        index: rank,
+                    });
+                    group_ids.insert(rank, group_id);
+                    for member in members {
+                        if let Some(seed) = member.seed
+                            && !seeds.insert(seed)
+                        {
+                            return Err(StoreError::Other(
+                                "tête de série déjà prise dans l'étape".into(),
+                            ));
+                        }
+                        self.step_participants.push(StepParticipant {
+                            step_id,
+                            participant_id: resolve(&member.who)?,
+                            group_id,
+                            points: member.points,
+                            final_rank: member.final_rank,
+                            status: member.status,
+                            seed: member.seed,
+                        });
+                    }
+                }
+                let imports = step_plan
+                    .matches
+                    .into_iter()
+                    .map(|planned| {
+                        let group_id = planned.group.and_then(|rank| group_ids.get(&rank).copied());
+                        planned.into_import(group_id, &resolve)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.replace_step_matches(step_id, game_id, imports)?;
+            }
+            result.push((saved, created));
+        }
+        Ok(result)
+    }
+
+    /// Crée ou met à jour (par jeu et nom) un tournoi et remplace son barème. Le propriétaire et
+    /// le statut de modèle d'un tournoi existant ne changent pas.
+    fn upsert_tournament(&mut self, import: TournamentImport) -> (Tournament, bool) {
+        let TournamentImport {
+            input,
+            status,
+            rules,
+        } = import;
+        let now = now_rfc3339();
+        let existing = self.tournaments.iter().position(|t| {
+            t.game_id == input.game_id && t.name.to_lowercase() == input.name.to_lowercase()
+        });
+        let (tournament, created) = match existing {
+            Some(index) => {
+                let t = &mut self.tournaments[index];
+                t.name = input.name;
+                t.description = input.description;
+                t.start_date = input.start_date;
+                t.end_date = input.end_date;
+                t.registration_open_at = input.registration_open_at;
+                t.registration_close_at = input.registration_close_at;
+                t.participant_type = input.participant_type;
+                t.max_participants = input.max_participants;
+                t.team_scoring_mode = input.team_scoring_mode;
+                t.team_scoring_n = input.team_scoring_n;
+                t.settings = input.settings;
+                t.status = status;
+                t.updated_at = now;
+                (t.clone(), false)
+            }
+            None => {
+                let t = Tournament {
+                    id: Uuid::new_v4(),
+                    game_id: input.game_id,
+                    name: input.name,
+                    description: input.description,
+                    start_date: input.start_date,
+                    end_date: input.end_date,
+                    registration_open_at: input.registration_open_at,
+                    registration_close_at: input.registration_close_at,
+                    participant_type: input.participant_type,
+                    max_participants: input.max_participants,
+                    team_scoring_mode: input.team_scoring_mode,
+                    team_scoring_n: input.team_scoring_n,
+                    settings: input.settings,
+                    status,
+                    owner_id: input.owner_id,
+                    is_template: false,
+                    check_in_settled_at: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                };
+                self.tournaments.push(t.clone());
+                (t, true)
+            }
+        };
+        self.scoring_rules
+            .retain(|r| r.tournament_id != tournament.id);
+        self.scoring_rules
+            .extend(rules.into_iter().map(|rule| ScoringRule {
+                id: Uuid::new_v4(),
+                tournament_id: tournament.id,
+                stat_id: rule.stat_id,
+                mode: rule.definition.mode,
+                coefficient: rule.definition.coefficient,
+                points_table: rule.definition.points_table,
+            }));
+        (tournament, created)
+    }
+
+    /// Remplace les inscrits du tournoi ; renvoie leurs identifiants, dans l'ordre donné.
+    fn replace_participants(
+        &mut self,
+        tournament_id: Uuid,
+        participants: Vec<ParticipantImport>,
+    ) -> Vec<Uuid> {
+        let replaced: Vec<Uuid> = self
+            .participants
+            .iter()
+            .filter(|p| p.tournament_id == tournament_id)
+            .map(|p| p.id)
+            .collect();
+        self.step_participants
+            .retain(|p| !replaced.contains(&p.participant_id));
+        self.match_participants
+            .retain(|p| !replaced.contains(&p.participant_id));
+        self.participants
+            .retain(|p| p.tournament_id != tournament_id);
+        let now = now_rfc3339();
+        let mut ids = Vec::with_capacity(participants.len());
+        for p in participants {
+            let id = Uuid::new_v4();
+            ids.push(id);
+            self.participants.push(TournamentParticipant {
+                id,
+                tournament_id,
+                user_id: p.user_id,
+                tournament_team_id: p.tournament_team_id,
+                status: p.status,
+                registered_at: p.registered_at.unwrap_or_else(|| now.clone()),
+                responses: p.responses,
+                external_id: None,
+                display_name: None,
+            });
+        }
+        ids
+    }
+
+    /// Remplace les matchs de l'étape `step_id` (qui existe) par `matches`. Des matchs qui ont un
+    /// historique d'audit ne se remplacent pas.
+    fn replace_step_matches(
+        &mut self,
+        step_id: Uuid,
+        game_id: Uuid,
+        matches: Vec<MatchImport>,
+    ) -> Result<(), StoreError> {
+        let doomed: Vec<Uuid> = self
+            .matches
+            .iter()
+            .filter(|m| m.step_id == step_id)
+            .map(|m| m.id)
+            .collect();
+        if doomed.iter().any(|id| {
+            self.match_workflows
+                .get(id)
+                .is_some_and(|w| !w.history.is_empty())
+        }) {
+            return Err(StoreError::Other(AUDITED_MATCHES.into()));
+        }
+        for id in doomed {
+            self.remove_match(id);
+        }
+        let ids: Vec<Uuid> = matches.iter().map(|_| Uuid::new_v4()).collect();
+        let now = now_rfc3339();
+        for (index, import) in matches.into_iter().enumerate() {
+            if let Some(schedule) = import.schedule {
+                self.match_workflows.insert(
+                    ids[index],
+                    MatchWorkflow {
+                        revision: 1,
+                        schedule,
+                        ..Default::default()
+                    },
+                );
+            }
+            self.matches.push(Match {
+                id: ids[index],
+                game_id,
+                step_id,
+                group_id: import.group_id,
+                round: import.round,
+                bracket: import.bracket,
+                next_match_id: import.next.and_then(|next| ids.get(next).copied()),
+                number: import.number,
+                next_slot: import.next_slot,
+                loser_next_match_id: import.loser_next.and_then(|next| ids.get(next).copied()),
+                loser_next_slot: import.loser_next_slot,
+                best_of: import.best_of,
+                scheduled_at: import.scheduled_at,
+                started_at: import.started_at,
+                ended_at: import.ended_at,
+                status: import.status,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            });
+            for score in import.participants {
+                self.match_participants.push(MatchParticipant {
+                    match_id: ids[index],
+                    participant_id: score.participant_id,
+                    stats: score.stats,
+                    points: score.points,
+                    rank: score.rank,
+                    result: score.result,
+                    slot: score.slot,
+                    games_won: score.games_won,
+                });
+            }
+            for (number, game) in import.games.into_iter().enumerate() {
+                self.match_games.push(MatchGame {
+                    id: Uuid::new_v4(),
+                    match_id: ids[index],
+                    number: i32::try_from(number + 1).unwrap_or(i32::MAX),
+                    status: game.status,
+                    attributes: game.attributes,
+                    started_at: game.started_at,
+                    ended_at: game.ended_at,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                    participants: game
+                        .participants
+                        .into_iter()
+                        .map(game_participant)
+                        .collect(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Crée les groupes et les participants d'une étape `pending` et la passe en `ongoing`.

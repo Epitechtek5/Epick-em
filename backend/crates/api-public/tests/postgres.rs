@@ -3,15 +3,16 @@
 
 use api_public::step_io::StoreSteps;
 use api_public::store::{
-    AuthStore, Bracket, GameFinish, GameImport, GameInput, GameScores, GameUpdate, GeneratedMatch,
-    Generation, InvitationAction, InvitationEventKind, InvitationFilter, InvitationInput,
-    InvitationStatus, InvitationType, MatchFinish, MatchInput, MatchResult, MatchScore,
-    MatchStatus, MatchType, MatchUpdate, MemberImport, ParticipantImport, ParticipantInput,
-    ParticipantStatus, ParticipantType, PgStore, Placement, Role, RoleAuditAction, ScoringMode,
-    ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, StatInput, StatOption, StatScope,
-    StatType, StatUpdate, StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome,
-    StepParticipantStatus, StepStart, StepStatus, StoreError, TeamImport, TeamInput, TeamRole,
-    TeamScoringMode, TeamUpdate, TournamentImport, TournamentInput, TournamentRole,
+    AuthStore, Bracket, Entrant, EntryPlan, GameFinish, GameImport, GameInput, GameScores,
+    GameUpdate, GeneratedMatch, Generation, ImportPlan, InvitationAction, InvitationEventKind,
+    InvitationFilter, InvitationInput, InvitationStatus, InvitationType, MatchFinish, MatchInput,
+    MatchPlan, MatchResult, MatchScore, MatchStatus, MatchType, MatchUpdate, MemberImport,
+    MemberPlan, ParticipantImport, ParticipantInput, ParticipantPlan, ParticipantStatus,
+    ParticipantType, PgStore, Placement, Role, RoleAuditAction, ScoringMode, ScoringRuleDefinition,
+    ScoringRuleImport, ScoringRuleInput, StatInput, StatOption, StatScope, StatType, StatUpdate,
+    StepClosing, StepDefinition, StepFormat, StepInput, StepOutcome, StepParticipantStatus,
+    StepPlan, StepStart, StepStatus, StoreError, TeamImport, TeamInput, TeamRole, TeamScoringMode,
+    TeamUpdate, TournamentImport, TournamentInput, TournamentPlan, TournamentRole,
     TournamentSettings, TournamentSettingsUpdate, TournamentStatus, TournamentTeamInput,
     TournamentUpdate, UserUpdate, Visibility, no_responses,
 };
@@ -4937,5 +4938,281 @@ async fn question_edits_recheck_opening_after_row_lock_wait() {
             .unwrap()
             .points,
         20
+    );
+}
+
+/// Plan d'import d'un tournoi de quatre joueurs : une étape `pool` lancée, têtes de série 1 à 4
+/// et un match terminé.
+fn import_plan(
+    game_id: Uuid,
+    name: &str,
+    description: &str,
+    users: &[Uuid],
+    steps: usize,
+) -> ImportPlan {
+    let step = || StepPlan {
+        definition: step_definition(1, 1, 4, 2),
+        status: StepStatus::Ongoing,
+        groups: vec![
+            users
+                .iter()
+                .zip(1..)
+                .map(|(user, seed)| MemberPlan {
+                    who: Entrant::User(*user),
+                    seed: Some(seed),
+                    points: 0.0,
+                    final_rank: None,
+                    status: StepParticipantStatus::In,
+                })
+                .collect(),
+        ],
+        matches: vec![MatchPlan {
+            schedule: None,
+            group: Some(1),
+            round: Some(1),
+            number: None,
+            bracket: None,
+            best_of: 1,
+            next: None,
+            next_slot: None,
+            loser_next: None,
+            loser_next_slot: None,
+            scheduled_at: None,
+            started_at: None,
+            ended_at: None,
+            status: MatchStatus::Finished,
+            participants: users
+                .iter()
+                .zip(1..)
+                .map(|(user, rank)| EntryPlan {
+                    who: Entrant::User(*user),
+                    stats: serde_json::json!({}),
+                    points: f64::from(5 - rank),
+                    rank: Some(rank),
+                    result: Some(if rank == 1 {
+                        MatchResult::Win
+                    } else {
+                        MatchResult::Loss
+                    }),
+                    slot: None,
+                    games_won: None,
+                })
+                .collect(),
+            games: Vec::new(),
+        }],
+    };
+    ImportPlan {
+        tournaments: vec![TournamentPlan {
+            import: TournamentImport {
+                input: TournamentInput {
+                    name: name.to_string(),
+                    description: Some(description.to_string()),
+                    max_participants: 4,
+                    ..tournament_input(game_id)
+                },
+                status: TournamentStatus::Draft,
+                rules: Vec::new(),
+            },
+            teams: Vec::new(),
+            participants: users
+                .iter()
+                .map(|user| ParticipantPlan {
+                    user_id: Some(*user),
+                    team: None,
+                    status: ParticipantStatus::Registered,
+                    registered_at: None,
+                    responses: no_responses(),
+                })
+                .collect(),
+            steps: (0..steps).map(|_| step()).collect(),
+            expected: None,
+        }],
+    }
+}
+
+#[tokio::test]
+#[ignore = "nécessite PostgreSQL migré (DATABASE_URL)"]
+async fn apply_import_is_one_transaction_with_seeds_and_lock() {
+    let store = store().await;
+    let game_id = game(&store).await;
+    {
+        let mut users = Vec::new();
+        for prefix in ["a", "b", "c", "d"] {
+            users.push(user(&store, prefix).await);
+        }
+        let name = unique("Import");
+
+        let saved = store
+            .apply_import(import_plan(game_id, &name, "première", &users, 1))
+            .await
+            .unwrap();
+        let (tournament, created) = &saved[0];
+        assert!(*created);
+        let steps = store.list_steps(tournament.id).await.unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status, StepStatus::Ongoing);
+        let mut seeds: Vec<Option<i32>> = store
+            .list_step_participants(steps[0].id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| p.seed)
+            .collect();
+        seeds.sort();
+        assert_eq!(seeds, [Some(1), Some(2), Some(3), Some(4)]);
+        let matches = store.list_matches(steps[0].id, None, None).await.unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            store
+                .list_step_match_participants(steps[0].id)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+
+        // L'état vu par l'aperçu est revérifié sous verrou : un plan qui croit le tournoi absent,
+        // ou qui en attend un autre état, est refusé sans rien écrire.
+        let stale = store
+            .apply_import(import_plan(game_id, &name, "périmé", &users, 1))
+            .await;
+        assert!(matches!(stale, Err(StoreError::ImportStale)), "{stale:?}");
+        let mut stale = import_plan(game_id, &name, "périmé", &users, 1);
+        stale.tournaments[0].expected = Some("autre état".into());
+        let stale = store.apply_import(stale).await;
+        assert!(matches!(stale, Err(StoreError::ImportStale)), "{stale:?}");
+        let digest = store.tournament_digest(tournament.id).await.unwrap();
+        let existing = |description: &str, steps: usize| {
+            let mut plan = import_plan(game_id, &name, description, &users, steps);
+            plan.tournaments[0].expected = Some(digest.clone());
+            plan
+        };
+
+        // Deux étapes à la même position : l'écriture échoue en cours de route et rien ne change,
+        // ni le tournoi mis à jour (description), ni ses étapes ou ses inscrits.
+        let mut failed = existing("écrasée ?", 2);
+        failed.tournaments[0].import.input.name = name.to_uppercase();
+        let failed = store.apply_import(failed).await;
+        assert!(
+            matches!(failed, Err(StoreError::StepPositionTaken)),
+            "{failed:?}"
+        );
+        let unchanged = store.find_tournament(tournament.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.description.as_deref(), Some("première"));
+        assert_eq!(store.list_steps(tournament.id).await.unwrap(), steps);
+        assert_eq!(
+            store
+                .list_participants(tournament.id, i64::MAX, 0)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+
+        // Une tête de série en double est refusée par la base, avec le même retour en arrière.
+        let mut duplicated = existing("doublon", 1);
+        duplicated.tournaments[0].steps[0].groups[0][1].seed = Some(1);
+        assert!(store.apply_import(duplicated).await.is_err());
+        let unchanged = store.find_tournament(tournament.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.description.as_deref(), Some("première"));
+
+        // Remplacer un tournoi existant : mêmes étapes, nouvelles lignes, une seule étape.
+        assert_eq!(
+            store.tournament_digest(tournament.id).await.unwrap(),
+            digest
+        );
+        let replaced = store.apply_import(existing("seconde", 1)).await.unwrap();
+        assert!(!replaced[0].1);
+        assert_eq!(store.list_steps(tournament.id).await.unwrap().len(), 1);
+
+        // Un tournoi en cours est verrouillé.
+        sqlx::query("UPDATE tournaments SET status = 'ongoing' WHERE id = $1")
+            .bind(tournament.id)
+            .execute(
+                &sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let locked = store
+            .apply_import(import_plan(game_id, &name, "interdit", &users, 1))
+            .await;
+        assert!(
+            matches!(locked, Err(StoreError::TournamentLocked)),
+            "{locked:?}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL"]
+async fn import_rechecks_after_a_concurrent_scoring_update() {
+    let store = Arc::new(store().await);
+    let game_id = game(&store).await;
+    let name = unique("ConcurrentImport");
+    let saved = store
+        .apply_import(import_plan(game_id, &name, "original", &[], 0))
+        .await
+        .unwrap();
+    let id = saved[0].0.id;
+    let stat = store
+        .create_stat(StatInput {
+            name: "Kills".into(),
+            key: unique("kills").replace('-', "_"),
+            kind: StatType::Flat,
+            scope: StatScope::Participant,
+        })
+        .await
+        .unwrap();
+    store.link_stat(game_id, stat.id).await.unwrap();
+    let rule = store
+        .create_scoring_rule(ScoringRuleInput {
+            tournament_id: id,
+            stat_id: stat.id,
+            definition: ScoringRuleDefinition {
+                mode: ScoringMode::Linear,
+                coefficient: Some(1.0),
+                points_table: None,
+            },
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let mut plan = import_plan(game_id, &name, "replacement", &[], 0);
+    plan.tournaments[0].expected = Some(store.tournament_digest(id).await.unwrap());
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let mut writer = pool.begin().await.unwrap();
+    sqlx::query("UPDATE scoring_rule SET coefficient = 9 WHERE id = $1")
+        .bind(rule.id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let importer = store.clone();
+    let task = tokio::spawn(async move { importer.apply_import(plan).await });
+    // The old implementation reads the old digest, then waits on DELETE and loses this update.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    writer.commit().await.unwrap();
+    assert!(matches!(task.await.unwrap(), Err(StoreError::ImportStale)));
+    assert_eq!(
+        store
+            .find_scoring_rule(rule.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .coefficient,
+        Some(9.0)
+    );
+    assert_eq!(
+        store
+            .find_tournament(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .description
+            .as_deref(),
+        Some("original")
     );
 }

@@ -23,18 +23,22 @@
 //! JSON de `match_participant.stats`. Les matchs voyagent avec leur étape : le niveau des
 //! tournois, lui, refuse un tableau `matches` non vide ([`InSteps`]).
 //!
-//! Importer remplace tous les matchs de l'étape. Les points absents du fichier sont calculés
-//! d'après le barème du tournoi, déjà écrit ; ceux du fichier sont conservés tels quels, si bien
-//! qu'un fichier exporté se réimporte sans perte (hors horodatages de création).
+//! Importer remplace tous les matchs de l'étape. Les résultats sont traités comme par l'API
+//! ([`plan_matches`]) : les points d'un participant qui a des statistiques sont recalculés
+//! d'après le barème du tournoi (ceux du fichier ne servent que faute de statistiques), ceux
+//! d'une série sont cumulés depuis ses parties terminées, et un fichier exporté se réimporte
+//! sans perte (hors horodatages de création).
 
 use crate::match_games::{aggregate, is_decided};
 use crate::matches::{
     BEST_OF, ROUND_MAX, StatSchema, capacity_of, playable_problem, players_of, points_of, settle,
+    step_scoring_points,
 };
 use crate::step_io::{Designation, StepMatches, StepScope, Who, designate};
 use crate::store::{
-    AuthStore, Bracket, GameImport, MatchGame, MatchGameParticipant, MatchImport, MatchParticipant,
-    MatchResult, MatchScore, MatchStatus, StepFormat, StepStatus, StoreError,
+    AuthStore, Bracket, Entrant, EntryPlan, GamePlan, MatchGame, MatchGameParticipant,
+    MatchParticipant, MatchPlan, MatchResult, MatchScore, MatchStatus, ScoringRule,
+    ScoringRuleImport, Stat, StepFormat, StepRules, StepScoring, StepStatus, StoreError,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournament_io::TournamentChild;
@@ -205,6 +209,8 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
         StepFormat::SingleElim | StepFormat::DoubleElim
     );
     let mut out = Vec::new();
+    // Vainqueur de chaque match terminé, pour contrôler la progression en élimination.
+    let mut winners: Vec<Option<Option<Who>>> = vec![None; matches.len()];
     for (index, item) in matches.iter().enumerate() {
         let mut reasons = Vec::new();
         let label = index + 1;
@@ -335,7 +341,9 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
         // Identifiant provisoire de chaque participant, commun au match et à ses parties.
         let mut placeholders: HashMap<Who, Uuid> = HashMap::new();
         let mut members = Vec::with_capacity(count);
+        let mut whos: Vec<Option<Who>> = Vec::with_capacity(count);
         for participant in &item.participants {
+            whos.push(participant.who().ok());
             let mut placeholder = Uuid::new_v4();
             match participant.who() {
                 Err(problem) => reasons.push(format!("participants : {problem}.")),
@@ -391,6 +399,26 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
         } else {
             None
         };
+        // Sans rang ni résultat, le vainqueur se déduit des points. Ceux d'un participant qui a
+        // des statistiques sont recalculés d'après le barème : le vainqueur n'est alors contrôlé
+        // qu'à la planification, sur les points recalculés.
+        if let Some(scores) = &settled
+            && (members.iter().all(|m| m.rank.is_some())
+                || members.iter().any(|m| m.result.is_some())
+                || item.participants.iter().all(|p| {
+                    p.points.is_some() && p.stats().as_object().is_none_or(|o| o.is_empty())
+                }))
+        {
+            let mut won = scores
+                .iter()
+                .zip(&whos)
+                .filter(|(score, _)| score.result == Some(MatchResult::Win))
+                .map(|(_, who)| who.clone());
+            winners[index] = Some(match (won.next(), won.next()) {
+                (Some(who), None) => who,
+                _ => None,
+            });
+        }
         let (game_reasons, games) = game_problems(item, status, &placeholders, scope, schema);
         let games_valid = game_reasons.is_empty();
         reasons.extend(game_reasons);
@@ -407,7 +435,72 @@ fn problems(matches: &[MatchItem], scope: &StepScope, schema: &StatSchema) -> Ve
             out.push(format!("match {label} : {}", reasons.join(" ")));
         }
     }
+    if eliminating {
+        out.extend(progression_problems(matches, scope, &winners));
+    }
     out.truncate(MAX_REPORTED_ERRORS);
+    out
+}
+
+/// Ordre et cohérence de la progression des vainqueurs : un match ne se joue qu'une fois ses
+/// matchs précédents terminés, et le vainqueur d'un match terminé est dans le match suivant.
+fn progression_problems(
+    matches: &[MatchItem],
+    scope: &StepScope,
+    winners: &[Option<Option<Who>>],
+) -> Vec<String> {
+    let status = |item: &MatchItem| item.status.unwrap_or(MatchStatus::Scheduled);
+    let capacity = capacity_of(scope.match_type, scope.group_size);
+    let mut out = Vec::new();
+    for (index, item) in matches.iter().enumerate() {
+        let Some(next) = item.next.filter(|next| *next < matches.len()) else {
+            continue;
+        };
+        let (current, following) = (status(item), &matches[next]);
+        if matches!(
+            status(following),
+            MatchStatus::Ongoing | MatchStatus::Finished
+        ) && !matches!(current, MatchStatus::Finished | MatchStatus::Cancelled)
+        {
+            out.push(format!(
+                "match {} : il avance avant la fin du match {}, qui le précède.",
+                next + 1,
+                index + 1
+            ));
+        }
+        if current != MatchStatus::Finished {
+            continue;
+        }
+        let Some(Some(winner)) = &winners[index] else {
+            if winners[index].is_some() {
+                out.push(format!(
+                    "match {} : un match d'élimination a un seul vainqueur (`win`).",
+                    index + 1
+                ));
+            }
+            continue;
+        };
+        let waiting: Vec<Who> = following
+            .participants
+            .iter()
+            .filter_map(|p| p.who().ok())
+            .collect();
+        if !waiting.contains(winner) {
+            if status(following) != MatchStatus::Scheduled {
+                out.push(format!(
+                    "match {} : le vainqueur du match {} doit y figurer.",
+                    next + 1,
+                    index + 1
+                ));
+            } else if waiting.len() >= capacity {
+                out.push(format!(
+                    "match {} : plus de place pour le vainqueur du match {}.",
+                    next + 1,
+                    index + 1
+                ));
+            }
+        }
+    }
     out
 }
 
@@ -893,6 +986,39 @@ impl StepMatches for StoreMatches {
         Ok((!found.is_empty()).then(|| found.join(" ")))
     }
 
+    async fn plan(
+        &self,
+        game_id: Uuid,
+        scope: &StepScope,
+        step_rules: &StepRules,
+        entrants: &HashMap<Who, Entrant>,
+        rules: &[ScoringRuleImport],
+        items: &[Value],
+    ) -> Result<Option<MatchesPlan>, StoreError> {
+        let matches = parse(items).map_err(StoreError::Other)?;
+        let stats = self.0.list_game_stats(game_id).await?.unwrap_or_default();
+        let rules: Vec<ScoringRule> = rules
+            .iter()
+            .map(|rule| ScoringRule {
+                id: Uuid::nil(),
+                tournament_id: Uuid::nil(),
+                stat_id: rule.stat_id,
+                mode: rule.definition.mode,
+                coefficient: rule.definition.coefficient,
+                points_table: rule.definition.points_table.clone(),
+            })
+            .collect();
+        plan_matches(
+            &matches,
+            scope,
+            step_rules.scoring.as_ref(),
+            entrants,
+            &rules,
+            &stats,
+        )
+        .map(Some)
+    }
+
     async fn import(
         &self,
         step_id: Uuid,
@@ -900,7 +1026,6 @@ impl StepMatches for StoreMatches {
         participants: &HashMap<Who, Uuid>,
         items: Vec<Value>,
     ) -> Result<(), StoreError> {
-        let matches = parse(&items).map_err(StoreError::Other)?;
         let store = &self.0;
         let step = store
             .find_step(step_id)
@@ -912,137 +1037,43 @@ impl StepMatches for StoreMatches {
             .into_iter()
             .map(|g| (g.index, g.id))
             .collect();
+        // Les inscrits déjà écrits sont désignés par leur identifiant : le plan les nomme par
+        // `Entrant`, et on rend l'écriture au store avec les identifiants d'inscrits.
+        let entrants: HashMap<Who, Entrant> = participants
+            .iter()
+            .map(|(who, id)| (who.clone(), Entrant::User(*id)))
+            .collect();
+        let scope = StepScope {
+            status: step.status,
+            format: step.format,
+            match_type: step.match_type,
+            group_size: step.group_size,
+            groups: HashMap::new(),
+            team_players: HashMap::new(),
+        };
         let stats = store.list_game_stats(game_id).await?.unwrap_or_default();
         let rules = store.list_scoring_rules(step.tournament_id).await?;
-        let schema = StatSchema::new(&stats);
-
-        let mut imports = Vec::with_capacity(matches.len());
-        for item in matches {
-            let status = item.status.unwrap_or(MatchStatus::Scheduled);
-            let mut scores = Vec::with_capacity(item.participants.len());
-            for participant in &item.participants {
-                let who = participant.who().map_err(other)?;
-                let participant_id = participants
-                    .get(&who)
-                    .copied()
-                    .ok_or_else(|| other(format!("inscrit {who} introuvable")))?;
-                let value = participant.stats();
-                let points = match participant.points {
-                    Some(points) => points,
-                    None => points_of(&schema.parse(&value).map_err(other)?, &rules, &stats),
-                };
-                scores.push(MatchScore {
-                    participant_id,
-                    stats: value,
-                    points,
-                    rank: participant.rank,
-                    result: participant.result,
-                    games_won: participant.games_won,
-                    slot: participant.slot,
-                });
-            }
-            if status == MatchStatus::Finished {
-                // Les rangs et résultats absents d'un match terminé se déduisent des points.
-                let members: Vec<MatchParticipant> = scores
-                    .iter()
-                    .map(|s| MatchParticipant {
-                        match_id: Uuid::nil(),
-                        participant_id: s.participant_id,
-                        stats: s.stats.clone(),
-                        points: s.points,
-                        rank: s.rank,
-                        result: s.result,
-                        slot: s.slot,
-                        games_won: s.games_won,
-                    })
-                    .collect();
-                scores = settle(&members).map_err(other)?;
-            }
-            let normalized = |value: &Option<String>| {
-                value
-                    .as_deref()
-                    .map(|v| normalize_timestamp(v).unwrap_or_else(|| v.to_string()))
-            };
-            let mut games = Vec::with_capacity(item.games.len());
-            for game in &item.games {
-                let mut game_scores = Vec::with_capacity(game.participants.len());
-                for participant in &game.participants {
-                    let who = participant.who().map_err(other)?;
-                    let participant_id = participants
-                        .get(&who)
-                        .copied()
-                        .ok_or_else(|| other(format!("inscrit {who} introuvable")))?;
-                    let value = participant.stats();
-                    let points = match participant.points {
-                        Some(points) => points,
-                        None => points_of(&schema.parse(&value).map_err(other)?, &rules, &stats),
-                    };
-                    game_scores.push(MatchScore {
-                        participant_id,
-                        stats: value,
-                        points,
-                        rank: participant.rank,
-                        result: participant.result,
-                        games_won: None,
-                        slot: None,
-                    });
-                }
-                let game_status = game.status.unwrap_or(MatchStatus::Ongoing);
-                if game_status == MatchStatus::Finished {
-                    let members: Vec<MatchParticipant> = game_scores
-                        .iter()
-                        .map(|s| MatchParticipant {
-                            match_id: Uuid::nil(),
-                            participant_id: s.participant_id,
-                            stats: s.stats.clone(),
-                            points: s.points,
-                            rank: s.rank,
-                            result: s.result,
-                            games_won: None,
-                            slot: None,
-                        })
-                        .collect();
-                    game_scores = settle(&members).map_err(other)?;
-                }
-                let attributes = match &game.attributes {
-                    Some(attributes) => {
-                        resolve_attributes(attributes, &|who| participants.get(who).copied())
-                            .map_err(other)?
-                    }
-                    None => serde_json::json!({}),
-                };
-                let normalized = |value: &Option<String>| {
-                    value
-                        .as_deref()
-                        .map(|v| normalize_timestamp(v).unwrap_or_else(|| v.to_string()))
-                };
-                games.push(GameImport {
-                    status: game_status,
-                    attributes,
-                    started_at: normalized(&game.started_at),
-                    ended_at: normalized(&game.ended_at),
-                    participants: game_scores,
-                });
-            }
-            imports.push(MatchImport {
-                schedule: item.schedule.clone(),
-                group_id: item.group.and_then(|index| groups.get(&index).copied()),
-                round: item.round,
-                bracket: item.bracket,
-                next: item.next,
-                next_slot: item.next_slot,
-                loser_next: item.loser_next,
-                loser_next_slot: item.loser_next_slot,
-                number: item.number,
-                best_of: item.best_of.unwrap_or(1),
-                games,
-                scheduled_at: normalized(&item.scheduled_at),
-                started_at: normalized(&item.started_at),
-                ended_at: normalized(&item.ended_at),
-                status,
-                participants: scores,
-            });
-        }
+        let parsed = parse(&items).map_err(StoreError::Other)?;
+        let planned = plan_matches(
+            &parsed,
+            &scope,
+            step.rules.scoring.as_ref(),
+            &entrants,
+            &rules,
+            &stats,
+        )?;
+        let resolve = |who: &Entrant| match who {
+            Entrant::User(participant_id) => Ok(*participant_id),
+            Entrant::Team(_) => Err(other("équipe non résolue")),
+        };
+        let imports = planned
+            .matches
+            .into_iter()
+            .map(|planned| {
+                let group_id = planned.group.and_then(|index| groups.get(&index).copied());
+                planned.into_import(group_id, &resolve)
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
         if store
             .replace_step_matches(step_id, game_id, imports)
             .await?
@@ -1052,6 +1083,289 @@ impl StepMatches for StoreMatches {
             Err(other(format!("étape {step_id} introuvable")))
         }
     }
+}
+
+/// Matchs d'une étape prêts à écrire, avec les écarts entre le fichier et ce qui est recalculé.
+#[derive(Debug, Clone, Default)]
+pub struct MatchesPlan {
+    pub matches: Vec<MatchPlan>,
+    pub warnings: Vec<String>,
+}
+
+/// Matchs d'une étape, calculés comme le fait l'API quand un match se termine : points d'après les
+/// statistiques et le barème (ceux du fichier ne servent que faute de statistiques), points d'une
+/// série cumulés depuis ses parties terminées, rangs et résultats déduits, vainqueur placé dans le
+/// match suivant d'une élimination. Rien n'est écrit deux fois : le plan se recalcule en entier
+/// depuis le fichier.
+pub(crate) fn plan_matches(
+    matches: &[MatchItem],
+    scope: &StepScope,
+    step_scoring: Option<&StepScoring>,
+    entrants: &HashMap<Who, Entrant>,
+    rules: &[ScoringRule],
+    stats: &[Stat],
+) -> Result<MatchesPlan, StoreError> {
+    let schema = StatSchema::new(stats);
+    let mut warnings = Vec::new();
+    let mut planned: Vec<MatchPlan> = Vec::with_capacity(matches.len());
+    let mut winners: Vec<Option<Entrant>> = vec![None; matches.len()];
+    for (index, item) in matches.iter().enumerate() {
+        let status = item.status.unwrap_or(MatchStatus::Scheduled);
+        let label = index + 1;
+        // Points d'un participant : recalculés d'après le barème s'il a des statistiques ; le
+        // second terme signale un écart avec les points du fichier.
+        let score = |participant: &MatchParticipantItem| -> Result<(f64, bool), StoreError> {
+            let value = participant.stats();
+            if value.as_object().is_none_or(|o| o.is_empty()) {
+                return Ok((participant.points.unwrap_or(0.0), false));
+            }
+            let computed = points_of(&schema.parse(&value).map_err(other)?, rules, stats);
+            let differs = participant
+                .points
+                .is_some_and(|given| (given - computed).abs() > 1e-9);
+            Ok((computed, differs))
+        };
+        let resolve = |participant: &MatchParticipantItem| -> Result<(Who, Entrant), StoreError> {
+            let who = participant.who().map_err(other)?;
+            let entrant = entrants
+                .get(&who)
+                .copied()
+                .ok_or_else(|| other(format!("inscrit {who} introuvable")))?;
+            Ok((who, entrant))
+        };
+
+        let mut games = Vec::with_capacity(item.games.len());
+        for (number, game) in item.games.iter().enumerate() {
+            let game_status = game.status.unwrap_or(MatchStatus::Ongoing);
+            let what = format!(", partie {}", number + 1);
+            let mut entries = Vec::with_capacity(game.participants.len());
+            for participant in &game.participants {
+                let (who, entrant) = resolve(participant)?;
+                let (points, differs) = score(participant)?;
+                if differs {
+                    warnings.push(format!(
+                        "match {label}{what} : les points de {who} sont recalculés d'après le barème ({points})."
+                    ));
+                }
+                entries.push(EntryPlan {
+                    who: entrant,
+                    stats: participant.stats(),
+                    points,
+                    rank: participant.rank,
+                    result: participant.result,
+                    slot: None,
+                    games_won: None,
+                });
+            }
+            if game_status == MatchStatus::Finished {
+                settle_entries(&mut entries)
+                    .map_err(|p| StoreError::InvalidPlan(format!("match {label}{what} : {p}")))?;
+            }
+            // Un participant désigné dans les attributs (MVP) n'a d'identifiant qu'à l'écriture.
+            let mut attributes = serde_json::Map::new();
+            let mut participant_attributes = Vec::new();
+            if let Some(object) = game.attributes.as_ref().and_then(Value::as_object) {
+                for (key, value) in object {
+                    if let Value::Object(marker) = value {
+                        let who = designate(
+                            marker.get("user").and_then(Value::as_str),
+                            marker
+                                .get("team")
+                                .and_then(Value::as_u64)
+                                .and_then(|t| usize::try_from(t).ok()),
+                        )
+                        .map_err(other)?;
+                        let entrant = entrants
+                            .get(&who)
+                            .copied()
+                            .ok_or_else(|| other(format!("inscrit {who} introuvable")))?;
+                        participant_attributes.push((key.clone(), entrant));
+                    } else {
+                        attributes.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            games.push(GamePlan {
+                status: game_status,
+                attributes: Value::Object(attributes),
+                participant_attributes,
+                started_at: normalize(&game.started_at),
+                ended_at: normalize(&game.ended_at),
+                participants: entries,
+            });
+        }
+        // Comme par l'API, une série n'est reportée sur le match qu'à la fin de celui-ci.
+        let finished_games: Vec<&GamePlan> = games
+            .iter()
+            .filter(|g| status == MatchStatus::Finished && g.status == MatchStatus::Finished)
+            .collect();
+
+        let mut entries = Vec::with_capacity(item.participants.len());
+        for participant in &item.participants {
+            let (who, entrant) = resolve(participant)?;
+            let (mut points, differs) = score(participant)?;
+            if differs && finished_games.is_empty() {
+                warnings.push(format!(
+                    "match {label} : les points de {who} sont recalculés d'après le barème ({points})."
+                ));
+            }
+            let mut games_won = participant.games_won;
+            if !finished_games.is_empty() {
+                // Comme à la fin d'une série par l'API : points cumulés et parties gagnées.
+                let played = finished_games
+                    .iter()
+                    .flat_map(|g| &g.participants)
+                    .filter(|e| e.who == entrant);
+                let total: f64 = played.clone().map(|e| e.points).sum();
+                if (points - total).abs() > 1e-9 && participant.points.is_some() {
+                    warnings.push(format!(
+                        "match {label} : les points de {who} sont cumulés depuis ses parties ({total})."
+                    ));
+                }
+                points = total;
+                let won = played
+                    .filter(|e| e.result == Some(MatchResult::Win))
+                    .count();
+                games_won = games_won.or(i32::try_from(won).ok());
+            }
+            entries.push(EntryPlan {
+                who: entrant,
+                stats: participant.stats(),
+                points,
+                rank: participant.rank,
+                result: participant.result,
+                slot: participant.slot,
+                games_won,
+            });
+        }
+        if status == MatchStatus::Finished {
+            // Une série se classe d'après les parties gagnées quand le fichier ne donne pas de
+            // rang.
+            let series = !finished_games.is_empty()
+                || (item.best_of.unwrap_or(1) > 1 && entries.iter().all(|e| e.games_won.is_some()));
+            if series && entries.iter().all(|e| e.rank.is_none()) {
+                let ranks = crate::ranking::rank(
+                    entries
+                        .iter()
+                        .enumerate()
+                        .map(|(position, e)| (position, f64::from(e.games_won.unwrap_or(0))))
+                        .collect(),
+                );
+                for (rank, position, _) in ranks {
+                    entries[position].rank = Some(i32::try_from(rank).unwrap_or(i32::MAX));
+                }
+            }
+            // Les rangs et résultats absents d'un match terminé se déduisent des points.
+            settle_entries(&mut entries)
+                .map_err(|p| StoreError::InvalidPlan(format!("match {label} : {p}")))?;
+            // Le barème de l'étape remplace les points issus des statistiques.
+            if let Some(scoring) = step_scoring {
+                for entry in &mut entries {
+                    if let Some(points) =
+                        step_scoring_points(scoring, scope.match_type, entry.result, entry.rank)
+                    {
+                        entry.points = points;
+                    }
+                }
+            }
+            let won: Vec<Entrant> = entries
+                .iter()
+                .filter(|e| e.result == Some(MatchResult::Win))
+                .map(|e| e.who)
+                .collect();
+            match won[..] {
+                [winner] => winners[index] = Some(winner),
+                _ if item.next.is_some() && scope.format != StepFormat::Pool => {
+                    return Err(StoreError::InvalidPlan(format!(
+                        "match {label} : un match d'élimination a un seul vainqueur (`win`)."
+                    )));
+                }
+                _ => {}
+            }
+        }
+        planned.push(MatchPlan {
+            schedule: item.schedule.clone(),
+            group: item.group,
+            round: item.round,
+            number: item.number,
+            bracket: item.bracket,
+            best_of: item.best_of.unwrap_or(1),
+            next: item.next,
+            next_slot: item.next_slot,
+            loser_next: item.loser_next,
+            loser_next_slot: item.loser_next_slot,
+            scheduled_at: normalize(&item.scheduled_at),
+            started_at: normalize(&item.started_at),
+            ended_at: normalize(&item.ended_at),
+            status,
+            participants: entries,
+            games,
+        });
+    }
+    // Progression : le vainqueur d'un match terminé est placé dans le match suivant, une seule fois.
+    let capacity = capacity_of(scope.match_type, scope.group_size);
+    for index in 0..planned.len() {
+        let (Some(winner), Some(next)) = (winners[index], planned[index].next) else {
+            continue;
+        };
+        let slot = planned[index].next_slot;
+        let Some(following) = planned.get_mut(next) else {
+            continue;
+        };
+        if following.participants.iter().any(|e| e.who == winner) {
+            continue;
+        }
+        if following.status != MatchStatus::Scheduled || following.participants.len() >= capacity {
+            return Err(StoreError::InvalidPlan(format!(
+                "match {} : le vainqueur du match {} ne peut pas y avancer.",
+                next + 1,
+                index + 1
+            )));
+        }
+        following.participants.push(EntryPlan {
+            who: winner,
+            stats: serde_json::json!({}),
+            points: 0.0,
+            rank: None,
+            result: None,
+            slot,
+            games_won: None,
+        });
+    }
+    Ok(MatchesPlan {
+        matches: planned,
+        warnings,
+    })
+}
+
+/// Rangs et résultats d'un match ou d'une partie terminés (voir [`settle`]), dans l'ordre des
+/// participants.
+fn settle_entries(entries: &mut [EntryPlan]) -> Result<(), String> {
+    let members: Vec<MatchParticipant> = entries
+        .iter()
+        .enumerate()
+        .map(|(position, e)| MatchParticipant {
+            match_id: Uuid::nil(),
+            participant_id: Uuid::from_u128(position as u128 + 1),
+            stats: e.stats.clone(),
+            points: e.points,
+            rank: e.rank,
+            result: e.result,
+            slot: e.slot,
+            games_won: e.games_won,
+        })
+        .collect();
+    for (entry, score) in entries.iter_mut().zip(settle(&members)?) {
+        entry.rank = score.rank;
+        entry.result = score.result;
+    }
+    Ok(())
+}
+
+fn normalize(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(|v| normalize_timestamp(v).unwrap_or_else(|| v.to_string()))
 }
 
 #[cfg(test)]
@@ -1390,5 +1704,194 @@ mod tests {
             .map(|next| item(json!({ "next": next })))
             .collect();
         assert!(!loops(&chain, 0));
+    }
+
+    fn stats() -> Vec<Stat> {
+        vec![Stat {
+            id: Uuid::from_u128(7),
+            name: "Kills".into(),
+            key: "kills".into(),
+            kind: StatType::Flat,
+            scope: StatScope::Participant,
+            options: Vec::new(),
+        }]
+    }
+
+    fn rules() -> Vec<ScoringRule> {
+        vec![ScoringRule {
+            id: Uuid::nil(),
+            tournament_id: Uuid::nil(),
+            stat_id: Uuid::from_u128(7),
+            mode: crate::store::ScoringMode::Linear,
+            coefficient: Some(1.5),
+            points_table: None,
+        }]
+    }
+
+    fn entrants() -> HashMap<Who, Entrant> {
+        ["ann", "bob", "cat", "dan"]
+            .iter()
+            .zip(1u128..)
+            .map(|(name, id)| {
+                (
+                    Who::User((*name).to_string()),
+                    Entrant::User(Uuid::from_u128(id)),
+                )
+            })
+            .collect()
+    }
+
+    fn planned(scope: &StepScope, items: Vec<Value>) -> Result<MatchesPlan, StoreError> {
+        let items: Vec<MatchItem> = items.into_iter().map(item).collect();
+        plan_matches(&items, scope, None, &entrants(), &rules(), &stats())
+    }
+
+    #[test]
+    fn finished_matches_are_scored_from_the_scoring_rules() {
+        let duel = scope(MatchType::Duel, StepFormat::Pool);
+        let plan = planned(
+            &duel,
+            vec![json!({ "group": 1, "status": "finished", "participants": [
+                { "user": "ann", "stats": { "kills": 3 }, "points": 99 },
+                { "user": "bob", "stats": { "kills": 1 } },
+            ] })],
+        )
+        .unwrap();
+        let entries = &plan.matches[0].participants;
+        assert_eq!((entries[0].points, entries[1].points), (4.5, 1.5));
+        assert_eq!(
+            (entries[0].rank, entries[0].result),
+            (Some(1), Some(MatchResult::Win))
+        );
+        assert_eq!(entries[1].result, Some(MatchResult::Loss));
+        assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+        // Sans statistiques, les points du fichier servent de repli.
+        let plan = planned(
+            &duel,
+            vec![json!({ "group": 1, "status": "finished", "participants": [
+                { "user": "ann", "rank": 1, "points": 7.0 }, { "user": "bob", "rank": 2 },
+            ] })],
+        )
+        .unwrap();
+        assert_eq!(plan.matches[0].participants[0].points, 7.0);
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn progression_uses_the_points_recomputed_from_the_scoring() {
+        // Les points du fichier (0 partout) disent égalité ; le barème donne 3 contre 0.
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        let items = vec![
+            json!({ "group": 1, "round": 1, "status": "finished", "next": 1, "participants": [
+                { "user": "ann", "stats": { "kills": 2 }, "points": 0 },
+                { "user": "bob", "stats": { "kills": 0 }, "points": 0 },
+            ] }),
+            json!({ "group": 1, "round": 2 }),
+        ];
+        assert_eq!(problems_of(&single, items.clone()), "");
+        let plan = planned(&single, items).unwrap();
+        assert_eq!(
+            plan.matches[1].participants[0].who,
+            Entrant::User(Uuid::from_u128(1))
+        );
+    }
+
+    #[test]
+    fn winners_advance_once_in_an_elimination() {
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        let semi = |a: &str, b: &str| {
+            json!({ "group": 1, "round": 1, "status": "finished", "next": 2, "participants": [
+                { "user": a, "stats": { "kills": 3 }, "points": 4.5 },
+                { "user": b, "stats": { "kills": 1 }, "points": 1.5 },
+            ] })
+        };
+        let items = vec![
+            semi("ann", "bob"),
+            semi("cat", "dan"),
+            // La finale attend déjà `ann` : elle n'est pas dupliquée.
+            json!({ "group": 1, "round": 2, "participants": [{ "user": "ann" }] }),
+        ];
+        let plan = planned(&single, items.clone()).unwrap();
+        let finalists: Vec<Entrant> = plan.matches[2].participants.iter().map(|e| e.who).collect();
+        assert_eq!(
+            finalists,
+            [
+                Entrant::User(Uuid::from_u128(1)),
+                Entrant::User(Uuid::from_u128(3))
+            ]
+        );
+        assert_eq!(plan.matches[2].participants[1].points, 0.0);
+    }
+
+    #[test]
+    fn progression_order_and_consistency_are_checked() {
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        // Les rangs du fichier désignent le vainqueur dès la validation (des points accompagnés de
+        // statistiques sont recalculés : ils ne sont contrôlés qu'à la planification).
+        let semi = |status: &str| {
+            json!({ "group": 1, "status": status, "next": 1, "participants": [
+                { "user": "ann", "stats": { "kills": 3 }, "rank": 1 },
+                { "user": "bob", "stats": { "kills": 1 }, "rank": 2 },
+            ] })
+        };
+        // La finale se joue avant la fin de la demi-finale.
+        let found = problems_of(
+            &single,
+            vec![
+                semi("ongoing"),
+                json!({ "group": 1, "status": "ongoing", "participants": [
+                { "user": "ann" }, { "user": "cat" },
+            ] }),
+            ],
+        );
+        assert!(found.contains("avance avant la fin"), "{found}");
+        // La finale est lancée sans le vainqueur de la demi-finale.
+        let found = problems_of(
+            &single,
+            vec![
+                semi("finished"),
+                json!({ "group": 1, "status": "ongoing", "participants": [
+                { "user": "bob" }, { "user": "cat" },
+            ] }),
+            ],
+        );
+        assert!(found.contains("doit y figurer"), "{found}");
+        // Plus de place pour le vainqueur.
+        let found = problems_of(
+            &single,
+            vec![
+                semi("finished"),
+                json!({ "group": 1, "participants": [
+                { "user": "cat" }, { "user": "dan" },
+            ] }),
+            ],
+        );
+        assert!(found.contains("plus de place"), "{found}");
+        // Un match d'élimination terminé à égalité n'a pas de vainqueur.
+        let tie = json!({ "group": 1, "status": "finished", "next": 1, "participants": [
+            { "user": "ann", "stats": { "kills": 2 }, "rank": 1 },
+            { "user": "bob", "stats": { "kills": 2 }, "rank": 1 },
+        ] });
+        let found = problems_of(&single, vec![tie, json!({ "group": 1 })]);
+        assert!(found.contains("un seul vainqueur"), "{found}");
+    }
+
+    #[test]
+    fn a_tie_in_an_elimination_is_an_invalid_plan_even_without_given_points() {
+        let single = scope(MatchType::Duel, StepFormat::SingleElim);
+        let result = planned(
+            &single,
+            vec![
+                json!({ "group": 1, "status": "finished", "next": 1, "participants": [
+                    { "user": "ann", "stats": { "kills": 2 } },
+                    { "user": "bob", "stats": { "kills": 2 } },
+                ] }),
+                json!({ "group": 1 }),
+            ],
+        );
+        assert!(
+            matches!(result, Err(StoreError::InvalidPlan(_))),
+            "{result:?}"
+        );
     }
 }

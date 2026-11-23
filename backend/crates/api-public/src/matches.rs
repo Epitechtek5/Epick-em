@@ -34,7 +34,7 @@ use crate::steps::{CloseResponse, close_step_of, find_step};
 use crate::store::{
     Bracket, GameFinish, Match, MatchFinish, MatchGame, MatchInput, MatchParticipant, MatchResult,
     MatchScore, MatchStatus, MatchType, MatchUpdate, Placement, ScoringRule, Stat, StatScope,
-    StatType, Step, StepFormat, StepStatus, StoreError, Tournament,
+    StatType, Step, StepFormat, StepScoring, StepStatus, StoreError, Tournament,
 };
 use crate::team_io::normalize_timestamp;
 use crate::tournament_access::{require_manage, require_referee};
@@ -846,24 +846,36 @@ fn apply_step_scoring(step: &Step, scores: &mut [MatchScore]) {
         return;
     };
     for score in scores {
-        let points = match step.match_type {
-            MatchType::Duel => match score.result {
-                Some(MatchResult::Win) => Some(scoring.win),
-                Some(MatchResult::Draw) => Some(scoring.draw),
-                Some(MatchResult::Loss) => Some(scoring.loss),
-                None => None,
-            },
-            MatchType::Ffa => score.rank.map(|rank| {
-                usize::try_from(rank - 1)
-                    .ok()
-                    .and_then(|i| scoring.placement.get(i))
-                    .copied()
-                    .unwrap_or(0.0)
-            }),
-        };
-        if let Some(points) = points {
+        if let Some(points) =
+            step_scoring_points(scoring, step.match_type, score.result, score.rank)
+        {
             score.points = points;
         }
+    }
+}
+
+/// Points que donne le barème de l'étape à un résultat (duel) ou à un rang (FFA) ; `None` s'il
+/// n'y en a pas. Commun à la fin d'un match et à l'import.
+pub(crate) fn step_scoring_points(
+    scoring: &StepScoring,
+    match_type: MatchType,
+    result: Option<MatchResult>,
+    rank: Option<i32>,
+) -> Option<f64> {
+    match match_type {
+        MatchType::Duel => match result {
+            Some(MatchResult::Win) => Some(scoring.win),
+            Some(MatchResult::Draw) => Some(scoring.draw),
+            Some(MatchResult::Loss) => Some(scoring.loss),
+            None => None,
+        },
+        MatchType::Ffa => rank.map(|rank| {
+            usize::try_from(rank - 1)
+                .ok()
+                .and_then(|i| scoring.placement.get(i))
+                .copied()
+                .unwrap_or(0.0)
+        }),
     }
 }
 
