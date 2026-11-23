@@ -25,7 +25,8 @@ jest.mock('../src/lib/api', () => ({
   authenticatedRequest: jest.fn(),
 }));
 jest.mock('expo-linking', () => ({
-  useURL: () => 'https://app.example/auth/google/callback?code=test&state=test',
+  useLinkingURL: () =>
+    'https://app.example/auth/google/callback?code=test&state=test',
 }));
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn() },

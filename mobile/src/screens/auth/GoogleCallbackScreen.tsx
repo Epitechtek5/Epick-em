@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useURL } from 'expo-linking';
+import { useLinkingURL } from 'expo-linking';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { View } from 'react-native';
 import { AuthScreen } from '@/components/auth-screen';
@@ -16,7 +16,7 @@ import { useTranslation } from '@/i18n';
 
 export default function GoogleCallbackScreen() {
   const { t } = useTranslation();
-  const url = useURL();
+  const url = useLinkingURL();
   const { callback } = useLocalSearchParams<{ callback?: string }>();
   const { user, initializing, secondFactorRequired, completeGoogle } =
     useAuth();
