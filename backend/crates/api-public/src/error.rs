@@ -88,6 +88,18 @@ pub enum ApiError {
     ImportPreviewStale,
     /// L'aperçu contient des opérations destructives qui exigent une confirmation explicite.
     ImportConfirmationRequired,
+    /// Le tournoi est géré par une source externe : il ne se modifie pas par l'API.
+    ExternallyManaged,
+    /// Le match a commencé (ou est terminé, annulé) : son pronostic ne change plus.
+    PredictionLocked,
+    /// Les réponses à cette question de Pick'em sont fermées.
+    PickemLocked,
+    /// Ce tournoi externe est déjà importé.
+    AlreadyImported,
+    /// Une synchronisation de ce tournoi externe est déjà en cours.
+    SyncInProgress,
+    /// La source externe ne répond pas, refuse la requête ou limite le débit.
+    ExternalUnavailable,
     /// Panne côté serveur ; le détail est journalisé, jamais renvoyé.
     Internal(String),
 }
@@ -120,6 +132,16 @@ impl ApiError {
                 "Identifiants ou jeton invalides",
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Action non autorisée"),
+            ApiError::PredictionLocked => (
+                StatusCode::CONFLICT,
+                "prediction_locked",
+                "Le match a commencé : le pronostic est verrouillé",
+            ),
+            ApiError::PickemLocked => (
+                StatusCode::CONFLICT,
+                "pickem_locked",
+                "Les réponses à cette question sont fermées",
+            ),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Ressource introuvable"),
             ApiError::Conflict => (
                 StatusCode::CONFLICT,
@@ -260,6 +282,26 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "import_confirmation_required",
                 "Cet import remplace des données existantes : confirmez explicitement",
+            ),
+            ApiError::ExternallyManaged => (
+                StatusCode::CONFLICT,
+                "externally_managed",
+                "Ce tournoi est géré par une source externe : il se modifie chez la source",
+            ),
+            ApiError::AlreadyImported => (
+                StatusCode::CONFLICT,
+                "already_imported",
+                "Ce tournoi externe est déjà importé",
+            ),
+            ApiError::SyncInProgress => (
+                StatusCode::CONFLICT,
+                "sync_in_progress",
+                "Une synchronisation de ce tournoi est déjà en cours",
+            ),
+            ApiError::ExternalUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "external_unavailable",
+                "La source externe est momentanément indisponible",
             ),
             ApiError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

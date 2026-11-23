@@ -64,27 +64,28 @@ async fn get(app: &app_type!(), path: &str, token: &str) -> (StatusCode, Value) 
 async fn setup(count: usize) -> (app_type!(), Setup) {
     let store = Arc::new(MemoryStore::new());
     let app = app_with(store.clone(), Duration::from_secs(3600)).await;
-    logged_in_as(&app, "root", "secret123").await;
+    let setup = setup_app(&app, &store, count).await;
+    (app, setup)
+}
+
+async fn setup_app(app: &app_type!(), store: &MemoryStore, count: usize) -> Setup {
+    logged_in_as(app, "root", "secret123").await;
     store.set_role("root", Role::Admin);
-    let (_, session) = login(&app, "root", "secret123").await;
+    let (_, session) = login(app, "root", "secret123").await;
     let admin = access(&session).to_string();
-    let (_, game) = post(&app, "/games", &admin, json!({ "name": "Chess" })).await;
+    let (_, game) = post(app, "/games", &admin, json!({ "name": "Chess" })).await;
     let game = game["id"].as_str().unwrap().to_string();
     let mut players = Vec::new();
     for index in 0..count {
-        let session = logged_in_as(&app, &format!("player{index}"), "secret123").await;
+        let session = logged_in_as(app, &format!("player{index}"), "secret123").await;
         players.push(access(&session).to_string());
     }
-    (
-        app,
-        Setup {
-            admin,
-            game,
-            players,
-        },
-    )
+    Setup {
+        admin,
+        game,
+        players,
+    }
 }
-
 struct Running {
     tid: String,
     step: String,
@@ -1420,7 +1421,10 @@ async fn administrative_forfeit_archives_partial_games_before_finalizing() {
 #[actix_web::test]
 async fn correcting_a_semifinal_reopens_started_and_finished_finals() {
     for finish_final in [false, true] {
-        let (app, setup) = setup(4).await;
+        use api_public::store::AuthStore;
+        let store = Arc::new(MemoryStore::new());
+        let app = app_with(store.clone(), Duration::from_secs(3600)).await;
+        let setup = setup_app(&app, &store, 4).await;
         let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 4, 1), None).await;
         generate(&app, &setup, &run).await;
         let semifinals: Vec<_> = matches(&app, &setup, &run)
@@ -1439,6 +1443,19 @@ async fn correcting_a_semifinal_reopens_started_and_finished_finals() {
             .find(|m| m["round"] == 2)
             .unwrap();
         let final_base = format!("{}/matches/{}", run.base(), id(&final_match));
+        let prediction_path = format!(
+            "/tournaments/{}/matches/{}/prediction",
+            run.tid,
+            id(&final_match)
+        );
+        let (status, prediction) = put(
+            &app,
+            &prediction_path,
+            &setup.players[0],
+            json!({"winner_id":members(&final_match)[0]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{prediction}");
         let (status, response) = if finish_final {
             post(&app,&format!("{final_base}/workflow"),&setup.admin,json!({"operation_id":Uuid::new_v4(),"revision":0,"action":{"kind":"adjudicate","reason":"Verified final","report":report_for(&final_match,false)}})).await
         } else {
@@ -1451,6 +1468,23 @@ async fn correcting_a_semifinal_reopens_started_and_finished_finals() {
             .await
         };
         assert_eq!(status, StatusCode::OK, "{response}");
+        let tid = run.tid.parse().unwrap();
+        api_public::resolution::resolve_tournament(store.as_ref(), tid)
+            .await
+            .unwrap();
+        let user_id = store
+            .find_user_by_username("player0")
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        let before = store
+            .pickem()
+            .find_prediction(user_id, id(&final_match).parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.points, if finish_final { 10.0 } else { 0.0 });
         let root = &semifinals[0];
         let base = format!("{}/matches/{}", run.base(), id(root));
         let input = json!({"report":report_for(root,true),"reason":"Semifinal winner corrected after evidence review"});
@@ -1474,5 +1508,265 @@ async fn correcting_a_semifinal_reopens_started_and_finished_finals() {
         assert!(!members(&replayed).contains(&members(root)[0]));
         let (_, stage) = get(&app, &run.base(), &setup.admin).await;
         assert_eq!(stage["status"], "ongoing");
+        api_public::resolution::resolve_tournament(store.as_ref(), tid)
+            .await
+            .unwrap();
+        let after = store
+            .pickem()
+            .find_prediction(user_id, id(&final_match).parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after.points, 0.0,
+            "reopened final must revoke previously earned points"
+        );
+        assert_eq!(after.outcome, api_public::store::PickOutcome::Pending);
+        let (_, view) = get(&app, &prediction_path, &setup.players[0]).await;
+        assert_eq!(
+            view["locked"], true,
+            "reopening the final must not reopen predictions"
+        );
+        let (status, _) = put(
+            &app,
+            &prediction_path,
+            &setup.players[0],
+            json!({"winner_id":members(&final_match)[1]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+}
+
+#[actix_web::test]
+async fn corrections_recompute_predictions_pickem_and_deliver_localized_notifications() {
+    use api_public::resolution::resolve_pending;
+    use api_public::store::{
+        AuthStore, Language, PickOutcome, Platform, Resolved, StoreError, UserSettingsUpdate,
+    };
+    let store = Arc::new(MemoryStore::new());
+    let mailer = Arc::new(api_public::mail::MemoryMailer::new());
+    let push = Arc::new(api_public::push::MemoryPush::new());
+    let app = common::app_with_services(store.clone(), mailer.clone(), push.clone()).await;
+    let setup = setup_app(&app, &store, 2).await;
+    let users = [
+        store
+            .find_user_by_username("player0")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        store
+            .find_user_by_username("player1")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+    ];
+    for (index, user) in users.iter().enumerate() {
+        store
+            .register_push_token(
+                *user,
+                &format!("ExponentPushToken[match-{index}]"),
+                Platform::Android,
+            )
+            .await
+            .unwrap();
+        store
+            .update_user_settings(
+                *user,
+                UserSettingsUpdate {
+                    language: Some(if index == 0 {
+                        Language::Fr
+                    } else {
+                        Language::En
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let (_, _, run) = running(&app, &setup, step("single_elim", "duel", 2, 1), None).await;
+    generate(&app, &setup, &run).await;
+    let found = matches(&app, &setup, &run).await.remove(0);
+    let base = format!("{}/matches/{}", run.base(), id(&found));
+    let workflow_path = format!("{base}/workflow");
+    let prediction_path = format!("/tournaments/{}/matches/{}/prediction", run.tid, id(&found));
+    let tid: Uuid = run.tid.parse().unwrap();
+    let (_, question) = post(
+        &app,
+        &format!("/tournaments/{}/pickem/questions", run.tid),
+        &setup.admin,
+        json!({"kind":"tournament_winner","points":20,"locks_at":"2099-01-01T00:00:00Z"}),
+    )
+    .await;
+    assert!(question["id"].is_string(), "{question}");
+    let answer_path = format!(
+        "/tournaments/{}/pickem/questions/{}/answer",
+        run.tid,
+        id(&question)
+    );
+    for (index, token) in setup.players.iter().enumerate() {
+        let (status, body) = put(
+            &app,
+            &prediction_path,
+            token,
+            json!({"winner_id":members(&found)[index]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = put(
+            &app,
+            &answer_path,
+            token,
+            json!({"participant_id":members(&found)[index]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    for (revision, action) in [
+        json!({"kind":"schedule","scheduled_at":"2098-01-01T14:00:00Z","duration_minutes":30,"venue":"Court A","station":"1"}),
+        json!({"kind":"call"}),
+    ].into_iter().enumerate() {
+        let body = json!({"operation_id":Uuid::new_v4(),"revision":revision,"action":action});
+        let (status, response) = post(&app, &workflow_path, &setup.admin, body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        let (status, _) = post(&app, &workflow_path, &setup.admin, body).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, submitted) = post(&app, &workflow_path, &setup.players[0],
+        json!({"operation_id":Uuid::new_v4(),"revision":2,"action":{"kind":"submit","report":report_for(&found,false)}})).await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    assert!(
+        resolve_pending(store.as_ref(), 50)
+            .await
+            .unwrap()
+            .iter()
+            .all(Result::is_ok)
+    );
+    for token in &setup.players {
+        let (_, prediction) = get(&app, &prediction_path, token).await;
+        assert_eq!(prediction["outcome"], "pending", "{prediction}");
+    }
+    let (status, confirmed) = post(&app, &workflow_path, &setup.players[1],
+        json!({"operation_id":Uuid::new_v4(),"revision":3,"action":{"kind":"confirm","submission_id":submitted["workflow"]["submissions"][0]["id"]}})).await;
+    assert_eq!(status, StatusCode::OK, "{confirmed}");
+    let (status, response) = post(
+        &app,
+        &format!("/tournaments/{}/status", run.tid),
+        &setup.admin,
+        json!({"status":"finished"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert!(
+        resolve_pending(store.as_ref(), 50)
+            .await
+            .unwrap()
+            .iter()
+            .all(Result::is_ok)
+    );
+    let old_snapshot = store.competition_snapshot(tid).await.unwrap();
+    let old_prediction = store
+        .pickem()
+        .find_prediction(users[0], id(&found).parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(old_prediction.points, 10.0);
+    let leaderboard_path = format!("/tournaments/{}/leaderboard", run.tid);
+    let (_, board) = get(&app, &leaderboard_path, &setup.admin).await;
+    assert_eq!(board[0]["points"], 30.0, "{board}");
+    assert_eq!(board[0]["user_id"], users[0].to_string());
+    let input =
+        json!({"report":report_for(&found,true),"reason":"Evidence shows the other player won"});
+    let (status, preview) = post(
+        &app,
+        &format!("{base}/correction-preview"),
+        &setup.admin,
+        input.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let correction = json!({"operation_id":Uuid::new_v4(),"revision":preview["revision"],"reset_downstream":true,"report":input["report"],"reason":input["reason"]});
+    let (status, corrected) = post(
+        &app,
+        &format!("{base}/corrections"),
+        &setup.admin,
+        correction.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{corrected}");
+    assert!(
+        resolve_pending(store.as_ref(), 50)
+            .await
+            .unwrap()
+            .iter()
+            .all(Result::is_ok)
+    );
+    // A delayed resolver must not restore the winner's obsolete points.
+    assert!(matches!(
+        store
+            .commit_competition_resolution(
+                tid,
+                old_snapshot.revision().unwrap(),
+                vec![Resolved {
+                    id: old_prediction.id,
+                    outcome: PickOutcome::Correct,
+                    points: 10.0
+                }],
+                vec![],
+                true
+            )
+            .await,
+        Err(StoreError::MatchState)
+    ));
+    let (_, board) = get(&app, &leaderboard_path, &setup.admin).await;
+    assert_eq!(board[0]["points"], 30.0, "{board}");
+    assert_eq!(board[0]["user_id"], users[1].to_string(), "{board}");
+    let (status, replay) = post(
+        &app,
+        &format!("{base}/corrections"),
+        &setup.admin,
+        correction,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(corrected, replay);
+    let reports = resolve_pending(store.as_ref(), 50).await.unwrap();
+    assert!(reports.iter().all(|r| r.as_ref().unwrap().changed == 0));
+    let (_, replay_board) = get(&app, &leaderboard_path, &setup.admin).await;
+    assert_eq!(board, replay_board);
+    common::eventually(|| {
+        push.sent()
+            .iter()
+            .filter(|p| p.data["kind"] == "match.corrected")
+            .count()
+            == 2
+    })
+    .await;
+    for kind in ["match.called", "match.rescheduled", "match.corrected"] {
+        let sent: Vec<_> = push
+            .sent()
+            .into_iter()
+            .filter(|p| p.data["kind"] == kind)
+            .collect();
+        assert_eq!(sent.len(), 2, "{kind}: {sent:?}");
+        assert!(sent.iter().all(|p| p.data["path"] == base));
+        assert_ne!(
+            sent[0].title, sent[1].title,
+            "FR and EN recipients receive localized text"
+        );
+        for message in sent {
+            assert!(
+                mailer
+                    .notifications()
+                    .iter()
+                    .any(|(_, email)| email.title == message.title),
+                "matching email must be delivered for {}",
+                message.title
+            );
+        }
     }
 }

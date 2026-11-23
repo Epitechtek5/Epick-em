@@ -4629,8 +4629,48 @@ async fn workflow_compare_and_swap_preserves_audit_and_rejects_concurrent_update
             .is_err()
     );
     assert_eq!(store.match_workflow(found.id).await.unwrap(), workflow);
+    let prediction = store
+        .pickem()
+        .upsert_prediction(api_public::store::PredictionInput {
+            user_id: participant.user_id.unwrap(),
+            tournament_id: tournament.id,
+            match_id: found.id,
+            winner_id: Some(participant.id),
+            ranking: None,
+        })
+        .await
+        .unwrap();
+    let question = store
+        .pickem()
+        .create_question(api_public::store::QuestionInput {
+            tournament_id: tournament.id,
+            kind: api_public::store::QuestionKind::TournamentWinner,
+            params: serde_json::json!({}),
+            points: 20,
+            opens_at: "2000-01-01T00:00:00Z".into(),
+            locks_at: "2099-01-01T00:00:00Z".into(),
+        })
+        .await
+        .unwrap();
+    let answer = api_public::store::AnswerInput {
+        tournament_id: tournament.id,
+        question_id: question.id,
+        user_id: participant.user_id.unwrap(),
+        answer: serde_json::json!({"participant_id":participant.id}),
+    };
+    store.pickem().upsert_answer(answer.clone()).await.unwrap();
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE tournaments SET status = 'finished' WHERE id = $1")
+        .bind(tournament.id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let snapshot = store.competition_snapshot(tournament.id).await.unwrap();
     let mut next = snapshot.clone();
+    next.tournament.status = TournamentStatus::Ongoing;
+
     next.matches
         .iter_mut()
         .find(|m| m.id == found.id)
@@ -4670,6 +4710,235 @@ async fn workflow_compare_and_swap_preserves_audit_and_rejects_concurrent_update
         MatchStatus::Finished
     );
     assert_eq!(store.match_workflow(found.id).await.unwrap(), audit);
+    let latest = store.competition_snapshot(tournament.id).await.unwrap();
+    store
+        .commit_competition_resolution(
+            tournament.id,
+            latest.revision().unwrap(),
+            vec![api_public::store::Resolved {
+                id: prediction.id,
+                outcome: api_public::store::PickOutcome::Correct,
+                points: 10.0,
+            }],
+            vec![],
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .commit_competition_resolution(
+                tournament.id,
+                snapshot.revision().unwrap(),
+                vec![api_public::store::Resolved {
+                    id: prediction.id,
+                    outcome: api_public::store::PickOutcome::Incorrect,
+                    points: 0.0
+                }],
+                vec![],
+                false
+            )
+            .await,
+        Err(StoreError::MatchState)
+    ));
+    let kept = store
+        .pickem()
+        .find_prediction(participant.user_id.unwrap(), found.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        kept.points, 10.0,
+        "a pre-correction resolver cannot overwrite newer points"
+    );
+    assert!(store.match_prediction_locked(found.id).await.unwrap());
+    assert!(store.tournament_pickem_locked(tournament.id).await.unwrap());
+    sqlx::query("UPDATE match SET status = 'scheduled', started_at = NULL, scheduled_at = NULL WHERE id = $1")
+        .bind(found.id).execute(&pool).await.unwrap();
+    assert!(matches!(
+        store
+            .pickem()
+            .upsert_prediction(api_public::store::PredictionInput {
+                user_id: participant.user_id.unwrap(),
+                tournament_id: tournament.id,
+                match_id: found.id,
+                winner_id: Some(participant.id),
+                ranking: None,
+            })
+            .await,
+        Err(StoreError::PredictionLocked)
+    ));
+    assert!(matches!(
+        store
+            .pickem()
+            .delete_prediction(participant.user_id.unwrap(), found.id)
+            .await,
+        Err(StoreError::PredictionLocked)
+    ));
+    assert!(matches!(
+        store.pickem().upsert_answer(answer).await,
+        Err(StoreError::PickemLocked)
+    ));
+}
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL"]
+async fn prediction_writes_recheck_status_and_clock_after_waiting() {
+    use api_public::store::PredictionInput;
+    let store = Arc::new(store().await);
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let game_id = game(&store).await;
+    let tournament = store
+        .create_tournament(tournament_input(game_id))
+        .await
+        .unwrap();
+    let step = store
+        .create_step(StepInput {
+            tournament_id: tournament.id,
+            definition: step_definition(1, 1, 4, 1),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let match_id: Uuid =
+        sqlx::query_scalar("INSERT INTO match (game_id, step_id) VALUES ($1, $2) RETURNING id")
+            .bind(game_id)
+            .bind(step.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let user_id = user(&store, "predictor").await;
+    let winner = Uuid::new_v4();
+    let input = PredictionInput {
+        user_id,
+        tournament_id: tournament.id,
+        match_id,
+        winner_id: Some(winner),
+        ranking: None,
+    };
+    store
+        .pickem()
+        .upsert_prediction(input.clone())
+        .await
+        .unwrap();
+    for by_clock in [false, true] {
+        sqlx::query("UPDATE match SET status = 'scheduled', started_at = NULL, scheduled_at = NULL WHERE id = $1")
+            .bind(match_id).execute(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let sql = if by_clock {
+            "UPDATE match SET scheduled_at = clock_timestamp() + interval '300 milliseconds' WHERE id = $1"
+        } else {
+            "UPDATE match SET status = 'ongoing', started_at = clock_timestamp() WHERE id = $1"
+        };
+        sqlx::query(sql)
+            .bind(match_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let write = {
+            let store = store.clone();
+            let mut input = input.clone();
+            input.winner_id = Some(Uuid::new_v4());
+            tokio::spawn(async move { store.pickem().upsert_prediction(input).await })
+        };
+        let delete = {
+            let store = store.clone();
+            tokio::spawn(async move { store.pickem().delete_prediction(user_id, match_id).await })
+        };
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!write.is_finished());
+        assert!(!delete.is_finished());
+        tx.commit().await.unwrap();
+        assert!(matches!(
+            write.await.unwrap(),
+            Err(StoreError::PredictionLocked)
+        ));
+        assert!(matches!(
+            delete.await.unwrap(),
+            Err(StoreError::PredictionLocked)
+        ));
+        assert_eq!(
+            store
+                .pickem()
+                .find_prediction(user_id, match_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .winner_id,
+            Some(winner)
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires migrated PostgreSQL"]
+async fn question_edits_recheck_opening_after_row_lock_wait() {
+    use api_public::store::{QuestionInput, QuestionKind, QuestionUpdate};
+    let store = Arc::new(store().await);
+    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let tournament = store
+        .create_tournament(tournament_input(game(&store).await))
+        .await
+        .unwrap();
+    let opens: String = sqlx::query_scalar("SELECT to_char(clock_timestamp() + interval '400 milliseconds', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')").fetch_one(&pool).await.unwrap();
+    let question = store
+        .pickem()
+        .create_question(QuestionInput {
+            tournament_id: tournament.id,
+            kind: QuestionKind::TournamentWinner,
+            params: serde_json::json!({}),
+            points: 20,
+            opens_at: opens,
+            locks_at: "2099-01-01T00:00:00Z".into(),
+        })
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM pickem_question WHERE id = $1 FOR UPDATE")
+        .bind(question.id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let write = {
+        let store = store.clone();
+        tokio::spawn(async move {
+            store
+                .pickem()
+                .update_question(
+                    question.id,
+                    QuestionUpdate {
+                        points: Some(50),
+                        ..Default::default()
+                    },
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(!write.is_finished());
+    tx.commit().await.unwrap();
+    assert!(matches!(
+        write.await.unwrap(),
+        Err(StoreError::PickemLocked)
+    ));
+    assert!(matches!(
+        store.pickem().delete_question(question.id).await,
+        Err(StoreError::PickemLocked)
+    ));
+    assert_eq!(
+        store
+            .pickem()
+            .find_question(question.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .points,
+        20
+    );
 }
 
 /// Plan d'import d'un tournoi de quatre joueurs : une étape `pool` lancée, têtes de série 1 à 4

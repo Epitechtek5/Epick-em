@@ -91,7 +91,9 @@ pub async fn evict_on_write(
     next: Next<BoxBody>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
     let writes = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
-        && !NO_WRITE_PATHS.contains(&req.path());
+        && !NO_WRITE_PATHS.contains(&req.path())
+        // Les pronostics et le Pick'em ne font pas partie des exports.
+        && !crate::predictions::spectator_owned(req.path());
     let cache = writes
         .then(|| {
             req.app_data::<web::Data<AppState>>()

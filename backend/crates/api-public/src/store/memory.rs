@@ -8,18 +8,18 @@ use super::{
 };
 use super::{
     AuthStore, CheckInSettlement, Entrant, Game, GameFinish, GameInput, GameScores, GameUpdate,
-    Generation, ImportPlan, Invitation, InvitationAction, InvitationEvent, InvitationEventKind,
-    InvitationFilter, InvitationInput, InvitationStatus, InvitationType, Match, MatchFinish,
-    MatchGame, MatchGameParticipant, MatchImport, MatchInput, MatchParticipant, MatchResult,
-    MatchScore, MatchStatus, MatchUpdate, NamedParticipant, ParticipantChange, ParticipantImport,
-    ParticipantInput, ParticipantStatus, Placement, RegistrationPolicy, Role, RoleAssignment,
-    RoleAuditAction, RoleAuditEntry, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat,
-    StatInput, StatOption, StatType, StatUpdate, Step, StepClosing, StepDefinition, StepGroup,
-    StepInput, StepParticipant, StepParticipantStatus, StepStart, StepStatus, StoreError, Team,
-    TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, Tournament, TournamentImport,
-    TournamentInput, TournamentInvitation, TournamentParticipant, TournamentPlan, TournamentRole,
-    TournamentStatus, TournamentTeam, TournamentTeamInput, TournamentTeamMember, TournamentUpdate,
-    UserProfile, UserRecord, UserUpdate,
+    Generation, ImportPlan, Imports, Invitation, InvitationAction, InvitationEvent,
+    InvitationEventKind, InvitationFilter, InvitationInput, InvitationStatus, InvitationType,
+    Match, MatchFinish, MatchGame, MatchGameParticipant, MatchImport, MatchInput, MatchParticipant,
+    MatchResult, MatchScore, MatchStatus, MatchUpdate, NamedParticipant, ParticipantChange,
+    ParticipantImport, ParticipantInput, ParticipantStatus, Placement, RegistrationPolicy, Role,
+    RoleAssignment, RoleAuditAction, RoleAuditEntry, ScoringRule, ScoringRuleDefinition,
+    ScoringRuleInput, Stat, StatInput, StatOption, StatType, StatUpdate, Step, StepClosing,
+    StepDefinition, StepGroup, StepInput, StepParticipant, StepParticipantStatus, StepStart,
+    StepStatus, StoreError, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate,
+    Tournament, TournamentImport, TournamentInput, TournamentInvitation, TournamentParticipant,
+    TournamentPlan, TournamentRole, TournamentStatus, TournamentTeam, TournamentTeamInput,
+    TournamentTeamMember, TournamentUpdate, UserProfile, UserRecord, UserUpdate,
 };
 use super::{
     Channel, MAX_PUSH_TOKENS, Platform, PushToken, UserSettings, UserSettingsUpdate, override_key,
@@ -85,6 +85,8 @@ struct State {
     match_participants: Vec<MatchParticipant>,
     match_games: Vec<MatchGame>,
     archived_matches: HashSet<Uuid>,
+    prediction_locks: HashSet<Uuid>,
+    pickem_locks: HashSet<Uuid>,
     match_workflows: HashMap<Uuid, MatchWorkflow>,
     match_evidence: HashMap<Uuid, MatchEvidence>,
     verification_limits: HashMap<String, (Instant, u32)>,
@@ -98,6 +100,10 @@ struct State {
 #[derive(Default)]
 pub struct MemoryStore {
     state: Mutex<State>,
+    /// Tournois importés, dans un cache en mémoire.
+    imports: Imports,
+    /// Pronostics et Pick'em.
+    pub(super) pickem: super::pickem_memory::PickemMemory,
 }
 
 impl MemoryStore {
@@ -119,6 +125,7 @@ impl MemoryStore {
                 match_games: snapshot.games,
                 ..State::default()
             }),
+            ..Self::default()
         }
     }
 
@@ -252,6 +259,51 @@ impl MemoryStore {
         }
     }
 
+    pub(super) fn with_prediction_gate<T>(
+        &self,
+        match_id: Uuid,
+        write: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let state = self.state();
+        if state.prediction_locks.contains(&match_id) {
+            return Err(StoreError::PredictionLocked);
+        }
+        if let Some(found) = state.matches.iter().find(|m| m.id == match_id) {
+            let tournament = state
+                .steps
+                .iter()
+                .find(|s| s.id == found.step_id)
+                .and_then(|s| state.tournaments.iter().find(|t| t.id == s.tournament_id))
+                .ok_or(StoreError::PredictionLocked)?;
+            if crate::predictions::is_locked(found, tournament, &now_rfc3339()) {
+                return Err(StoreError::PredictionLocked);
+            }
+        }
+        write()
+    }
+
+    pub(super) fn with_pickem_gate<T>(
+        &self,
+        tournament_id: Uuid,
+        write: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let state = self.state();
+        if state.pickem_locks.contains(&tournament_id)
+            || state.tournaments.iter().any(|t| {
+                t.id == tournament_id
+                    && matches!(
+                        t.status,
+                        TournamentStatus::Finished | TournamentStatus::Cancelled
+                    )
+            })
+        {
+            return Err(StoreError::PickemLocked);
+        }
+        let result = write();
+        drop(state);
+        result
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -259,6 +311,14 @@ impl MemoryStore {
 
 #[async_trait]
 impl AuthStore for MemoryStore {
+    fn imports(&self) -> &Imports {
+        &self.imports
+    }
+
+    fn pickem(&self) -> &dyn super::PickemStore {
+        self
+    }
+
     async fn create_user_with_token(
         &self,
         username: &str,
@@ -1490,9 +1550,14 @@ impl AuthStore for MemoryStore {
             .iter()
             .filter(|t| t.is_template == templates)
             .filter(|t| game_id.is_none_or(|id| t.game_id == id))
-            .filter(|t| status.is_none_or(|status| t.status == status))
             .cloned()
             .collect();
+        for tournament in &mut tournaments {
+            if let Some(summary) = self.imports.summary(tournament.id).await {
+                summary.apply(tournament);
+            }
+        }
+        tournaments.retain(|t| status.is_none_or(|status| t.status == status));
         tournaments.sort_by_key(|t| (t.start_date.clone(), t.id));
         Ok(tournaments
             .into_iter()
@@ -1502,12 +1567,19 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_tournament(&self, id: Uuid) -> Result<Option<Tournament>, StoreError> {
-        Ok(self
+        let found = self
             .state()
             .tournaments
             .iter()
             .find(|t| t.id == id)
-            .cloned())
+            .cloned();
+        let Some(mut tournament) = found else {
+            return Ok(None);
+        };
+        if let Some(summary) = self.imports.summary(id).await {
+            summary.apply(&mut tournament);
+        }
+        Ok(Some(tournament))
     }
 
     async fn create_tournament(&self, input: TournamentInput) -> Result<Tournament, StoreError> {
@@ -1609,6 +1681,7 @@ impl AuthStore for MemoryStore {
     }
 
     async fn delete_tournament(&self, id: Uuid) -> Result<bool, StoreError> {
+        self.imports.forget(id).await;
         let mut state = self.state();
         let before = state.tournaments.len();
         state.remove_tournament(id);
@@ -1712,6 +1785,9 @@ impl AuthStore for MemoryStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TournamentParticipant>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.participants(limit, offset));
+        }
         let mut participants: Vec<TournamentParticipant> = self
             .state()
             .participants
@@ -1731,6 +1807,9 @@ impl AuthStore for MemoryStore {
         &self,
         id: Uuid,
     ) -> Result<Option<TournamentParticipant>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.participant(id)) {
+            return Ok(Some(found));
+        }
         Ok(self
             .state()
             .participants
@@ -1790,6 +1869,8 @@ impl AuthStore for MemoryStore {
             status,
             registered_at: now_rfc3339(),
             responses: input.responses,
+            external_id: None,
+            display_name: None,
         };
         state.participants.push(participant.clone());
         Ok(Some(participant))
@@ -2185,6 +2266,9 @@ impl AuthStore for MemoryStore {
         &self,
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.points());
+        }
         let state = self.state();
         let mut points: HashMap<Uuid, f64> = state
             .participants
@@ -2209,6 +2293,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.steps);
+        }
         let mut steps: Vec<Step> = self
             .state()
             .steps
@@ -2221,6 +2308,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.step(id)) {
+            return Ok(Some(found));
+        }
         Ok(self.state().steps.iter().find(|s| s.id == id).cloned())
     }
 
@@ -2305,6 +2395,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.groups(step_id));
+        }
         let mut groups: Vec<StepGroup> = self
             .state()
             .step_groups
@@ -2320,6 +2413,9 @@ impl AuthStore for MemoryStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<StepParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.step_participants(step_id));
+        }
         let state = self.state();
         let index_of = |group_id: Uuid| {
             state
@@ -2418,6 +2514,9 @@ impl AuthStore for MemoryStore {
         group_id: Option<Uuid>,
         status: Option<MatchStatus>,
     ) -> Result<Vec<Match>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.matches(step_id, group_id, status));
+        }
         let state = self.state();
         let index_of = |group: Option<Uuid>| {
             state
@@ -2445,6 +2544,9 @@ impl AuthStore for MemoryStore {
     }
 
     async fn find_match(&self, id: Uuid) -> Result<Option<Match>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.find_match(id)) {
+            return Ok(Some(found));
+        }
         Ok(self.state().matches.iter().find(|m| m.id == id).cloned())
     }
 
@@ -2452,6 +2554,9 @@ impl AuthStore for MemoryStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<MatchParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.match_participants(step_id));
+        }
         let state = self.state();
         let in_step = |match_id: Uuid| {
             state.matches.iter().any(|m| {
@@ -2594,11 +2699,36 @@ impl AuthStore for MemoryStore {
         state.finish_match_in(finish)
     }
 
+    async fn match_prediction_locked(&self, match_id: Uuid) -> Result<bool, StoreError> {
+        Ok(self.state().prediction_locks.contains(&match_id))
+    }
+    async fn tournament_pickem_locked(&self, tournament_id: Uuid) -> Result<bool, StoreError> {
+        Ok(self.state().pickem_locks.contains(&tournament_id))
+    }
+
     async fn competition_snapshot(
         &self,
         tournament_id: Uuid,
     ) -> Result<CompetitionSnapshot, StoreError> {
         self.state().competition_snapshot(tournament_id)
+    }
+
+    async fn commit_competition_resolution(
+        &self,
+        tournament_id: Uuid,
+        expected_revision: String,
+        predictions: Vec<super::Resolved>,
+        answers: Vec<super::Resolved>,
+        settled: bool,
+    ) -> Result<(), StoreError> {
+        let state = self.state();
+        if state.competition_snapshot(tournament_id)?.revision()? != expected_revision {
+            return Err(StoreError::MatchState);
+        }
+        // Same lock order as prediction writes: competition, then spectator data.
+        let result = self.save_resolution_now(tournament_id, predictions, answers, settled);
+        drop(state);
+        result
     }
 
     async fn commit_competition_correction(
@@ -2629,6 +2759,18 @@ impl AuthStore for MemoryStore {
                     .match_workflows
                     .insert(m.id, correction.invalidate_workflow(previous));
             }
+        }
+        let now = now_rfc3339();
+        for found in &before.matches {
+            if crate::predictions::is_locked(found, &before.tournament, &now) {
+                state.prediction_locks.insert(found.id);
+            }
+        }
+        if matches!(
+            before.tournament.status,
+            TournamentStatus::Finished | TournamentStatus::Cancelled
+        ) {
+            state.pickem_locks.insert(tid);
         }
         state.apply_competition(correction.next);
         state
@@ -3791,6 +3933,8 @@ impl State {
                     status,
                     registered_at: now.to_string(),
                     responses: super::no_responses(),
+                    external_id: None,
+                    display_name: None,
                 });
             }
         }
@@ -4322,6 +4466,8 @@ impl State {
                 status: p.status,
                 registered_at: p.registered_at.unwrap_or_else(|| now.clone()),
                 responses: p.responses,
+                external_id: None,
+                display_name: None,
             });
         }
         ids

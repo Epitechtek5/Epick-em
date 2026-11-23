@@ -1,0 +1,29 @@
+{
+  "tournaments": {
+    "nodes": [
+      {
+        "id": 500,
+        "slug": "tournament/epick-open-2026",
+        "name": "Epick Open 2026",
+        "url": "https://www.start.gg/tournament/epick-open-2026",
+        "startAt": 1767225600,
+        "endAt": 1767312000,
+        "state": 2
+      },
+      {
+        "id": 501,
+        "slug": "tournament/epick-open-2025",
+        "name": "Epick Open 2025",
+        "url": null,
+        "startAt": null,
+        "endAt": null,
+        "state": 3
+      },
+      {
+        "id": null,
+        "slug": "tournament/sans-id",
+        "name": "Sans identifiant"
+      }
+    ]
+  }
+}
