@@ -6,7 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>
       try {
-        const dark = localStorage.getItem('epickem-theme') !== 'light'
+        const theme = localStorage.getItem('epickem-theme')
+        const dark =
+          theme === 'dark' ||
+          (theme !== 'light' && !window.matchMedia?.('(prefers-color-scheme: light)').matches)
         document.documentElement.classList.toggle('dark', dark)
         document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
       } catch {

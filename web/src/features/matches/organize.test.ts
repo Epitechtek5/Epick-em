@@ -1,5 +1,18 @@
-import { elimBracket, FINAL_ID, GROUP_A, GROUP_B, makeMatch, POOL_GROUPS, SEMI_1_ID, SEMI_2_ID } from '@/test/matches'
-import { byGroupAndRound, byRegion, byRound, layoutBracket, matchNumbers, openSlots, predecessors } from './organize'
+import { elimBracket, FINAL_ID, GROUP_A, GROUP_B, makeMatch, participant, POOL_GROUPS, SEMI_1_ID, SEMI_2_ID } from '@/test/matches'
+import { P_BOB, P_ME } from '@/test/tournaments'
+import {
+  byGroupAndRound,
+  byRegion,
+  byRound,
+  feeders,
+  isBye,
+  isFinalReset,
+  layoutBracket,
+  matchNumbers,
+  openSlots,
+  orderedParticipants,
+  predecessors,
+} from './organize'
 
 describe('organisation des matchs', () => {
   it('numérote dans l’ordre du serveur et range par groupe puis par tour', () => {
@@ -50,5 +63,49 @@ describe('organisation des matchs', () => {
     const layout = layoutBracket([makeMatch({ round: 1 }), makeMatch({ round: 2 })], 2)
     expect(layout.nodes).toHaveLength(2)
     expect(layout.edges).toEqual([])
+  })
+
+  it('suit les liens du perdant en double élimination, places comprises', () => {
+    const final = makeMatch({ bracket: 'grand_final', round: 1 })
+    const reset = makeMatch({ bracket: 'grand_final', round: 2 })
+    const winners = makeMatch({ bracket: 'winners', round: 1, number: 1, next_match_id: final.id, next_slot: 1 })
+    const losers = makeMatch({
+      bracket: 'losers',
+      round: 1,
+      number: 1,
+      next_match_id: final.id,
+      next_slot: 2,
+    })
+    const feeding = makeMatch({ bracket: 'winners', round: 1, number: 2, loser_next_match_id: losers.id, loser_next_slot: 2 })
+    const finalWithLinks = { ...final, next_match_id: reset.id, next_slot: 1, loser_next_match_id: reset.id, loser_next_slot: 2 }
+    const matches = [winners, feeding, losers, finalWithLinks, reset]
+    const incoming = feeders(matches)
+    expect(incoming.get(final.id)?.map((feed) => [feed.match.id, feed.kind, feed.slot])).toEqual([
+      [winners.id, 'winner', 1],
+      [losers.id, 'winner', 2],
+    ])
+    expect(openSlots(losers, incoming.get(losers.id)!, 2)).toEqual([{ kind: 'loserOf', match: feeding }, { kind: 'pending' }])
+    // La manche de reset attend le vainqueur puis le perdant de la grande finale.
+    expect(openSlots(reset, incoming.get(reset.id)!, 2)).toEqual([
+      { kind: 'winnerOf', match: finalWithLinks },
+      { kind: 'loserOf', match: finalWithLinks },
+    ])
+    expect(isFinalReset(reset)).toBe(true)
+    expect(isFinalReset(final)).toBe(false)
+    const layout = layoutBracket(matches, 2)
+    expect(layout.edges.filter((edge) => edge.kind === 'loser').map((edge) => [edge.from, edge.to])).toEqual([
+      [feeding.id, losers.id],
+      [finalWithLinks.id, reset.id],
+    ])
+  })
+
+  it('reconnaît un bye et range les participants par emplacement', () => {
+    const bye = makeMatch({ status: 'finished' })
+    bye.participants = [participant(bye.id, P_ME.id, { result: 'win', rank: 1 })]
+    expect(isBye(bye)).toBe(true)
+    expect(isBye(makeMatch())).toBe(false)
+    const seated = makeMatch()
+    seated.participants = [participant(seated.id, P_BOB.id, { slot: 2 }), participant(seated.id, P_ME.id, { slot: 1 })]
+    expect(orderedParticipants(seated).map((p) => p.participant_id)).toEqual([P_ME.id, P_BOB.id])
   })
 })

@@ -19,6 +19,8 @@ import { useAuth } from '@/features/auth/session';
 import { getGame } from '@/features/games/api';
 import { useGameResource } from '@/features/games/use-game-resource';
 import type { Game } from '@/features/games/types';
+import { externalApi } from '@/features/tournaments/external';
+import { ApiError } from '@/lib/api';
 import { listTournaments } from '@/features/tournaments/api';
 import {
   hasAdvancedTournamentFilters,
@@ -80,7 +82,22 @@ export default function TournamentsScreen() {
           }
         }),
       );
+      const sources = await Promise.all(
+        visible.map(async (item) => {
+          try {
+            return [
+              item.id,
+              await externalApi(token).source(item.id, false),
+            ] as const;
+          } catch (error) {
+            if (error instanceof ApiError && [401, 403].includes(error.status))
+              throw error;
+            return [item.id, null] as const;
+          }
+        }),
+      );
       return {
+        sources: Object.fromEntries(sources),
         tournaments: visible,
         total: advanced ? result.tournaments.length : undefined,
         complete: result.complete,
@@ -214,6 +231,26 @@ export default function TournamentsScreen() {
         ) : null}
 
         {user?.role === 'admin' ? (
+          <View className="flex-row flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onPress={() =>
+                router.push('/(authenticated)/tournaments/external-import')
+              }
+            >
+              <Text>{t('external.import')}</Text>
+            </Button>
+            <Button
+              variant="outline"
+              onPress={() =>
+                router.push('/(authenticated)/tournaments/external-imports')
+              }
+            >
+              <Text>{t('external.imports')}</Text>
+            </Button>
+          </View>
+        ) : null}
+        {user?.role === 'admin' ? (
           <View className="flex-row gap-2">
             <Button
               className="flex-1"
@@ -268,6 +305,12 @@ export default function TournamentsScreen() {
               <View className="flex-row items-start justify-between gap-3">
                 <View className="flex-1 gap-1">
                   <Text className="text-lg font-semibold">{item.name}</Text>
+                  {data?.sources?.[item.id] ? (
+                    <Text variant="muted">
+                      {data.sources[item.id]?.provider_name} ·{' '}
+                      {t('external.readOnlyShort')}
+                    </Text>
+                  ) : null}
                   <Text variant="muted">
                     {data?.names[item.game_id] ?? item.game_id}
                   </Text>
@@ -280,12 +323,16 @@ export default function TournamentsScreen() {
               <View className="flex-row items-center gap-2">
                 <Icon icon={Calendar03Icon} tone="muted-foreground" size={18} />
                 <Text className="flex-1" variant="muted">
-                  {formatTournamentDate(item.start_date, i18n.language)}
+                  {data?.sources?.[item.id]
+                    ? t('external.readOnlyShort')
+                    : formatTournamentDate(item.start_date, i18n.language)}
                 </Text>
               </View>
               <View className="flex-row items-center justify-between gap-3">
                 <Text variant="muted">
-                  {t(`tournaments.participantType.${item.participant_type}`)}
+                  {data?.sources?.[item.id]
+                    ? data.sources[item.id]?.provider_name
+                    : t(`tournaments.participantType.${item.participant_type}`)}
                 </Text>
                 <Button
                   size="sm"

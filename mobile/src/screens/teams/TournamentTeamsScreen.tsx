@@ -1,3 +1,4 @@
+import { useTournamentSource } from '@/features/tournaments/source-context';
 import { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -14,6 +15,7 @@ import { useTranslation } from '@/i18n';
 
 export default function TournamentTeamsScreen() {
   const { t } = useTranslation();
+  const source = useTournamentSource();
   const insets = useSafeAreaInsets();
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
   const [page, setPage] = useState(0);
@@ -33,33 +35,35 @@ export default function TournamentTeamsScreen() {
 
   return (
     <View className="flex-1 bg-background px-5 pt-5">
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        <Button
-          size="sm"
-          onPress={() =>
-            router.push({
-              pathname:
-                '/(authenticated)/tournaments/[tournamentId]/teams/create',
-              params: { tournamentId },
-            })
-          }
-        >
-          <Text>{t('teams.create')}</Text>
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onPress={() =>
-            router.push({
-              pathname:
-                '/(authenticated)/tournaments/[tournamentId]/teams/copy',
-              params: { tournamentId },
-            })
-          }
-        >
-          <Text>{t('teams.copy')}</Text>
-        </Button>
-      </View>
+      {!source ? (
+        <View className="mb-4 flex-row flex-wrap gap-2">
+          <Button
+            size="sm"
+            onPress={() =>
+              router.push({
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/teams/create',
+                params: { tournamentId },
+              })
+            }
+          >
+            <Text>{t('teams.create')}</Text>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onPress={() =>
+              router.push({
+                pathname:
+                  '/(authenticated)/tournaments/[tournamentId]/teams/copy',
+                params: { tournamentId },
+              })
+            }
+          >
+            <Text>{t('teams.copy')}</Text>
+          </Button>
+        </View>
+      ) : null}
       <FlatList
         data={teams}
         keyExtractor={(team) => team.id}

@@ -9,6 +9,7 @@ export function GuestRoute() {
   const location = useLocation()
   const from = (location.state as { from?: string } | null)?.from
 
-  if (isAuthenticated) return <Navigate to={from ?? '/app'} replace />
+  const safeFrom = from?.startsWith('/') && !from.startsWith('//') && !from.includes('\\') ? from : '/app'
+  if (isAuthenticated) return <Navigate to={safeFrom} replace />
   return <Outlet />
 }

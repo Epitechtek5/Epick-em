@@ -1,15 +1,55 @@
 import environment from '../config/environment.js';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const platform = process.argv[2];
+const localNode = path.join(
+  homedir(),
+  '.local/share/epickem/node-v24.21.0/bin/node',
+);
+const node = existsSync(localNode) ? localNode : process.execPath;
+
+// Gradle launches node by name, even when this script was invoked by absolute path.
+process.env.PATH = `${path.dirname(node)}${path.delimiter}${process.env.PATH}`;
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+function configureAndroidSdk() {
+  const candidates = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    path.join(homedir(), 'Android', 'Sdk'),
+    path.join(homedir(), 'Android', 'sdk'),
+  ].filter(Boolean);
+  const sdk = candidates.find((candidate) =>
+    existsSync(path.join(candidate, 'platform-tools')),
+  );
+
+  if (!sdk) {
+    throw new Error(
+      'Android SDK not found in WSL. Set ANDROID_HOME to a Linux Android SDK; the Windows SDK cannot compile Linux Gradle builds.',
+    );
+  }
+
+  process.env.ANDROID_HOME = sdk;
+  process.env.ANDROID_SDK_ROOT = sdk;
+  const linuxJdk17 = '/usr/lib/jvm/java-17-openjdk-amd64';
+  if (process.platform === 'linux' && existsSync(linuxJdk17)) {
+    process.env.JAVA_HOME = linuxJdk17;
+    process.env.PATH = `${linuxJdk17}/bin:${process.env.PATH}`;
+  }
+  writeFileSync(
+    path.join(root, 'android', 'local.properties'),
+    `sdk.dir=${sdk.replaceAll('\\', '\\\\').replaceAll(':', '\\:')}\n`,
+  );
 }
 
 if (platform !== 'android' && platform !== 'ios') {
@@ -42,7 +82,7 @@ if (
 }
 
 const windows = process.platform === 'win32';
-run(process.execPath, [
+run(node, [
   fileURLToPath(new URL('../node_modules/expo/bin/cli', import.meta.url)),
   'prebuild',
   '--platform',
@@ -54,6 +94,7 @@ run(process.execPath, [
 mkdirSync(new URL('../build/', import.meta.url), { recursive: true });
 
 if (platform === 'android') {
+  configureAndroidSdk();
   // Expo's generated release variant uses the debug key until production signing is configured.
   // Par défaut React Native compile le code natif pour 4 ABI, ce qui domine la durée du build.
   // arm64-v8a couvre les appareils, x86_64 les émulateurs ; surchargeable via MOBILE_ANDROID_ABIS.
@@ -75,6 +116,16 @@ if (platform === 'android') {
     ),
     new URL('../build/epickem-android-demo.apk', import.meta.url),
   );
+  if (process.argv.includes('--apk')) {
+    mkdirSync(new URL('../binaries/', import.meta.url), { recursive: true });
+    copyFileSync(
+      new URL(
+        '../android/app/build/outputs/apk/release/app-release.apk',
+        import.meta.url,
+      ),
+      new URL('../binaries/epickem.apk', import.meta.url),
+    );
+  }
 } else {
   run('pod', ['_1.17.0_', 'install'], `${root}/ios`);
   run('xcodebuild', [

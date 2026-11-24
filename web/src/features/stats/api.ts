@@ -1,12 +1,12 @@
 import { apiRequest } from '@/lib/api/client'
 import { exportFile, importFile } from '@/lib/api/files'
 import { gameId } from '@/features/games/validation'
-import type { Stat, StatChanges, StatFormat, StatImportReport, StatInput } from './types'
-import { statId } from './validation'
+import type { Stat, StatChanges, StatFormat, StatImportReport, StatInput, StatOption } from './types'
+import { normalizeStat, statId } from './validation'
 
 export const STATS_PAGE_SIZE = 12
 
-export function listStats(
+export async function listStats(
   query: { limit?: number; offset?: number } = {},
   signal?: AbortSignal,
 ) {
@@ -14,7 +14,7 @@ export function listStats(
     limit: String(Math.min(100, Math.max(1, Math.trunc(query.limit ?? STATS_PAGE_SIZE)))),
     offset: String(Math.max(0, Math.trunc(query.offset ?? 0))),
   })
-  return apiRequest<Stat[]>(`/stats?${params}`, { signal })
+  return (await apiRequest<Stat[]>(`/stats?${params}`, { signal })).map(normalizeStat)
 }
 
 // Toutes les statistiques (pour proposer celles qui restent à associer à un jeu).
@@ -29,15 +29,15 @@ export async function listAllStats(signal?: AbortSignal): Promise<Stat[]> {
 }
 
 export async function getStat(id: string, signal?: AbortSignal) {
-  return apiRequest<Stat>(`/stats/${statId(id)}`, { signal })
+  return normalizeStat(await apiRequest<Stat>(`/stats/${statId(id)}`, { signal }))
 }
 
-export function createStat(input: StatInput) {
-  return apiRequest<Stat>('/stats', { method: 'POST', body: input, expectedStatus: 201 })
+export async function createStat(input: StatInput) {
+  return normalizeStat(await apiRequest<Stat>('/stats', { method: 'POST', body: input, expectedStatus: 201 }))
 }
 
 export async function updateStat(id: string, changes: StatChanges) {
-  return apiRequest<Stat>(`/stats/${statId(id)}`, { method: 'PATCH', body: changes })
+  return normalizeStat(await apiRequest<Stat>(`/stats/${statId(id)}`, { method: 'PATCH', body: changes }))
 }
 
 // 204 No Content ; 409 stat_in_use si un tournoi en cours s'en sert.
@@ -46,7 +46,22 @@ export async function deleteStat(id: string): Promise<void> {
 }
 
 export async function listGameStats(id: string, signal?: AbortSignal) {
-  return apiRequest<Stat[]>(`/games/${gameId(id)}/stats`, { signal })
+  return (await apiRequest<Stat[]>(`/games/${gameId(id)}/stats`, { signal })).map(normalizeStat)
+}
+
+// Valeurs d'une statistique `select` pour un jeu, dans l'ordre d'affichage ; 404 si la
+// statistique n'est pas liée au jeu.
+export async function listStatOptions(gameIdValue: string, stat: string, signal?: AbortSignal) {
+  return apiRequest<StatOption[]>(`/games/${gameId(gameIdValue)}/stats/${statId(stat)}/options`, { signal })
+}
+
+// Remplace toute la liste (administrateur) ; 400 si la statistique n'est pas `select` ou si une
+// clé est invalide ou en double.
+export async function setStatOptions(gameIdValue: string, stat: string, options: StatOption[]) {
+  return apiRequest<StatOption[]>(`/games/${gameId(gameIdValue)}/stats/${statId(stat)}/options`, {
+    method: 'PUT',
+    body: { options },
+  })
 }
 
 // 204, sans effet si la statistique est déjà liée.

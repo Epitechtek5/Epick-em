@@ -61,12 +61,13 @@ describe('getStat / listGameStats', () => {
 describe('createStat / updateStat / deleteStat', () => {
   it('POST /stats attend 201', async () => {
     const fetchMock = mockFetch(jsonResponse(201, STAT_A))
-    await createStat({ name: 'Éliminations', key: 'kills', type: 'flat' })
+    await createStat({ name: 'Éliminations', key: 'kills', type: 'flat', scope: 'participant' })
     expect(fetchMock.mock.calls[0][1].method).toBe('POST')
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       name: 'Éliminations',
       key: 'kills',
       type: 'flat',
+      scope: 'participant',
     })
   })
 

@@ -7,7 +7,7 @@ jest.mock('../src/features/auth/session', () => ({ useAuth: jest.fn() }));
 jest.mock('expo-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
   Redirect: () => null,
-  router: { replace: jest.fn() },
+  router: { push: jest.fn(), replace: jest.fn() },
 }));
 const signIn = jest.fn();
 beforeEach(() => {
@@ -16,6 +16,9 @@ beforeEach(() => {
     user: null,
     token: null,
     initializing: false,
+    secondFactorRequired: false,
+    verifySecondFactor: jest.fn(),
+    completeGoogle: jest.fn(),
     signIn,
     logout: jest.fn(),
     refreshUser: jest.fn(),
@@ -29,6 +32,12 @@ it('validates missing credentials without making a login request', async () => {
   await fireEvent.press(screen.getByLabelText('Sign in'));
   expect(screen.getByText('Enter your email and password.')).toBeOnTheScreen();
   expect(signIn).not.toHaveBeenCalled();
+});
+
+it('opens the unauthenticated public tournament catalog', async () => {
+  await render(<LoginScreen />);
+  await fireEvent.press(screen.getByLabelText('Browse public tournaments'));
+  expect(router.push).toHaveBeenCalledWith('/public-tournaments');
 });
 it('submits credentials and displays invalid credentials without exposing secrets', async () => {
   signIn.mockRejectedValue(new ApiError(401, 'secret'));

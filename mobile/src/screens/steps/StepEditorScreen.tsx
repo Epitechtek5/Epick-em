@@ -2,6 +2,8 @@ import { useCallback, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StepRulesFields } from '@/components/steps/StepRulesFields';
+import { defaultStepRules } from '@/features/steps/types';
 import { StepOptionSelect } from '@/components/steps/option-select';
 import { Button } from '@/components/ui/button';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
@@ -29,6 +31,7 @@ import {
 } from '@/features/steps/validation';
 import { getTournament } from '@/features/tournaments/api';
 import { useTranslation } from '@/i18n';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 const FORMATS: readonly StepFormat[] = [
   'pool',
@@ -40,11 +43,12 @@ const MATCH_TYPES: readonly StepMatchType[] = ['duel', 'ffa'];
 
 export default function StepEditorScreen() {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const { tournamentId, stepId } = useLocalSearchParams<{
     tournamentId: string;
     stepId?: string;
   }>();
+  const { canManage } = useTournamentAccess(tournamentId);
   const insets = useSafeAreaInsets();
   const [values, setValues] = useState<StepInput | null>(null);
   const [criterion, setCriterion] = useState('');
@@ -70,7 +74,7 @@ export default function StepEditorScreen() {
   );
   const resource = useGameResource(load, stepErrorKey);
 
-  if (user?.role !== 'admin') {
+  if (!canManage) {
     return <ScreenState error message={t('errors.forbidden')} />;
   }
   if (!resource.data) {
@@ -104,6 +108,7 @@ export default function StepEditorScreen() {
           matches_per_group: step.matches_per_group,
           advance_per_group: step.advance_per_group,
           tiebreak: step.tiebreak,
+          rules: step.rules ?? defaultStepRules,
         }
       : {
           position: (previous?.position ?? 0) + 1,
@@ -114,6 +119,7 @@ export default function StepEditorScreen() {
           matches_per_group: 1,
           advance_per_group: 1,
           tiebreak: [],
+          rules: defaultStepRules,
         });
 
   function change<K extends keyof StepInput>(field: K, value: StepInput[K]) {
@@ -214,15 +220,26 @@ export default function StepEditorScreen() {
           labelFor={(value) => t(`steps.format.${value}`)}
           onSelect={(value) => {
             change('format', value);
-            if (value !== 'pool') change('group_count', 1);
+            if (value !== 'pool') {
+              change('group_count', 1);
+              change('match_type', 'duel');
+            }
           }}
         />
         <StepOptionSelect
           label={t('steps.fields.matchType')}
           value={formValues.match_type}
-          options={MATCH_TYPES}
+          options={formValues.format === 'pool' ? MATCH_TYPES : ['duel']}
           labelFor={(value) => t(`steps.matchType.${value}`)}
-          onSelect={(value) => change('match_type', value)}
+          onSelect={(value) => {
+            change('match_type', value);
+            if (value === 'ffa')
+              change('rules', {
+                ...(formValues.rules ?? defaultStepRules),
+                best_of: 1,
+                best_of_by_round: {},
+              });
+          }}
         />
 
         <Section
@@ -271,6 +288,13 @@ export default function StepEditorScreen() {
           })}
         </Text>
 
+        <StepRulesFields
+          rules={formValues.rules ?? defaultStepRules}
+          matchType={formValues.match_type}
+          onChange={(rules) => change('rules', rules)}
+          error={errors.rules}
+        />
+
         <Section
           title={t('steps.tiebreak.title')}
           description={t('steps.tiebreak.help')}
@@ -281,7 +305,10 @@ export default function StepEditorScreen() {
             className="flex-row items-center gap-2 rounded-md border border-border p-2"
           >
             <Text className="min-w-0 flex-1">
-              {index + 1}. {item}
+              {index + 1}.{' '}
+              {['head_to_head', 'game_differential', 'buchholz'].includes(item)
+                ? t(`steps.advanced.criteria.${item}`)
+                : item}
             </Text>
             <Button
               size="sm"
@@ -317,16 +344,23 @@ export default function StepEditorScreen() {
           </View>
         ))}
         <View className="flex-row items-center gap-2">
-          <Input
-            className="flex-1"
-            accessibilityLabel={t('steps.tiebreak.criterion')}
-            placeholder={t('steps.tiebreak.placeholder')}
-            value={criterion}
-            invalid={Boolean(errors.tiebreak)}
-            autoCapitalize="none"
-            autoCorrect={false}
-            onChangeText={setCriterion}
-          />
+          <View className="flex-1">
+            <StepOptionSelect
+              label={t('steps.tiebreak.criterion')}
+              value={criterion}
+              options={[
+                'head_to_head',
+                'game_differential',
+                ...(formValues.format === 'swiss' ? ['buchholz'] : []),
+              ]}
+              labelFor={(value) =>
+                value
+                  ? t(`steps.advanced.criteria.${value}`)
+                  : t('steps.advanced.chooseCriterion')
+              }
+              onSelect={setCriterion}
+            />
+          </View>
           <Button
             variant="outline"
             disabled={!criterion.trim() || formValues.tiebreak.length >= 8}
@@ -338,7 +372,6 @@ export default function StepEditorScreen() {
         {errors.tiebreak ? (
           <Text className="text-sm text-destructive">{t(errors.tiebreak)}</Text>
         ) : null}
-        <Text variant="muted">{t('steps.tiebreak.limitation')}</Text>
 
         <Button disabled={busy} onPress={() => void save()}>
           <Text>{t('common.save')}</Text>

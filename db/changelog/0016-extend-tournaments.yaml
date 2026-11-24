@@ -1,0 +1,123 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0016-extend-tournaments
+      author: epickem
+      changes:
+        # Configuration : mode, lieu, visibilité, règles, composition des équipes, inscriptions.
+        - sql:
+            sql: |
+              ALTER TABLE tournaments
+                ADD COLUMN mode varchar(16) NOT NULL DEFAULT 'online',
+                ADD COLUMN location text,
+                ADD COLUMN visibility varchar(16) NOT NULL DEFAULT 'public',
+                ADD COLUMN rules text,
+                ADD COLUMN team_min_starters integer,
+                ADD COLUMN team_max_starters integer,
+                ADD COLUMN team_max_substitutes integer,
+                ADD COLUMN registration_policy varchar(20) NOT NULL DEFAULT 'open',
+                ADD COLUMN waiting_list_enabled boolean NOT NULL DEFAULT false,
+                ADD COLUMN registration_fields jsonb NOT NULL DEFAULT '[]'::jsonb,
+                ADD COLUMN check_in_open_at timestamptz,
+                ADD COLUMN check_in_close_at timestamptz,
+                ADD COLUMN check_in_settled_at timestamptz,
+                ADD COLUMN owner_id uuid REFERENCES users(id) ON DELETE SET NULL,
+                ADD COLUMN is_template boolean NOT NULL DEFAULT false;
+              -- L'ancien team_size devient une fourchette de titulaires [team_size, team_size] ;
+              -- le nombre de remplaçants reste illimité (NULL), comme avant.
+              UPDATE tournaments SET team_min_starters = team_size, team_max_starters = team_size;
+              ALTER TABLE tournaments DROP CONSTRAINT tournaments_team_size_check;
+              ALTER TABLE tournaments DROP COLUMN team_size;
+              -- Les tournois existants n'ont pas de créateur connu : le plus ancien administrateur
+              -- en devient propriétaire.
+              UPDATE tournaments SET owner_id = (
+                SELECT id FROM users WHERE role = 'admin' ORDER BY created_at, id LIMIT 1);
+              ALTER TABLE tournaments
+                ADD CONSTRAINT tournaments_mode_check CHECK (mode IN ('online', 'in_person', 'hybrid')),
+                ADD CONSTRAINT tournaments_visibility_check CHECK (visibility IN ('public', 'invitation_only')),
+                ADD CONSTRAINT tournaments_registration_policy_check CHECK (registration_policy IN ('open', 'approval_required')),
+                ADD CONSTRAINT tournaments_team_composition_check CHECK (
+                  (participant_type = 'team' AND team_min_starters IS NOT NULL AND team_min_starters > 0
+                     AND team_max_starters IS NOT NULL AND team_max_starters >= team_min_starters
+                     AND (team_max_substitutes IS NULL OR team_max_substitutes >= 0))
+                  OR (participant_type = 'solo' AND team_min_starters IS NULL
+                     AND team_max_starters IS NULL AND team_max_substitutes IS NULL)),
+                ADD CONSTRAINT tournaments_check_in_check CHECK (
+                  check_in_open_at IS NULL OR check_in_close_at IS NULL
+                  OR check_in_close_at >= check_in_open_at),
+                ADD CONSTRAINT tournaments_registration_fields_check CHECK (jsonb_typeof(registration_fields) = 'array');
+              CREATE INDEX tournaments_owner_idx ON tournaments (owner_id);
+              CREATE INDEX tournaments_visibility_idx ON tournaments (visibility) WHERE NOT is_template
+            rollback: |
+              DROP INDEX tournaments_visibility_idx;
+              DROP INDEX tournaments_owner_idx;
+              ALTER TABLE tournaments ADD COLUMN team_size integer;
+              UPDATE tournaments SET team_size = team_max_starters;
+              ALTER TABLE tournaments
+                DROP CONSTRAINT tournaments_registration_fields_check,
+                DROP CONSTRAINT tournaments_check_in_check,
+                DROP CONSTRAINT tournaments_team_composition_check,
+                DROP CONSTRAINT tournaments_registration_policy_check,
+                DROP CONSTRAINT tournaments_visibility_check,
+                DROP CONSTRAINT tournaments_mode_check,
+                DROP COLUMN is_template, DROP COLUMN owner_id, DROP COLUMN check_in_settled_at,
+                DROP COLUMN check_in_close_at, DROP COLUMN check_in_open_at,
+                DROP COLUMN registration_fields, DROP COLUMN waiting_list_enabled,
+                DROP COLUMN registration_policy, DROP COLUMN team_max_substitutes,
+                DROP COLUMN team_max_starters, DROP COLUMN team_min_starters, DROP COLUMN rules,
+                DROP COLUMN visibility, DROP COLUMN location, DROP COLUMN mode;
+              ALTER TABLE tournaments ADD CONSTRAINT tournaments_team_size_check CHECK (
+                (participant_type = 'team' AND team_size IS NOT NULL AND team_size > 0)
+                OR (participant_type = 'solo' AND team_size IS NULL))
+        # Inscrits : statuts d'approbation et de liste d'attente, réponses aux champs personnalisés.
+        - sql:
+            sql: |
+              ALTER TABLE tournament_participant
+                ADD COLUMN responses jsonb NOT NULL DEFAULT '{}'::jsonb,
+                DROP CONSTRAINT tournament_participant_status_check,
+                ADD CONSTRAINT tournament_participant_status_check CHECK (status IN (
+                  'pending', 'rejected', 'waitlisted', 'registered', 'checked_in', 'absent',
+                  'disqualified', 'withdrawn')),
+                ADD CONSTRAINT tournament_participant_responses_check CHECK (jsonb_typeof(responses) = 'object');
+              CREATE INDEX tournament_participant_status_idx ON tournament_participant (tournament_id, status, registered_at)
+            rollback: |
+              DROP INDEX tournament_participant_status_idx;
+              UPDATE tournament_participant SET status = 'withdrawn' WHERE status IN ('pending', 'rejected', 'waitlisted', 'absent');
+              ALTER TABLE tournament_participant
+                DROP CONSTRAINT tournament_participant_responses_check,
+                DROP CONSTRAINT tournament_participant_status_check,
+                ADD CONSTRAINT tournament_participant_status_check CHECK (status IN ('registered', 'checked_in', 'disqualified', 'withdrawn')),
+                DROP COLUMN responses
+        # Rôles propres à un tournoi (le propriétaire est tournaments.owner_id), invitations, audit.
+        - sql:
+            sql: |
+              CREATE TABLE tournament_role (
+                tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role varchar(8) NOT NULL CHECK (role IN ('admin', 'referee')),
+                granted_by uuid REFERENCES users(id) ON DELETE SET NULL,
+                granted_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (tournament_id, user_id)
+              );
+              CREATE INDEX tournament_role_user_idx ON tournament_role (user_id);
+              CREATE TABLE tournament_invitation (
+                tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                invited_by uuid REFERENCES users(id) ON DELETE SET NULL,
+                invited_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (tournament_id, user_id)
+              );
+              CREATE INDEX tournament_invitation_user_idx ON tournament_invitation (user_id);
+              CREATE TABLE tournament_role_audit (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+                actor_id uuid REFERENCES users(id) ON DELETE SET NULL,
+                action varchar(16) NOT NULL CHECK (action IN ('assign', 'revoke', 'transfer')),
+                target_user_id uuid,
+                role varchar(8),
+                created_at timestamptz NOT NULL DEFAULT now()
+              );
+              CREATE INDEX tournament_role_audit_tournament_idx ON tournament_role_audit (tournament_id, created_at)
+            rollback: |
+              DROP TABLE tournament_role_audit;
+              DROP TABLE tournament_invitation;
+              DROP TABLE tournament_role

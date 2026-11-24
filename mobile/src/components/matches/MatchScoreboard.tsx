@@ -1,3 +1,4 @@
+import { useTournamentSource } from '@/features/tournaments/source-context';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { Text } from '@/components/ui/text';
@@ -18,6 +19,7 @@ export function MatchScoreboard({
   data: MatchContext;
 }) {
   const { t, i18n } = useTranslation();
+  const source = useTournamentSource();
   const number = matchNumber(data.matches, match.id);
   const group = data.groups.find((item) => item.group_id === match.group_id);
   const metadata = [
@@ -86,9 +88,18 @@ export function MatchScoreboard({
                 className="shrink-0 text-right font-semibold"
                 variant={hasResult ? 'default' : 'muted'}
               >
-                {hasResult
-                  ? t('steps.points', { points: participant.points })
-                  : t('matches.noResults')}
+                {source
+                  ? 'score' in participant.stats &&
+                    typeof participant.stats.score === 'number'
+                    ? participant.stats.score
+                    : '—'
+                  : hasResult
+                    ? t('steps.points', { points: participant.points })
+                    : t(
+                        (match.games?.length ?? 0) > 0
+                          ? 'matchGames.aggregatePending'
+                          : 'matches.noResults',
+                      )}
               </Text>
             </View>
           );
@@ -123,7 +134,8 @@ function StatLine({ values, data }: { values: FlatStats; data: MatchContext }) {
               {definition?.name ?? key.replaceAll('_', ' ')}
             </Text>
             <Text className="text-base font-semibold">
-              {value}
+              {definition?.options?.find((option) => option.key === value)
+                ?.label ?? value}
               {definition?.type === 'percent' ? ' %' : ''}
             </Text>
           </View>
@@ -137,7 +149,10 @@ export function ParticipantStats({
   score,
   data,
 }: {
-  score: Match['participants'][number];
+  score: Pick<
+    Match['participants'][number],
+    'participant_id' | 'stats' | 'result'
+  >;
   data: MatchContext;
 }) {
   const { t } = useTranslation();

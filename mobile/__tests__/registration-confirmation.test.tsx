@@ -19,6 +19,9 @@ async function submitRegistration() {
     user: null,
     token: null,
     initializing: false,
+    secondFactorRequired: false,
+    verifySecondFactor: jest.fn(),
+    completeGoogle: jest.fn(),
     signIn: jest.fn(),
     logout: jest.fn(),
     refreshUser: jest.fn(),
@@ -50,6 +53,7 @@ async function submitRegistration() {
     username: 'alice',
     password: 'Password1!',
     email: 'alice@example.com',
+    language: 'en',
   });
 }
 

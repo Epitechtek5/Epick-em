@@ -1,3 +1,4 @@
+import { useTournamentSource } from '@/features/tournaments/source-context';
 import { useCallback } from 'react';
 import { FlatList, Pressable, RefreshControl, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -7,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { Text } from '@/components/ui/text';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { useAuth } from '@/features/auth/session';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 import { useGameResource } from '@/features/games/use-game-resource';
 import { listSteps } from '@/features/steps/api';
 import { stepErrorKey } from '@/features/steps/errors';
@@ -18,8 +19,9 @@ import { useTranslation } from '@/i18n';
 
 export default function TournamentStepsScreen() {
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const source = useTournamentSource();
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
+  const { canManage } = useTournamentAccess(tournamentId);
   const insets = useSafeAreaInsets();
   const load = useCallback(
     async (accessToken: string) => {
@@ -58,9 +60,10 @@ export default function TournamentStepsScreen() {
   }
 
   const editable =
-    user?.role === 'admin' &&
-    ['draft', 'registration'].includes(data.tournament.status);
-  const chainProblems = stepChainProblems(data.tournament, data.steps);
+    canManage && ['draft', 'registration'].includes(data.tournament.status);
+  const chainProblems = source
+    ? []
+    : stepChainProblems(data.tournament, data.steps);
 
   return (
     <FlatList
@@ -77,7 +80,9 @@ export default function TournamentStepsScreen() {
       }
       ListHeaderComponent={
         <View className="gap-3">
-          <Text variant="muted">{t('steps.progressionHint')}</Text>
+          {!source ? (
+            <Text variant="muted">{t('steps.progressionHint')}</Text>
+          ) : null}
           {error ? <FormMessage>{t(error)}</FormMessage> : null}
           {chainProblems.map((problem) => (
             <FormMessage key={problem}>{t(problem)}</FormMessage>
@@ -100,7 +105,7 @@ export default function TournamentStepsScreen() {
       ListEmptyComponent={<ScreenState message={t('steps.empty')} />}
       renderItem={({ item, index }) => (
         <View className="gap-1">
-          {index > 0 ? (
+          {index > 0 && !source ? (
             <Text className="text-center" variant="muted">
               ↓
             </Text>
@@ -125,19 +130,23 @@ export default function TournamentStepsScreen() {
                   {t(`steps.format.${item.format}`)} ·{' '}
                   {t(`steps.matchType.${item.match_type}`)}
                 </Text>
-                <Text variant="muted">
-                  {t('steps.summary', {
-                    groups: item.group_count,
-                    size: item.group_size,
-                    advance: item.advance_per_group,
-                  })}
-                </Text>
-                <Text variant="muted">
-                  {t('steps.capacityProgression', {
-                    capacity: item.group_count * item.group_size,
-                    qualified: item.group_count * item.advance_per_group,
-                  })}
-                </Text>
+                {!source ? (
+                  <>
+                    <Text variant="muted">
+                      {t('steps.summary', {
+                        groups: item.group_count,
+                        size: item.group_size,
+                        advance: item.advance_per_group,
+                      })}
+                    </Text>
+                    <Text variant="muted">
+                      {t('steps.capacityProgression', {
+                        capacity: item.group_count * item.group_size,
+                        qualified: item.group_count * item.advance_per_group,
+                      })}
+                    </Text>
+                  </>
+                ) : null}
               </CardContent>
             </Card>
           </Pressable>

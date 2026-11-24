@@ -30,18 +30,18 @@ export function TeamCard({ to, name, tag, pictureUrl, gameName, ownerName, owned
           <dl className="grid gap-0.5 text-sm text-muted-foreground">
             {tag ? (
               <div className="flex gap-1">
-                <dt>{t('teams.tag')} :</dt>
+                <dt>{t('teams.tag')}{t('common.colon')}</dt>
                 <dd className="font-mono">{tag}</dd>
               </div>
             ) : null}
             {gameName !== undefined ? (
               <div className="flex gap-1">
-                <dt>{t('teams.game')} :</dt>
+                <dt>{t('teams.game')}{t('common.colon')}</dt>
                 <dd className="truncate">{gameName}</dd>
               </div>
             ) : null}
             <div className="flex gap-1">
-              <dt>{t('teams.owner')} :</dt>
+              <dt>{t('teams.owner')}{t('common.colon')}</dt>
               <dd className="truncate">
                 {ownerName ?? t('teams.unknownUser')}
                 {owned ? ` (${t('teams.you')})` : ''}

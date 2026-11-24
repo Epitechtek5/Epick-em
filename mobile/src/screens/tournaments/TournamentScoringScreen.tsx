@@ -1,3 +1,4 @@
+import { useTournamentSource } from '@/features/tournaments/source-context';
 import { useCallback, useState } from 'react';
 import {
   Alert,
@@ -27,11 +28,14 @@ import { tournamentErrorKey } from '@/features/tournaments/errors';
 import type { ScoringMode, ScoringRule } from '@/features/tournaments/types';
 import { parseScoringDefinition } from '@/features/tournaments/validation';
 import { useTranslation } from '@/i18n';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 
 export default function TournamentScoringScreen() {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const source = useTournamentSource();
+  const { token } = useAuth();
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
+  const { canManage } = useTournamentAccess(tournamentId);
   const insets = useSafeAreaInsets();
   const [selected, setSelected] = useState<ScoringRule | null>(null);
   const [statId, setStatId] = useState('');
@@ -68,7 +72,7 @@ export default function TournamentScoringScreen() {
   }
 
   async function save() {
-    if (!token || user?.role !== 'admin' || busy) return;
+    if (!token || !canManage || busy) return;
     const definition = parseScoringDefinition(mode, value);
     if (!statId || !definition) {
       setMessage('tournaments.validation.scoring');
@@ -92,7 +96,7 @@ export default function TournamentScoringScreen() {
   }
 
   function remove(rule: ScoringRule) {
-    if (!token || user?.role !== 'admin') return;
+    if (!token || !canManage) return;
     Alert.alert(
       t('tournaments.confirmTitle'),
       t('tournaments.confirmRuleDelete'),
@@ -119,7 +123,7 @@ export default function TournamentScoringScreen() {
     );
   }
 
-  if (loading || error || !data)
+  if (!data || (!source && (loading || error)))
     return (
       <ScreenState
         loading={loading}
@@ -129,14 +133,15 @@ export default function TournamentScoringScreen() {
       />
     );
   const editable =
-    user?.role === 'admin' &&
-    ['draft', 'registration'].includes(data.tournament.status);
+    canManage && ['draft', 'registration'].includes(data.tournament.status);
   const statById = new Map(data.stats.map((stat) => [stat.id, stat]));
-  const available = data.stats.filter(
-    (stat) =>
-      !data.rules.some((rule) => rule.stat_id === stat.id) &&
-      stat.name.toLowerCase().includes(search.toLowerCase()),
-  );
+  const available = data.stats
+    .filter((stat) => stat.type === 'flat' || stat.type === 'percent')
+    .filter(
+      (stat) =>
+        !data.rules.some((rule) => rule.stat_id === stat.id) &&
+        stat.name.toLowerCase().includes(search.toLowerCase()),
+    );
 
   return (
     <KeyboardAvoidingView
@@ -148,6 +153,9 @@ export default function TournamentScoringScreen() {
         contentContainerClassName="gap-4 px-5 py-5"
         contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
       >
+        {error && source ? (
+          <FormMessage>{`${t(error)} · ${t('external.cached')}`}</FormMessage>
+        ) : null}
         {message ? <FormMessage>{t(message)}</FormMessage> : null}
         <Text variant="muted">{t('tournaments.scoringHint')}</Text>
         {data.rules.length ? (

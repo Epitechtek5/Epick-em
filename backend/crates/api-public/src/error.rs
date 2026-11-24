@@ -60,16 +60,64 @@ pub enum ApiError {
     StepPositionTaken,
     /// Les inscriptions ne sont pas ouvertes.
     RegistrationClosed,
+    /// La fenêtre de pointage n'est pas ouverte.
+    CheckInClosed,
+    /// L'inscrit n'est pas dans le statut attendu pour cette opération.
+    InvalidParticipantState,
+    /// Le propriétaire du tournoi a changé entre-temps.
+    OwnershipChanged,
     /// Changement de statut impossible depuis le statut actuel.
     InvalidTransition,
     /// Adresse e-mail déjà utilisée par un autre compte.
     EmailTaken,
+    /// Invitation déjà en attente pour ce compte et cette ressource.
+    InvitationDuplicate,
+    /// Invitation acceptée, refusée ou révoquée.
+    InvitationNotPending,
+    /// Invitation expirée.
+    InvitationExpired,
+    /// Ressource de l'invitation disparue ou fermée.
+    InvitationUnavailable,
     /// Lien de réinitialisation du mot de passe inconnu, expiré ou déjà utilisé.
     InvalidResetToken,
     EmailUnverified,
     VerificationLimited,
+    /// Action sensible : l'authentification date de plus de dix minutes.
+    ReauthenticationRequired,
+    /// Code TOTP ou de récupération refusé.
+    InvalidSecondFactor,
+    /// Trop de tentatives (connexion Google, codes de double authentification).
+    TooManyAttempts,
+    /// Connexion Google ou double authentification non configurée sur ce serveur.
+    NotConfigured,
+    /// Le fournisseur d'identité est injoignable ou a refusé l'échange.
+    ProviderUnavailable,
+    /// `state` OAuth inconnu, expiré, déjà utilisé ou d'un autre usage.
+    InvalidOAuthState,
+    /// Un compte utilise déjà l'adresse du compte Google : se connecter puis lier Google.
+    AccountExists,
+    /// Le compte Google n'a pas d'adresse e-mail vérifiée.
+    ProviderEmailUnverified,
+    /// Le compte Google est lié à un autre compte, ou ce compte est déjà lié à Google.
+    IdentityTaken,
+    /// Refus de retirer la dernière méthode de connexion du compte.
+    LastLoginMethod,
+    TwoFactorAlreadyEnabled,
+    TwoFactorNotEnabled,
+    /// Aucun enrôlement TOTP en attente de confirmation.
+    TwoFactorNotPending,
+    /// Aperçu d'import inconnu, expiré ou déjà appliqué.
+    ImportPreviewExpired,
+    /// L'état de la base a changé depuis l'aperçu : il ne s'applique plus.
+    ImportPreviewStale,
+    /// L'aperçu contient des opérations destructives qui exigent une confirmation explicite.
+    ImportConfirmationRequired,
     /// Le tournoi est géré par une source externe : il ne se modifie pas par l'API.
     ExternallyManaged,
+    /// Le match a commencé (ou est terminé, annulé) : son pronostic ne change plus.
+    PredictionLocked,
+    /// Les réponses à cette question de Pick'em sont fermées.
+    PickemLocked,
     /// Ce tournoi externe est déjà importé.
     AlreadyImported,
     /// Une synchronisation de ce tournoi externe est déjà en cours.
@@ -108,6 +156,16 @@ impl ApiError {
                 "Identifiants ou jeton invalides",
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Action non autorisée"),
+            ApiError::PredictionLocked => (
+                StatusCode::CONFLICT,
+                "prediction_locked",
+                "Le match a commencé : le pronostic est verrouillé",
+            ),
+            ApiError::PickemLocked => (
+                StatusCode::CONFLICT,
+                "pickem_locked",
+                "Les réponses à cette question sont fermées",
+            ),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Ressource introuvable"),
             ApiError::Conflict => (
                 StatusCode::CONFLICT,
@@ -184,6 +242,21 @@ impl ApiError {
                 "registration_closed",
                 "Les inscriptions à ce tournoi ne sont pas ouvertes",
             ),
+            ApiError::CheckInClosed => (
+                StatusCode::CONFLICT,
+                "check_in_closed",
+                "La fenêtre de pointage de ce tournoi n'est pas ouverte",
+            ),
+            ApiError::InvalidParticipantState => (
+                StatusCode::CONFLICT,
+                "invalid_participant_state",
+                "Cet inscrit n'est pas dans le statut attendu pour cette opération",
+            ),
+            ApiError::OwnershipChanged => (
+                StatusCode::CONFLICT,
+                "ownership_changed",
+                "Le propriétaire du tournoi a changé : réessayez",
+            ),
             ApiError::InvalidTransition => (
                 StatusCode::CONFLICT,
                 "invalid_status_transition",
@@ -194,10 +267,110 @@ impl ApiError {
                 "email_taken",
                 "Cette adresse e-mail est déjà utilisée",
             ),
+            ApiError::InvitationDuplicate => (
+                StatusCode::CONFLICT,
+                "invitation_already_pending",
+                "Une invitation est déjà en attente pour ce compte et cette ressource",
+            ),
+            ApiError::InvitationNotPending => (
+                StatusCode::CONFLICT,
+                "invitation_not_pending",
+                "Cette invitation n'est plus en attente",
+            ),
+            ApiError::InvitationExpired => (
+                StatusCode::GONE,
+                "invitation_expired",
+                "Cette invitation a expiré",
+            ),
+            ApiError::InvitationUnavailable => (
+                StatusCode::CONFLICT,
+                "invitation_unavailable",
+                "La ressource de cette invitation n'accepte plus de nouveau membre ou participant",
+            ),
             ApiError::InvalidResetToken => (
                 StatusCode::BAD_REQUEST,
                 "invalid_reset_token",
                 "Lien de réinitialisation invalide ou expiré",
+            ),
+            ApiError::ReauthenticationRequired => (
+                StatusCode::FORBIDDEN,
+                "reauthentication_required",
+                "Reconnectez-vous pour effectuer cette action",
+            ),
+            ApiError::InvalidSecondFactor => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_second_factor",
+                "Code de vérification invalide",
+            ),
+            ApiError::TooManyAttempts => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_attempts",
+                "Trop de tentatives, réessayez plus tard",
+            ),
+            ApiError::NotConfigured => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "not_configured",
+                "Fonctionnalité non configurée sur ce serveur",
+            ),
+            ApiError::ProviderUnavailable => (
+                StatusCode::BAD_GATEWAY,
+                "provider_unavailable",
+                "Le fournisseur d'identité n'a pas pu être contacté",
+            ),
+            ApiError::InvalidOAuthState => (
+                StatusCode::BAD_REQUEST,
+                "invalid_oauth_state",
+                "Demande de connexion inconnue ou expirée, recommencez",
+            ),
+            ApiError::AccountExists => (
+                StatusCode::CONFLICT,
+                "account_exists",
+                "Un compte utilise déjà cette adresse : connectez-vous puis liez Google depuis les paramètres",
+            ),
+            ApiError::ProviderEmailUnverified => (
+                StatusCode::FORBIDDEN,
+                "provider_email_unverified",
+                "L'adresse e-mail de ce compte Google n'est pas vérifiée",
+            ),
+            ApiError::IdentityTaken => (
+                StatusCode::CONFLICT,
+                "identity_taken",
+                "Ce compte Google est déjà lié à un compte, ou ce compte est déjà lié à Google",
+            ),
+            ApiError::LastLoginMethod => (
+                StatusCode::CONFLICT,
+                "last_login_method",
+                "Définissez d'abord un mot de passe : c'est la dernière méthode de connexion du compte",
+            ),
+            ApiError::TwoFactorAlreadyEnabled => (
+                StatusCode::CONFLICT,
+                "two_factor_enabled",
+                "La double authentification est déjà activée",
+            ),
+            ApiError::TwoFactorNotEnabled => (
+                StatusCode::CONFLICT,
+                "two_factor_not_enabled",
+                "La double authentification n'est pas activée",
+            ),
+            ApiError::TwoFactorNotPending => (
+                StatusCode::CONFLICT,
+                "two_factor_not_pending",
+                "Aucune activation de double authentification en cours",
+            ),
+            ApiError::ImportPreviewExpired => (
+                StatusCode::GONE,
+                "import_preview_expired",
+                "Aperçu d'import inconnu, expiré ou déjà appliqué",
+            ),
+            ApiError::ImportPreviewStale => (
+                StatusCode::CONFLICT,
+                "import_preview_stale",
+                "Les données ont changé depuis l'aperçu : refaites l'aperçu",
+            ),
+            ApiError::ImportConfirmationRequired => (
+                StatusCode::CONFLICT,
+                "import_confirmation_required",
+                "Cet import remplace des données existantes : confirmez explicitement",
             ),
             ApiError::ExternallyManaged => (
                 StatusCode::CONFLICT,

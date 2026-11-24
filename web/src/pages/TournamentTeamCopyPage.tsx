@@ -1,7 +1,8 @@
-import { Copy01Icon } from '@hugeicons/core-free-icons'
+import { ArrowLeft01Icon, Copy01Icon } from '@hugeicons/core-free-icons'
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
@@ -88,30 +89,24 @@ export default function TournamentTeamCopyPage() {
   }
 
   const back = (
-    <Link to={`/tournaments/${tournamentId}/teams`} className="text-primary underline underline-offset-4">
+    <Link to={`/tournaments/${tournamentId}/teams`} className={HERO_BACK}>
+      <Icon icon={ArrowLeft01Icon} size={16} />
       {t('tournamentTeams.returnToList')}
     </Link>
   )
 
   if (!valid) {
     return (
-      <div className="grid w-full max-w-2xl gap-4 self-start">
-        <h1 className="text-3xl font-semibold tracking-tight">{t('tournamentTeams.copy')}</h1>
+      <div className="grid w-full max-w-3xl gap-6 self-start">
+        <PageHero icon={Copy01Icon} title={t('tournamentTeams.copy')} />
         <StateMessage kind="error">{t('tournamentTeams.errors.invalidTournament')}</StateMessage>
       </div>
     )
   }
 
   return (
-    <div className="grid w-full max-w-2xl gap-6 self-start">
-      <div className="grid gap-2">
-        <h1 className="text-3xl font-semibold tracking-tight">{t('tournamentTeams.copy')}</h1>
-        <p className="text-muted-foreground">{t('tournamentTeams.copyHint')}</p>
-        <p className="text-sm text-muted-foreground">
-          {t('tournamentTeams.tournament')} : <span className="break-all font-mono">{tournamentId}</span>
-        </p>
-        <p>{back}</p>
-      </div>
+    <div className="grid w-full max-w-3xl gap-6 self-start">
+      <PageHero icon={Copy01Icon} title={t('tournamentTeams.copy')} description={t('tournamentTeams.copyHint')} back={back} />
 
       {error ? <StateMessage kind="error">{t(error)}</StateMessage> : null}
 

@@ -41,6 +41,7 @@ const URL: &str = "https://fake.test/t/winter-cup";
 struct FakeSource {
     down: AtomicBool,
     finished: AtomicBool,
+    paused: AtomicBool,
 }
 
 fn reference() -> ExternalTournamentRef {
@@ -200,6 +201,9 @@ impl TournamentConnector for FakeSource {
         tournament: &ExternalTournamentRef,
         event_ids: &[String],
     ) -> Result<ExternalTournament, ConnectorError> {
+        while self.paused.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         self.check()?;
         Ok(ExternalTournament {
             reference: tournament.clone(),
@@ -269,6 +273,7 @@ async fn build<F: std::future::Future<Output = ()>>(
     let source = Arc::new(FakeSource {
         down: AtomicBool::new(false),
         finished: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
     });
     let sync = SyncService::new(
         ConnectorRegistry::new().register(source.clone()),
@@ -395,6 +400,98 @@ async fn sources_and_resolution_are_reserved_to_admins() {
 }
 
 #[actix_web::test]
+async fn background_import_returns_before_fetching_and_publishes_results_later() {
+    let (app, s) = setup().await;
+    s.source.paused.store(true, Ordering::SeqCst);
+    let body = json!({ "url": URL, "event_ids": ["main"], "game_id": s.game });
+    let (status, queued) = tokio::time::timeout(
+        Duration::from_secs(1),
+        post(
+            &app,
+            "/external-tournaments?background=true",
+            &s.admin,
+            body.clone(),
+        ),
+    )
+    .await
+    .expect("Import must not wait for the provider snapshot");
+    assert_eq!(status, StatusCode::ACCEPTED, "{queued}");
+    assert!(queued.get("snapshot").is_none());
+    assert!(queued["last_success_at"].is_null());
+    let id = queued["tournament_id"].as_str().unwrap();
+    let path = format!("/tournaments/{id}/source?details=true");
+    let (_, pending) = get(&app, &path, &s.player).await;
+    assert!(pending["snapshot"].is_null());
+    let (status, _) = post(
+        &app,
+        "/external-tournaments?background=true",
+        &s.admin,
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    s.source.paused.store(false, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (_, ready) = get(&app, &path, &s.player).await;
+            if !ready["snapshot"].is_null() {
+                assert!(!ready["last_success_at"].is_null());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("Background import must eventually publish the snapshot");
+}
+
+#[actix_web::test]
+async fn background_import_keeps_failed_sources_for_retry() {
+    let (app, s) = setup().await;
+    s.source.paused.store(true, Ordering::SeqCst);
+    let (status, queued) = post(
+        &app,
+        "/external-tournaments?background=true",
+        &s.admin,
+        json!({ "url": URL, "event_ids": ["main"], "game_id": s.game }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    s.source.down.store(true, Ordering::SeqCst);
+    s.source.paused.store(false, Ordering::SeqCst);
+    let path = format!(
+        "/tournaments/{}/source?details=true",
+        queued["tournament_id"].as_str().unwrap()
+    );
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (status, failed) = get(&app, &path, &s.player).await;
+            assert_eq!(status, StatusCode::OK);
+            if failed["stale"] == true {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    s.source.down.store(false, Ordering::SeqCst);
+    let (status, recovered) = post(
+        &app,
+        &format!(
+            "/external-tournaments/{}/sync",
+            queued["id"].as_str().unwrap()
+        ),
+        &s.admin,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(recovered["stale"], false);
+    assert!(!recovered["snapshot"].is_null());
+}
+
+#[actix_web::test]
 async fn import_creates_a_read_only_tournament_once() {
     let (app, s) = setup().await;
     let source = import(&app, &s).await;
@@ -476,6 +573,19 @@ async fn import_creates_a_read_only_tournament_once() {
     assert_eq!(origin["provider_name"], "Fake");
     assert_eq!(origin["url"], URL);
     assert_eq!(origin["stale"], false);
+    assert_eq!(origin["id"], source["id"]);
+    assert!(origin["snapshot"].is_null());
+    let (status, details) = get(
+        &app,
+        &format!("/tournaments/{tournament}/source?details=true"),
+        &s.player,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(details["snapshot"], source["snapshot"]);
+    assert_eq!(details["capabilities"], source["capabilities"]);
+    assert!(details.get("last_error").is_none());
+    assert!(details.get("next_sync_at").is_none());
 }
 
 #[actix_web::test]
@@ -568,6 +678,14 @@ async fn a_source_outage_keeps_the_last_snapshot_and_recovers() {
     )
     .await;
     assert_eq!(origin["stale"], true);
+    let (_, cached) = get(
+        &app,
+        &format!("/tournaments/{tournament}/source?details=true"),
+        &s.player,
+    )
+    .await;
+    assert_eq!(cached["snapshot"], source["snapshot"]);
+    assert_eq!(cached["last_success_at"], source["last_success_at"]);
 
     // Résolution impossible pendant la panne : 503 sans détail technique.
     let (status, body) = post(&app, "/connectors/resolve", &s.admin, json!({ "url": URL })).await;
@@ -645,8 +763,9 @@ async fn import_sync_and_delete_on_postgres() {
     let root = format!("root{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     let admin_pool = pool.clone();
     let db = infra::CachedDb::new(pool.clone(), Arc::new(redis.clone()));
+    let store = Arc::new(PgStore::new(db.clone()));
     let (app, s) = build(
-        Arc::new(PgStore::new(db.clone())),
+        store.clone(),
         Arc::new(RedisSyncStore::with_prefix(
             db,
             redis.connection(),
@@ -670,14 +789,25 @@ async fn import_sync_and_delete_on_postgres() {
 
     let (status, source) = post(
         &app,
-        "/external-tournaments",
+        "/external-tournaments?background=true",
         &s.admin,
         json!({ "url": URL, "event_ids": ["main"], "game_id": s.game, "name": format!("Winter Cup {root}") }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{source}");
+    assert_eq!(status, StatusCode::ACCEPTED, "{source}");
     let id = source["id"].as_str().unwrap().to_string();
     let tournament = source["tournament_id"].as_str().unwrap().to_string();
+    let source = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let (_, ready) = get(&app, &format!("/external-tournaments/{id}"), &s.admin).await;
+            if !ready["last_success_at"].is_null() {
+                break ready;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Durable background import should publish its first snapshot");
     assert_eq!(source["snapshot"]["events"][0]["external_id"], "main");
     // Inscrits importés, tableau et résultats reportés et mis à jour sur place, servis depuis
     // Redis : la base n'en contient rien.
@@ -762,6 +892,10 @@ async fn import_sync_and_delete_on_postgres() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = get(&app, &format!("/tournaments/{tournament}"), &s.admin).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Réimporté, le tournoi reçoit des pronostics : en base, sans ses matchs.
+    s.source.finished.store(false, Ordering::SeqCst);
+    check_predictions_in_db(&app, &s, store.as_ref(), &pool).await;
 }
 
 /// Les inscrits de la source n'ont pas de compte : ils sont importés avec leur nom, et le
@@ -880,4 +1014,182 @@ async fn imported_entrants_and_results_are_projected_locally() {
     let (app, s) = setup().await;
     let source = import(&app, &s).await;
     check_projection(&app, &s, &source).await;
+}
+
+/// Pronostic et Pick'em d'un spectateur sur un tournoi importé : permis malgré la lecture
+/// seule, résolus d'après les résultats synchronisés. Renvoie le tournoi local.
+async fn check_predictions(app: &app_type!(), s: &Setup, store: &dyn AuthStore) -> String {
+    let source = import(app, s).await;
+    let id = source["id"].as_str().unwrap().to_string();
+    let tournament = source["tournament_id"].as_str().unwrap().to_string();
+    let (_, steps) = get(app, &format!("/tournaments/{tournament}/steps"), &s.player).await;
+    let step = steps[0]["id"].as_str().unwrap().to_string();
+    let (_, matches) = get(
+        app,
+        &format!("/tournaments/{tournament}/steps/{step}/matches"),
+        &s.player,
+    )
+    .await;
+    let match_id = matches[0]["id"].as_str().unwrap().to_string();
+    let (_, participants) = get(
+        app,
+        &format!("/tournaments/{tournament}/participants"),
+        &s.player,
+    )
+    .await;
+    let alice = participants
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["display_name"] == "Alice")
+        .unwrap()["id"]
+        .clone();
+
+    let prediction = format!("/tournaments/{tournament}/matches/{match_id}/prediction");
+    let (status, saved) = send(
+        app,
+        TestRequest::put(),
+        &prediction,
+        &s.player,
+        Some(json!({ "winner_id": alice })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    // Pas de barème chez la source : le meilleur marqueur n'est pas proposé.
+    let pickem = format!("/tournaments/{tournament}/pickem");
+    let (_, templates) = get(app, &format!("{pickem}/templates"), &s.admin).await;
+    let top_scorer = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["kind"] == "top_scorer")
+        .unwrap()
+        .clone();
+    assert_eq!(top_scorer["available"], false, "{templates}");
+    let (status, question) = post(
+        app,
+        &format!("{pickem}/questions"),
+        &s.admin,
+        json!({ "kind": "tournament_winner", "locks_at": "2099-01-01T00:00:00Z" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{question}");
+    let question = question["id"].as_str().unwrap().to_string();
+    let (status, answer) = send(
+        app,
+        TestRequest::put(),
+        &format!("{pickem}/questions/{question}/answer"),
+        &s.player,
+        Some(json!({ "participant_id": alice })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+
+    // Alice gagne chez la source ; la synchronisation puis la résolution donnent les points.
+    s.source.finished.store(true, Ordering::SeqCst);
+    let (status, _) = post(
+        app,
+        &format!("/external-tournaments/{id}/sync"),
+        &s.admin,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let report = api_public::resolution::resolve_tournament(store, tournament.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !report.settled,
+        "un tournoi importé peut encore être corrigé"
+    );
+    let (_, mine) = get(app, &prediction, &s.player).await;
+    assert_eq!(mine["outcome"], "correct", "{mine}");
+    let (_, board) = get(
+        app,
+        &format!("/tournaments/{tournament}/leaderboard"),
+        &s.player,
+    )
+    .await;
+    assert_eq!(board[0]["points"], 40.0, "{board}");
+    assert_eq!(board[0]["correct"], 2, "{board}");
+    tournament
+}
+
+#[actix_web::test]
+async fn spectators_predict_imported_tournaments() {
+    let store = Arc::new(MemoryStore::new());
+    let promoted = store.clone();
+    let (app, s) = build(
+        store.clone(),
+        Arc::new(MemorySyncStore::new().with_projection_cache(store.imports().cache())),
+        "root",
+        |name| async move { promoted.set_role(&name, Role::Admin) },
+    )
+    .await;
+    check_predictions(&app, &s, store.as_ref()).await;
+}
+
+/// Pronostics sur un tournoi importé, sur PostgreSQL et Redis : ils sont en base, les matchs
+/// qu'ils visent n'y sont pas, et la suppression du tournoi les emporte.
+async fn check_predictions_in_db(
+    app: &app_type!(),
+    s: &Setup,
+    store: &dyn AuthStore,
+    pool: &sqlx::PgPool,
+) {
+    let tournament = check_predictions(app, s, store).await;
+    let count = |sql: &'static str| {
+        let pool = pool.clone();
+        let tournament = tournament.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(sql)
+                .bind(tournament)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        count("SELECT count(*) FROM prediction WHERE tournament_id = $1::uuid").await,
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM pickem_answer WHERE tournament_id = $1::uuid").await,
+        1
+    );
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM match m JOIN step s ON s.id = m.step_id \
+             WHERE s.tournament_id = $1::uuid"
+        )
+        .await,
+        0,
+        "les matchs importés restent dans Redis"
+    );
+    // Le tournoi supprimé emporte pronostics et réponses.
+    let (_, sources) = get(app, "/external-tournaments", &s.admin).await;
+    let source = sources
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["tournament_id"] == tournament.as_str())
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, _) = send(
+        app,
+        TestRequest::delete(),
+        &format!("/external-tournaments/{source}"),
+        &s.admin,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        count("SELECT count(*) FROM prediction WHERE tournament_id = $1::uuid").await,
+        0
+    );
 }

@@ -14,6 +14,7 @@ export interface Registration {
   username: string
   email: string
   password: string
+  language?: 'fr' | 'en' | 'es'
 }
 
 // POST /register -> 201 { id, username } | 400 (`errors` par champ) | 409 (`username_taken`

@@ -1,3 +1,4 @@
+import { GoogleSignInButton } from '@/components/google-sign-in-button';
 import { AuthScreen } from '@/components/auth-screen';
 import { PasswordInput } from '@/components/ui/password-input';
 import { FormMessage } from '@/components/ui/feedback';
@@ -30,7 +31,7 @@ const INITIAL_FORM: RegisterForm = {
 };
 
 export default function RegisterScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const [form, setForm] = useState<RegisterForm>(INITIAL_FORM);
   const [errors, setErrors] = useState<RegisterErrors>({});
@@ -60,6 +61,10 @@ export default function RegisterScreen() {
         username: normalizeUsername(form.username),
         password: form.password,
         email,
+        language:
+          i18n.language === 'fr' || i18n.language === 'es'
+            ? i18n.language
+            : 'en',
       });
 
       router.replace({
@@ -191,6 +196,8 @@ export default function RegisterScreen() {
             <Text>{t('register.submit')}</Text>
           )}
         </Button>
+
+        <GoogleSignInButton disabled={isSubmitting} />
       </View>
 
       <View className="flex-row flex-wrap justify-center gap-1">

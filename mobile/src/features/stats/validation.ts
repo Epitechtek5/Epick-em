@@ -23,10 +23,19 @@ export function validateStat(values: StatValues): StatFieldErrors {
   ) {
     errors.key = 'stats.validation.key';
   }
-  if (values.type !== 'flat' && values.type !== 'percent') {
+  if (!['flat', 'percent', 'select', 'mvp'].includes(values.type)) {
     errors.type = 'stats.validation.type';
   }
 
+  const scope =
+    values.scope ?? (values.type === 'mvp' ? 'match' : 'participant');
+  if (
+    !['participant', 'match'].includes(scope) ||
+    (values.type === 'mvp' && scope !== 'match') ||
+    (['flat', 'percent'].includes(values.type) && scope !== 'participant')
+  ) {
+    errors.scope = 'stats.validation.scope';
+  }
   return errors;
 }
 
@@ -38,5 +47,11 @@ export function changedStatFields(
   if (original.name !== next.name.trim()) changes.name = next.name.trim();
   if (original.key !== next.key.trim()) changes.key = next.key.trim();
   if (original.type !== next.type) changes.type = next.type;
+  if (
+    (original.scope ?? (original.type === 'mvp' ? 'match' : 'participant')) !==
+      next.scope &&
+    next.scope
+  )
+    changes.scope = next.scope;
   return changes;
 }

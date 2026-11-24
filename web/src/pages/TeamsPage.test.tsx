@@ -13,6 +13,7 @@ import {
   TEAM_OTHER,
   userResponse,
 } from '@/test/render'
+import { chooseLanguage } from '@/test/language'
 
 // Serveur simulé : jeux, comptes et équipes (filtrées par game_id si présent).
 function server(teams = [TEAM_MINE, TEAM_OTHER]) {
@@ -175,9 +176,9 @@ describe('TeamsPage', () => {
     server([])
     renderApp('/teams')
     await screen.findByText('Aucune équipe trouvée.')
-    await user.selectOptions(screen.getByLabelText('Langue'), 'en')
+    await chooseLanguage(user, 'en')
     expect(await screen.findByText('No teams found.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 1, name: 'Teams' })).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Language'), 'fr')
+    await chooseLanguage(user, 'fr')
   })
 })

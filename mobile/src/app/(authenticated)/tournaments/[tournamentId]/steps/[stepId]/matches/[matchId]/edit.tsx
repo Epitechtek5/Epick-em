@@ -1,1 +1,4 @@
-export { default } from '@/screens/matches/MatchEditorScreen';
+import Screen from '@/screens/matches/MatchEditorScreen';
+import { withTournamentSource } from '@/components/tournaments/TournamentSourceBoundary';
+
+export default withTournamentSource(Screen, true);
