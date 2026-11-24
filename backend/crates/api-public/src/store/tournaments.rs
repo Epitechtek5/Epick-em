@@ -135,6 +135,10 @@ pub struct TournamentParticipant {
     pub status: ParticipantStatus,
     /// Horodatage RFC 3339 en UTC.
     pub registered_at: String,
+    /// Inscrit importé d'une source externe, sans compte local : son identifiant chez la source.
+    pub external_id: Option<String>,
+    /// Nom affiché d'un inscrit importé (son nom chez la source).
+    pub display_name: Option<String>,
 }
 
 /// Barème d'une statistique : `linear` donne `valeur × coefficient`, `table` associe une valeur

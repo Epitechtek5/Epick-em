@@ -4,31 +4,38 @@
 //! [`MemoryStore`] sert aux tests sans base.
 
 mod games;
+mod imported;
 mod matches;
 mod memory;
 mod postgres;
+mod projection;
 mod stats;
 mod steps;
 mod teams;
 mod tournaments;
 
 pub use self::games::{Game, GameInput, GameUpdate};
+pub use self::imported::{ImportedSummary, ImportedTournament, Imports};
 pub use self::matches::{
     Bracket, Match, MatchFinish, MatchImport, MatchInput, MatchParticipant, MatchResult,
     MatchScore, MatchStatus, MatchUpdate,
 };
 pub use self::memory::MemoryStore;
 pub use self::postgres::PgStore;
+pub use self::projection::{
+    ProjectedEntry, ProjectedGroup, ProjectedMatch, ProjectedMember, ProjectedParticipant,
+    ProjectedStep, Projection,
+};
 pub use self::stats::{Stat, StatInput, StatType, StatUpdate};
 pub use self::steps::{
     MatchType, Step, StepClosing, StepDefinition, StepFormat, StepGroup, StepInput, StepOutcome,
     StepParticipant, StepParticipantStatus, StepStart, StepStatus,
 };
-pub(crate) use self::teams::now_rfc3339;
 pub use self::teams::{
     MemberImport, Team, TeamImport, TeamInput, TeamMember, TeamRole, TeamUpdate, TournamentTeam,
     TournamentTeamInput, TournamentTeamMember,
 };
+pub(crate) use self::teams::{now_rfc3339, unix_to_rfc3339};
 pub use self::tournaments::{
     ParticipantImport, ParticipantInput, ParticipantStatus, ParticipantType, ScoringMode,
     ScoringRule, ScoringRuleDefinition, ScoringRuleImport, ScoringRuleInput, TeamScoringMode,
@@ -667,6 +674,54 @@ pub trait AuthStore: Send + Sync {
         &self,
         tournaments: Vec<TournamentImport>,
     ) -> Result<Vec<(Tournament, bool)>, StoreError>;
+
+    /// Modèles des tournois importés, servis par les lectures à la place de la base.
+    fn imports(&self) -> &Imports;
+
+    /// Reporte un tournoi importé dans le modèle local : statut, inscrits importés, étapes,
+    /// groupes, matchs et résultats, rangés dans le cache ([`Imports`]) et jamais en base. Les
+    /// identifiants locaux restent stables d'une synchronisation à l'autre ; ce qui a disparu
+    /// de la source disparaît du modèle. `false` si le tournoi n'existe pas.
+    async fn prepare_external(
+        &self,
+        tournament_id: Uuid,
+        projection: Projection,
+    ) -> Result<Option<Vec<connectors::sync::ProjectionEntry>>, StoreError> {
+        let previous = self.imports().tournament(tournament_id).await;
+        // Le jeu ne change pas : seul le premier report lit la ligne du tournoi.
+        let game_id = match &previous {
+            Some(model) => model.game_id,
+            None => match self.find_tournament(tournament_id).await? {
+                Some(tournament) => tournament.game_id,
+                None => return Ok(None),
+            },
+        };
+        let model =
+            ImportedTournament::build(tournament_id, game_id, previous.as_ref(), projection);
+        Ok(Some(Imports::prepare(&model).map_err(StoreError::Other)?))
+    }
+
+    async fn project_external(
+        &self,
+        tournament_id: Uuid,
+        projection: Projection,
+    ) -> Result<bool, StoreError> {
+        let Some(entries) = self.prepare_external(tournament_id, projection).await? else {
+            return Ok(false);
+        };
+        for entry in entries {
+            self.imports()
+                .cache()
+                .set(
+                    &entry.key,
+                    entry.value,
+                    infra::Ttl::from_secs(entry.ttl_secs),
+                )
+                .await
+                .map_err(|e| StoreError::Other(e.to_string()))?;
+        }
+        Ok(true)
+    }
 
     /// Remplace les inscrits du tournoi par `participants`, en une seule opération. Les comptes
     /// et les équipes existent, et les équipes sont celles du tournoi.

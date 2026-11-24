@@ -1,0 +1,29 @@
+{
+  "event": {
+    "id": 900,
+    "name": "Ultimate Singles",
+    "slug": "tournament/epick-open-2026/event/ultimate-singles",
+    "startAt": 1767225600,
+    "state": "ACTIVE",
+    "numEntrants": 4,
+    "videogame": {
+      "name": "Super Smash Bros. Ultimate"
+    },
+    "phases": [
+      {
+        "id": 1000,
+        "name": "Pools",
+        "phaseOrder": 1,
+        "bracketType": "ROUND_ROBIN",
+        "state": "COMPLETED"
+      },
+      {
+        "id": 1001,
+        "name": "Top 4",
+        "phaseOrder": 2,
+        "bracketType": "DOUBLE_ELIMINATION",
+        "state": "ACTIVE"
+      }
+    ]
+  }
+}

@@ -11,6 +11,8 @@ This file defines the development standards for the Epick'em mobile application.
 - Do not refactor unrelated code or introduce unnecessary abstractions.
 - Never change backend contracts to accommodate incorrect mobile assumptions.
 - Do not commit, push, or modify Git branches unless explicitly requested.
+- Leave commits and pushes to the user and provide a suggested commit message after validation.
+- Never create unsigned commits or disable commit signing. If signing fails or requires interactive input, let the user create the signed commit and push it.
 
 ## 2. Code quality and readability
 

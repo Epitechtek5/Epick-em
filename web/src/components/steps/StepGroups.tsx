@@ -51,6 +51,7 @@ export function StepGroups({ tournament, step, version }: { tournament: Tourname
       ? (known?.teams.get(participant.tournament_team_id) ?? t('tournaments.participants.unknownTeam'))
       : undefined
     if (tournament.participant_type === 'team' && teamName) return { name: teamName }
+    if (participant.display_name) return { name: participant.display_name }
     if (participant.user_id) return { name: names[participant.user_id] ?? t('teams.unknownUser'), detail: teamName }
     return { name: teamName ?? t('steps.groups.unknownParticipant') }
   }

@@ -1,0 +1,35 @@
+{
+  "event": {
+    "entrants": {
+      "pageInfo": {
+        "totalPages": 2
+      },
+      "nodes": [
+        {
+          "id": 7001,
+          "name": "Team A | Alpha",
+          "initialSeedNum": 1,
+          "participants": [
+            {
+              "id": 81,
+              "gamerTag": "Alpha",
+              "prefix": "Team A"
+            }
+          ]
+        },
+        {
+          "id": 7002,
+          "name": "Bravo",
+          "initialSeedNum": 2,
+          "participants": [
+            {
+              "id": 82,
+              "gamerTag": "Bravo",
+              "prefix": null
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

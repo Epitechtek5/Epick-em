@@ -2,7 +2,7 @@
 //! voir `db/changelog`).
 
 use super::{
-    AuthStore, Game, GameInput, GameUpdate, Match, MatchFinish, MatchImport, MatchInput,
+    AuthStore, Game, GameInput, GameUpdate, Imports, Match, MatchFinish, MatchImport, MatchInput,
     MatchParticipant, MatchScore, MatchStatus, MatchUpdate, ParticipantImport, ParticipantInput,
     ParticipantStatus, Role, ScoringRule, ScoringRuleDefinition, ScoringRuleInput, Stat, StatInput,
     StatUpdate, Step, StepClosing, StepDefinition, StepGroup, StepInput, StepParticipant,
@@ -29,15 +29,29 @@ const PROFILE_TTL: Ttl = Ttl::from_mins(5);
 
 /// Seuls les profils (sans empreinte de mot de passe) passent par le cache ; la connexion et le
 /// rafraîchissement lisent toujours la base.
+///
+/// Un tournoi importé (start.gg…) n'a en base que sa ligne : ses inscrits, étapes et matchs
+/// sont lus dans le cache ([`Imports`]).
 pub struct PgStore {
     db: CachedDb,
     pool: PgPool,
+    imports: Imports,
 }
 
 impl PgStore {
     pub fn new(db: CachedDb) -> Self {
         let pool = db.pool().clone();
-        PgStore { db, pool }
+        let imports = Imports::new(db.cache().clone());
+        PgStore { db, pool, imports }
+    }
+
+    /// Applique le statut et la taille des tournois importés, lus dans le cache.
+    async fn with_imports(&self, tournaments: &mut [Tournament]) {
+        for tournament in tournaments {
+            if let Some(summary) = self.imports.summary(tournament.id).await {
+                summary.apply(tournament);
+            }
+        }
     }
 }
 
@@ -587,6 +601,8 @@ fn participant(row: ParticipantRow) -> Result<TournamentParticipant, StoreError>
         tournament_team_id: row.3,
         status: row.4.parse()?,
         registered_at: row.5,
+        external_id: None,
+        display_name: None,
     })
 }
 
@@ -649,6 +665,10 @@ fn user(row: UserRow) -> Result<UserRecord, StoreError> {
 
 #[async_trait]
 impl AuthStore for PgStore {
+    fn imports(&self) -> &Imports {
+        &self.imports
+    }
+
     async fn create_user_with_token(
         &self,
         username: &str,
@@ -1798,9 +1818,12 @@ impl AuthStore for PgStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Tournament>, StoreError> {
-        sqlx::query_as::<_, TournamentRow>(&format!(
+        // Le statut d'un tournoi importé n'est pas en base : ses lignes passent le filtre, puis
+        // sont filtrées sur le statut lu dans le cache (une page peut alors être plus courte).
+        let mut tournaments = sqlx::query_as::<_, TournamentRow>(&format!(
             "SELECT {} FROM tournaments \
-             WHERE ($1::uuid IS NULL OR game_id = $1) AND ($2::text IS NULL OR status = $2) \
+             WHERE ($1::uuid IS NULL OR game_id = $1) AND ($2::text IS NULL OR status = $2 \
+               OR id IN (SELECT tournament_id FROM external_sources WHERE tournament_id IS NOT NULL)) \
              ORDER BY start_date, id LIMIT $3 OFFSET $4",
             tournament_columns()
         ))
@@ -1812,11 +1835,14 @@ impl AuthStore for PgStore {
         .await?
         .into_iter()
         .map(tournament)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+        self.with_imports(&mut tournaments).await;
+        tournaments.retain(|t| status.is_none_or(|status| t.status == status));
+        Ok(tournaments)
     }
 
     async fn find_tournament(&self, id: Uuid) -> Result<Option<Tournament>, StoreError> {
-        sqlx::query_as::<_, TournamentRow>(&format!(
+        let found = sqlx::query_as::<_, TournamentRow>(&format!(
             "SELECT {} FROM tournaments WHERE id = $1",
             tournament_columns()
         ))
@@ -1824,7 +1850,10 @@ impl AuthStore for PgStore {
         .fetch_optional(&self.pool)
         .await?
         .map(tournament)
-        .transpose()
+        .transpose()?;
+        let mut found: Vec<Tournament> = found.into_iter().collect();
+        self.with_imports(&mut found).await;
+        Ok(found.pop())
     }
 
     async fn create_tournament(&self, input: TournamentInput) -> Result<Tournament, StoreError> {
@@ -1916,6 +1945,7 @@ impl AuthStore for PgStore {
     }
 
     async fn delete_tournament(&self, id: Uuid) -> Result<bool, StoreError> {
+        self.imports.forget(id).await;
         let result = sqlx::query("DELETE FROM tournaments WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
@@ -2011,6 +2041,9 @@ impl AuthStore for PgStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TournamentParticipant>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.participants(limit, offset));
+        }
         sqlx::query_as::<_, ParticipantRow>(&format!(
             "SELECT {} FROM tournament_participant WHERE tournament_id = $1 \
              ORDER BY registered_at, id LIMIT $2 OFFSET $3",
@@ -2030,6 +2063,9 @@ impl AuthStore for PgStore {
         &self,
         id: Uuid,
     ) -> Result<Option<TournamentParticipant>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.participant(id)) {
+            return Ok(Some(found));
+        }
         sqlx::query_as::<_, ParticipantRow>(&format!(
             "SELECT {} FROM tournament_participant WHERE id = $1",
             participant_columns()
@@ -2110,6 +2146,9 @@ impl AuthStore for PgStore {
         &self,
         tournament_id: Uuid,
     ) -> Result<HashMap<Uuid, f64>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.points());
+        }
         let rows = sqlx::query_as::<_, (Uuid, f64)>(
             "SELECT participant_id, sum(points)::float8 FROM step_participant \
              WHERE tournament_id = $1 GROUP BY participant_id",
@@ -2121,6 +2160,9 @@ impl AuthStore for PgStore {
     }
 
     async fn list_steps(&self, tournament_id: Uuid) -> Result<Vec<Step>, StoreError> {
+        if let Some(model) = self.imports.tournament(tournament_id).await {
+            return Ok(model.steps);
+        }
         sqlx::query_as::<_, StepRow>(&format!(
             "SELECT {} FROM step WHERE tournament_id = $1 ORDER BY position",
             step_columns()
@@ -2134,6 +2176,9 @@ impl AuthStore for PgStore {
     }
 
     async fn find_step(&self, id: Uuid) -> Result<Option<Step>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.step(id)) {
+            return Ok(Some(found));
+        }
         sqlx::query_as::<_, StepRow>(&format!(
             "SELECT {} FROM step WHERE id = $1",
             step_columns()
@@ -2207,6 +2252,9 @@ impl AuthStore for PgStore {
     }
 
     async fn list_step_groups(&self, step_id: Uuid) -> Result<Vec<StepGroup>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.groups(step_id));
+        }
         Ok(sqlx::query_as::<_, (Uuid, Uuid, i32)>(
             "SELECT id, step_id, index FROM step_group WHERE step_id = $1 ORDER BY index",
         )
@@ -2226,6 +2274,9 @@ impl AuthStore for PgStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<StepParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.step_participants(step_id));
+        }
         sqlx::query_as::<_, StepParticipantRow>(
             "SELECT p.step_id, p.participant_id, p.group_id, p.points::float8, p.final_rank, \
                  p.status \
@@ -2312,6 +2363,9 @@ impl AuthStore for PgStore {
         group_id: Option<Uuid>,
         status: Option<MatchStatus>,
     ) -> Result<Vec<Match>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.matches(step_id, group_id, status));
+        }
         sqlx::query_as::<_, MatchRow>(&format!(
             "SELECT {} FROM match \
              WHERE step_id = $1 AND ($2::uuid IS NULL OR group_id = $2) \
@@ -2331,6 +2385,9 @@ impl AuthStore for PgStore {
     }
 
     async fn find_match(&self, id: Uuid) -> Result<Option<Match>, StoreError> {
+        if let Some(found) = self.imports.owner(id).await.and_then(|m| m.find_match(id)) {
+            return Ok(Some(found));
+        }
         sqlx::query_as::<_, MatchRow>(&format!(
             "SELECT {} FROM match WHERE id = $1",
             match_columns()
@@ -2346,6 +2403,9 @@ impl AuthStore for PgStore {
         &self,
         step_id: Uuid,
     ) -> Result<Vec<MatchParticipant>, StoreError> {
+        if let Some(model) = self.imports.owner(step_id).await {
+            return Ok(model.match_participants(step_id));
+        }
         sqlx::query_as::<_, MatchParticipantRow>(&format!(
             "SELECT {MATCH_PARTICIPANT_COLUMNS} FROM match_participant \
              WHERE match_id IN (SELECT id FROM match WHERE step_id = $1) \

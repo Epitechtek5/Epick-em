@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 
 import { renderApp, renderSignedIn } from '@/test/render'
 
@@ -7,7 +7,7 @@ describe('HomePage', () => {
     await renderSignedIn('alice')
 
     expect(screen.getByRole('heading', { level: 1, name: 'Bonjour, alice' })).toBeInTheDocument()
-    expect(document.title).toBe("Accueil · Epick'em")
+    await waitFor(() => expect(document.title).toBe("Accueil · Epick'em"))
   })
 
   it('présente les quatre blocs du tableau de bord sous des titres de niveau 2', async () => {

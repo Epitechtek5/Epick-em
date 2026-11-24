@@ -176,7 +176,10 @@ struct ParticipantStatusRequest {
 struct PlayerRank {
     rank: u32,
     participant_id: Uuid,
-    user_id: Uuid,
+    /// Compte du joueur ; absent pour un inscrit importé d'une source externe.
+    user_id: Option<Uuid>,
+    /// Nom d'un inscrit importé (sans compte local).
+    display_name: Option<String>,
     /// Équipe pour laquelle le joueur marque, le cas échéant.
     tournament_team_id: Option<Uuid>,
     points: f64,
@@ -980,21 +983,28 @@ async fn player_ranking(
     let entries = active_participants(&state, tournament.id)
         .await?
         .into_iter()
-        .filter_map(|p| {
-            let user_id = p.user_id?;
+        // Un joueur, ou un inscrit importé qui n'a que son nom chez la source.
+        .filter(|p| p.user_id.is_some() || p.display_name.is_some())
+        .map(|p| {
             let score = points.get(&p.id).copied().unwrap_or(0.0);
-            Some(((p.id, user_id, p.tournament_team_id), score))
+            (
+                (p.id, p.user_id, p.display_name, p.tournament_team_id),
+                score,
+            )
         })
         .collect();
     let ranking: Vec<PlayerRank> = rank(entries)
         .into_iter()
         .map(
-            |(rank, (participant_id, user_id, tournament_team_id), points)| PlayerRank {
-                rank,
-                participant_id,
-                user_id,
-                tournament_team_id,
-                points,
+            |(rank, (participant_id, user_id, display_name, tournament_team_id), points)| {
+                PlayerRank {
+                    rank,
+                    participant_id,
+                    user_id,
+                    display_name,
+                    tournament_team_id,
+                    points,
+                }
             },
         )
         .collect();

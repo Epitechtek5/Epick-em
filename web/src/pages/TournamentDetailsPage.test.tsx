@@ -88,6 +88,8 @@ function server(initial: Partial<ServerState> = {}) {
       return jsonResponse(200, [
         { rank: 1, participant_id: P_BOB.id, user_id: BOB.id, tournament_team_id: null, points: 12.5 },
         { rank: 2, participant_id: P_ME.id, user_id: ME.id, tournament_team_id: TT_MINE.id, points: 3 },
+        // Inscrit importé d'une source externe : pas de compte, seulement son nom.
+        { rank: 3, participant_id: 'imported', user_id: null, display_name: 'Alice (start.gg)', tournament_team_id: null, points: 1 },
       ])
     }
     if (path === `${base}/team-ranking`) {
@@ -340,6 +342,7 @@ describe('TournamentDetailsPage', () => {
     expect(await within(rows[1]).findByText('bob')).toBeInTheDocument()
     expect(rows[1]).toHaveTextContent('12,5')
     expect(within(rows[2]).getByRole('link', { name: 'Karmine Corp' })).toBeInTheDocument()
+    expect(within(rows[3]).getByText('Alice (start.gg)')).toBeInTheDocument()
     const teams = screen.getByRole('table', { name: 'Classement des équipes' })
     expect(within(teams).getByRole('link', { name: 'Karmine Corp' })).toHaveAttribute('href', `/tournament-teams/${TT_MINE.id}`)
     expect(screen.getByText('Points des joueurs agrégés par équipe : Somme des scores.')).toBeInTheDocument()
