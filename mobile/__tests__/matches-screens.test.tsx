@@ -48,6 +48,7 @@ jest.mock('react-native-gesture-handler', () => {
   };
 });
 jest.mock('expo-router', () => ({
+  useFocusEffect: jest.requireActual('react').useEffect,
   router: { push: jest.fn(), replace: jest.fn(), back: jest.fn() },
 }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -127,6 +128,9 @@ function auth(role: 'admin' | 'user') {
     user: { id: tournamentId, username: 'alice', role },
     token: 'token',
     initializing: false,
+    secondFactorRequired: false,
+    verifySecondFactor: jest.fn(),
+    completeGoogle: jest.fn(),
     signIn: jest.fn(),
     logout: jest.fn(),
     refreshUser: jest.fn(),
@@ -397,4 +401,44 @@ it('displays imported points even when the match has no statistic entries or pla
     .mockReturnValue(resource({ ...context, match: imported }));
   await render(<MatchDetailsScreen />);
   expect(screen.getByText('3 pts')).toBeTruthy();
+});
+
+it('uses game results for BO3 and locks the format after the first game starts', async () => {
+  auth('admin');
+  const series = {
+    ...groupMatch,
+    best_of: 3 as const,
+    games: [
+      {
+        id: stepId,
+        match_id: matchId,
+        number: 1,
+        status: 'ongoing' as const,
+        attributes: {},
+        started_at: null,
+        ended_at: null,
+        created_at: '',
+        updated_at: '',
+        participants: groupMatch.participants,
+      },
+    ],
+  };
+  jest
+    .mocked(useMatchContext)
+    .mockReturnValue(
+      resource({ ...context, match: series, matches: [series] }),
+    );
+  const view = await render(<MatchDetailsScreen />);
+  expect(screen.getByText('Enter results')).toBeOnTheScreen();
+  expect(screen.queryByText('Finish match')).toBeNull();
+  await fireEvent.press(screen.getByText('Enter results'));
+  expect(router.push).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      params: { tournamentId, stepId, matchId, number: 1 },
+    }),
+  );
+  await view.rerender(<MatchEditorScreen />);
+  expect(screen.getByLabelText(/^Match format:/)).toBeDisabled();
+  await view.rerender(<MatchResultsScreen />);
+  expect(screen.queryByText('Save changes')).toBeNull();
 });

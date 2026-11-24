@@ -1,3 +1,4 @@
+import { SecuritySection } from '@/components/security-section';
 import { useTranslation } from '@/i18n';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, View } from 'react-native';
@@ -118,6 +119,26 @@ export default function ProfileScreen() {
         <AccountEditor>
           <UserForm user={user} allowEmailEdit onSave={saveProfile} />
         </AccountEditor>
+      </View>
+      <SecuritySection key={user.id} />
+      <PreferenceSections />
+      <View className="gap-3">
+        <Text variant="small" role="heading" aria-level={2}>
+          {t('settings.session')}
+        </Text>
+        <Button
+          variant="destructive"
+          disabled={loggingOut || deleting}
+          onPress={() => void handleLogout()}
+          accessibilityLabel={t('settings.logout')}
+        >
+          {loggingOut ? (
+            <ActivityIndicator accessibilityLabel={t('settings.loggingOut')} />
+          ) : (
+            <Icon icon={Logout01Icon} tone="primary-foreground" />
+          )}
+          <Text>{t('settings.logout')}</Text>
+        </Button>
         <View className="gap-3 pt-1">
           <Text variant="muted">{t('account.irreversible')}</Text>
           {error ? <FormMessage>{t(error)}</FormMessage> : null}
@@ -136,25 +157,6 @@ export default function ProfileScreen() {
             <Text className="text-destructive">{t('account.deleteMine')}</Text>
           </Button>
         </View>
-      </View>
-      <PreferenceSections />
-      <View className="gap-3">
-        <Text variant="small" role="heading" aria-level={2}>
-          {t('settings.session')}
-        </Text>
-        <Button
-          variant="outline"
-          disabled={loggingOut || deleting}
-          onPress={() => void handleLogout()}
-          accessibilityLabel={t('settings.logout')}
-        >
-          {loggingOut ? (
-            <ActivityIndicator accessibilityLabel={t('settings.loggingOut')} />
-          ) : (
-            <Icon icon={Logout01Icon} tone="foreground" />
-          )}
-          <Text>{t('settings.logout')}</Text>
-        </Button>
       </View>
     </ScrollView>
   );

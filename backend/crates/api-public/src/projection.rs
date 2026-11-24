@@ -239,6 +239,7 @@ fn step(
             matches_per_group: to_i32(matches_per_group),
             advance_per_group: to_i32(advance.clamp(1, group_size)),
             tiebreak: json!([]),
+            rules: Default::default(),
         },
         status: step_status(phase.state),
         groups,

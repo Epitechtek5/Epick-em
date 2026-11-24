@@ -13,11 +13,13 @@ import type { MatchStatus } from './types';
 
 export function matchError(error: unknown) {
   if (!(error instanceof ApiError)) return 'errors.network';
+  if (error.code === 'externally_managed') return 'external.readOnly';
   if (error.status === 409) return 'matches.conflict';
   if (error.status === 400) {
     const fields: Record<string, string> = {
       group_id: 'group',
       round: 'round',
+      best_of: 'bestOf',
       bracket: 'bracket',
       next_match_id: 'next',
       scheduled_at: 'date',
@@ -40,7 +42,9 @@ export async function loadIdentities(token: string, tournamentId: string) {
   await Promise.all(
     participants.map(async (p) => {
       try {
-        if (p.user_id) names[p.id] = (await getUser(token, p.user_id)).username;
+        if (p.display_name) names[p.id] = p.display_name;
+        else if (p.user_id)
+          names[p.id] = (await getUser(token, p.user_id)).username;
         else if (p.tournament_team_id)
           names[p.id] = (
             await getTournamentTeam(token, p.tournament_team_id)
@@ -71,7 +75,10 @@ export function useMatchContext(group_id?: string, status?: MatchStatus) {
           matchId ? api.get(matchId) : null,
         ]);
       const playerIds = new Set(
-        match?.participants.flatMap((p) =>
+        [
+          ...(match?.participants ?? []),
+          ...(match?.games?.flatMap((game) => game.participants) ?? []),
+        ].flatMap((p) =>
           detailed(p.stats) ? Object.keys(p.stats.players ?? {}) : [],
         ),
       );
@@ -85,9 +92,7 @@ export function useMatchContext(group_id?: string, status?: MatchStatus) {
           }
         }),
       );
-      const statDefinitions = match?.participants.some(
-        (p) => Object.keys(p.stats).length,
-      )
+      const statDefinitions = match
         ? await listGameStats(token, match.game_id).catch((error: unknown) => {
             if (error instanceof ApiError && error.status === 401) throw error;
             return [];

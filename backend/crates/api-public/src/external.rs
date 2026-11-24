@@ -5,7 +5,8 @@
 //!
 //! Un tournoi importé est **géré par sa source** : le middleware [`protect_external`] refuse
 //! toute écriture sur lui (`409 externally_managed`) — réglages, inscriptions, équipes, étapes,
-//! matchs et import de fichier. Il se supprime par `DELETE /external-tournaments/{id}`.
+//! matchs et import de fichier. Il se supprime par `DELETE /external-tournaments/{id}`. Les
+//! pronostics et le Pick'em, données des spectateurs, restent permis.
 //!
 //! La synchronisation elle-même (planification, curseurs, reprise, événements de résultat) est
 //! dans la crate `connectors` ; api-internal la lance périodiquement.
@@ -473,17 +474,25 @@ struct ImportRequest {
     name: Option<String>,
 }
 
-/// Importe un tournoi externe : crée le tournoi local en lecture seule, enregistre la source
-/// et prend un premier instantané (administrateur). Un tournoi déjà importé n'est pas dupliqué
-/// (`409 already_imported`). Si la source ne répond pas, rien n'est créé.
+#[derive(Deserialize, IntoParams)]
+struct ImportQuery {
+    /// Queue the initial snapshot and return before provider pagination completes.
+    #[serde(default)]
+    background: bool,
+}
+
+/// Import an external tournament once. By default the first snapshot is synchronous and
+/// failures roll back; background mode registers a durable source for asynchronous recovery.
 #[utoipa::path(
     post,
     path = "/external-tournaments",
     tag = "external-tournaments",
     security(("bearer" = [])),
     request_body = ImportRequest,
+    params(ImportQuery),
     responses(
         (status = 201, description = "Tournoi importé et synchronisé", body = SourceView),
+        (status = 202, description = "Import queued; poll tournament source for completion", body = SourceView),
         (status = 400, description = "URL, épreuves ou jeu invalides (`errors` détaille)", body = ErrorResponse),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
         (status = 403, description = "Réservé aux administrateurs", body = ErrorResponse),
@@ -497,6 +506,7 @@ async fn import(
     state: web::Data<AppState>,
     claims: web::ReqData<Claims>,
     body: web::Json<ImportRequest>,
+    query: web::Query<ImportQuery>,
 ) -> Result<HttpResponse, ApiError> {
     require_admin(&state, &claims).await?;
     let request = body.into_inner();
@@ -572,6 +582,30 @@ async fn import(
         event_ids,
         tournament_id: Some(tournament.id),
     };
+    if query.background {
+        match state.sync.store().register(source, now()).await {
+            Ok((record, true)) => {
+                // Registration is durable: api-internal can resume after a process restart.
+                let sync = state.sync.clone();
+                let id = record.id;
+                actix_web::rt::spawn(async move {
+                    let _ = sync.sync_one(id, now()).await;
+                });
+                return Ok(HttpResponse::Accepted().json(SourceView::new(record, false)));
+            }
+            outcome => {
+                state
+                    .store
+                    .delete_tournament(tournament.id)
+                    .await
+                    .map_err(ApiError::internal)?;
+                return Err(match outcome {
+                    Ok(_) => ApiError::AlreadyImported,
+                    Err(error) => store_error(error),
+                });
+            }
+        }
+    }
     match state.sync.import(source, now()).await {
         Ok((record, true)) => Ok(HttpResponse::Created().json(SourceView::new(record, true))),
         outcome => {
@@ -631,7 +665,9 @@ fn local_tournament(
         registration_open_at: None,
         registration_close_at: None,
         participant_type: ParticipantType::Solo,
-        team_size: None,
+        settings: crate::store::TournamentSettings::solo(),
+        owner_id: None,
+        is_template: false,
         max_participants: entrants.clamp(1, MAX_PARTICIPANTS_LIMIT) as i32,
         team_scoring_mode: TeamScoringMode::None,
         team_scoring_n: None,
@@ -710,6 +746,8 @@ async fn remove(
 /// Origine d'un tournoi importé, à afficher avec ses données.
 #[derive(Serialize, ToSchema)]
 struct TournamentSource {
+    /// Stable source identifier, also used by authorized administrative actions.
+    id: Uuid,
     #[schema(example = "startgg")]
     provider: String,
     #[schema(example = "start.gg")]
@@ -719,6 +757,18 @@ struct TournamentSource {
     /// Les données affichées datent du dernier instantané réussi : la source n'a pas répondu
     /// depuis.
     stale: bool,
+    /// Observed capabilities and provider-neutral competition data for authenticated readers.
+    #[schema(value_type = Object)]
+    capabilities: Capabilities,
+    #[schema(value_type = Option<Object>)]
+    snapshot: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, IntoParams)]
+struct SourceQuery {
+    /// Include the provider-neutral competition snapshot, without administrative diagnostics.
+    #[serde(default)]
+    details: bool,
 }
 
 /// Source d'un tournoi importé (tout compte) ; `404` si le tournoi est géré localement.
@@ -727,7 +777,7 @@ struct TournamentSource {
     path = "/tournaments/{id}/source",
     tag = "external-tournaments",
     security(("bearer" = [])),
-    params(("id" = Uuid, Path)),
+    params(("id" = Uuid, Path), SourceQuery),
     responses(
         (status = 200, description = "Source du tournoi", body = TournamentSource),
         (status = 401, description = "Jeton d'accès refusé", body = ErrorResponse),
@@ -738,6 +788,7 @@ struct TournamentSource {
 async fn tournament_source(
     state: web::Data<AppState>,
     id: web::Path<Uuid>,
+    query: web::Query<SourceQuery>,
 ) -> Result<HttpResponse, ApiError> {
     let record = state
         .sync
@@ -753,6 +804,18 @@ async fn tournament_source(
         .map(|c| c.display_name().to_string())
         .unwrap_or_else(|| record.provider.clone());
     Ok(HttpResponse::Ok().json(TournamentSource {
+        id: record.id,
+        capabilities: record.capabilities,
+        snapshot: if query.details {
+            record
+                .snapshot
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(ApiError::internal)?
+        } else {
+            None
+        },
         stale: record.is_stale(),
         provider: record.provider,
         provider_name,
@@ -801,7 +864,11 @@ pub async fn protect_external(
     next: Next<BoxBody>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
     let read = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    if read || !req.resource_map().has_resource(req.path()) {
+    // Pronostics et Pick'em sont des données des spectateurs, permises sur un tournoi importé.
+    if read
+        || !req.resource_map().has_resource(req.path())
+        || crate::predictions::spectator_owned(req.path())
+    {
         return next.call(req).await;
     }
     let Some(state) = req.app_data::<web::Data<AppState>>().cloned() else {

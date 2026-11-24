@@ -1,1 +1,4 @@
-export { EditTournamentScreen as default } from '@/screens/tournaments/TournamentEditorScreen';
+import { EditTournamentScreen as Screen } from '@/screens/tournaments/TournamentEditorScreen';
+import { withTournamentSource } from '@/components/tournaments/TournamentSourceBoundary';
+
+export default withTournamentSource(Screen, true);

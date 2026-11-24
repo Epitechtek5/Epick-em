@@ -4,10 +4,10 @@ import { ApiError, NetworkError } from '@/lib/api/http'
 import type { MatchFieldErrors } from './types'
 
 // Champs d'un 400 de création ou de modification (api-public/matches.rs).
-const FORM_FIELDS = ['group_id', 'round', 'bracket', 'next_match_id', 'scheduled_at', 'participant_ids'] as const
-const DETAIL_FIELDS = ['participants', 'results', ...FORM_FIELDS] as const
+const FORM_FIELDS = ['group_id', 'round', 'bracket', 'next_match_id', 'best_of', 'scheduled_at', 'participant_ids'] as const
+const DETAIL_FIELDS = ['participants', 'results', 'attributes', 'games', ...FORM_FIELDS] as const
 
-export type MatchAction = 'default' | 'save' | 'delete' | 'results' | 'status'
+export type MatchAction = 'default' | 'save' | 'delete' | 'results' | 'status' | 'game'
 
 // Traduit une erreur d'API sur les matchs : 400, 401, 403, 404 et 409 ont chacun leur texte.
 export function matchErrorKey(error: unknown, action: MatchAction = 'default'): MessageKey {
@@ -20,12 +20,14 @@ export function matchErrorKey(error: unknown, action: MatchAction = 'default'): 
       if (getErrorCode(error.body) !== 'invalid_status_transition') return 'matches.errors.conflict'
       if (action === 'status') return 'matches.errors.statusConflict'
       if (action === 'delete') return 'matches.errors.deleteConflict'
+      if (action === 'game') return 'matches.games.errors.conflict'
       return 'matches.errors.locked'
     }
     if (error.status === 400) {
       const fields = getFieldErrors(error.body, DETAIL_FIELDS)
       if (fields.participants) return 'matches.errors.participants'
       if (fields.results) return 'matches.errors.results'
+      if (fields.attributes) return 'matches.games.errors.attributes'
       if (FORM_FIELDS.some((field) => fields[field])) return 'matches.validation.fixErrors'
       return 'games.errors.invalid'
     }
@@ -37,8 +39,8 @@ export function matchErrorKey(error: unknown, action: MatchAction = 'default'): 
 // affiché tel quel sous le message traduit.
 export function matchErrorDetail(error: unknown): string | undefined {
   if (!(error instanceof ApiError) || error.status !== 400) return undefined
-  const fields = getFieldErrors(error.body, ['participants', 'results'])
-  return fields.participants ?? fields.results
+  const fields = getFieldErrors(error.body, ['participants', 'results', 'attributes', 'games', 'best_of'])
+  return fields.participants ?? fields.results ?? fields.attributes ?? fields.games ?? fields.best_of
 }
 
 // Un 409 signale un état changé ailleurs : l'écran se recharge pour montrer l'état réel.
@@ -55,6 +57,7 @@ export function matchFieldErrors(error: unknown): MatchFieldErrors | null {
   if (found.round) errors.round = 'matches.validation.round'
   if (found.bracket) errors.bracket = 'matches.validation.bracket'
   if (found.next_match_id) errors.next_match_id = 'matches.validation.next'
+  if (found.best_of) errors.best_of = 'matches.validation.bestOf'
   if (found.scheduled_at) errors.scheduled_at = 'matches.validation.scheduledAt'
   if (found.participant_ids) errors.participant_ids = 'matches.validation.participantsGroup'
   return Object.keys(errors).length > 0 ? errors : null

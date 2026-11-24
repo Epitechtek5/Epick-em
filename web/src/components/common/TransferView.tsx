@@ -1,7 +1,8 @@
-import { Download04Icon } from '@hugeicons/core-free-icons'
+import { ArrowLeft01Icon, Download04Icon } from '@hugeicons/core-free-icons'
 import type { ChangeEvent } from 'react'
 import { Link } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
 import {
   AlertDialog,
@@ -65,15 +66,17 @@ export function TransferView(props: TransferViewProps) {
   }
 
   return (
-    <div className="grid w-full max-w-2xl gap-8 self-start">
-      <div className="grid gap-2">
-        <h1 className="text-3xl font-semibold tracking-tight">{props.title}</h1>
-        <p>
-          <Link to={props.backTo} className="text-primary underline underline-offset-4">
+    <div className="grid w-full max-w-3xl gap-8 self-start">
+      <PageHero
+        icon={Download04Icon}
+        title={props.title}
+        back={
+          <Link to={props.backTo} className={HERO_BACK}>
+            <Icon icon={ArrowLeft01Icon} size={16} />
             {props.backLabel}
           </Link>
-        </p>
-      </div>
+        }
+      />
 
       {feedback ? (
         <StateMessage kind={feedback.kind}>

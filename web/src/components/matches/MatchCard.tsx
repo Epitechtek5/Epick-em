@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 
 import { Avatar } from '@/components/tournaments/ui'
 import { Icon } from '@/components/ui/icon'
-import { orderedParticipants, type Slot } from '@/features/matches/organize'
+import { isBye, isFinalReset, orderedParticipants, type Slot } from '@/features/matches/organize'
 import type { Match, MatchParticipant } from '@/features/matches/types'
 import { formatDateTime, formatPoints } from '@/features/tournaments/format'
 import type { Identity } from '@/hooks/use-participant-identities'
@@ -25,7 +25,9 @@ export function SlotLabel({ slot, numbers }: { slot: Slot; numbers: Map<string, 
     <span className="truncate text-muted-foreground italic">
       {slot.kind === 'winnerOf'
         ? t('matches.winnerOf', { number: numbers.get(slot.match.id) ?? '?' })
-        : t('matches.toBeDetermined')}
+        : slot.kind === 'loserOf'
+          ? t('matches.loserOf', { number: numbers.get(slot.match.id) ?? '?' })
+          : t('matches.toBeDetermined')}
     </span>
   )
 }
@@ -83,6 +85,7 @@ export function MatchCard({
   const number = display.numbers.get(match.id) ?? 0
   const group = match.group_id ? display.groupIndexes?.get(match.group_id) : undefined
   const next = match.next_match_id ? display.numbers.get(match.next_match_id) : undefined
+  const loserNext = match.loser_next_match_id ? display.numbers.get(match.loser_next_match_id) : undefined
   return (
     <article
       aria-labelledby={`match-${match.id}`}
@@ -107,7 +110,7 @@ export function MatchCard({
         {match.scheduled_at ? (
           <span className="inline-flex items-center gap-1">
             <Icon icon={Calendar03Icon} size={14} />
-            <span className="sr-only">{t('matches.scheduledAt')} : </span>
+            <span className="sr-only">{t('matches.scheduledAt')}{t('common.colon')} </span>
             <time dateTime={match.scheduled_at}>{formatDateTime(lang, match.scheduled_at)}</time>
           </span>
         ) : null}
@@ -128,6 +131,9 @@ export function MatchCard({
         </ul>
       )}
       {next !== undefined ? <p className="text-xs text-muted-foreground">{t('matches.winnerGoesTo', { number: next })}</p> : null}
+      {loserNext !== undefined ? <p className="text-xs text-muted-foreground">{t('matches.loserGoesTo', { number: loserNext })}</p> : null}
+      {isFinalReset(match) ? <p className="text-xs text-muted-foreground">{t('matches.resetHint')}</p> : null}
+      {isBye(match) ? <p className="text-xs text-muted-foreground">{t('matches.byeHint')}</p> : null}
     </article>
   )
 }

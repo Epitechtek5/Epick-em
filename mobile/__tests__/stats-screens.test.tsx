@@ -47,6 +47,9 @@ const session = {
   user: { id, username: 'admin', role: 'admin' as const },
   token: 'token',
   initializing: false,
+  secondFactorRequired: false,
+  verifySecondFactor: jest.fn(),
+  completeGoogle: jest.fn(),
   signIn: jest.fn(),
   logout: jest.fn(),
   refreshUser: jest.fn().mockResolvedValue(undefined),
@@ -76,7 +79,7 @@ it.each(['user', 'watcher'] as const)(
     const view = await render(<GameDetailsScreen />);
     await screen.findByText('Eliminations');
     expect(screen.getByText('kills')).toBeOnTheScreen();
-    expect(screen.getByText('· Flat')).toBeOnTheScreen();
+    expect(screen.getByText('· Number')).toBeOnTheScreen();
     expect(screen.queryByText('Manage statistics')).toBeNull();
     await view.rerender(<StatsScreen />);
     expect(screen.queryByText('Create statistic')).toBeNull();
@@ -115,6 +118,7 @@ it('creates valid definitions and rejects invalid keys in the shared form', asyn
       name: 'Eliminations',
       key: 'kills',
       type: 'flat',
+      scope: 'participant',
     }),
   );
 });
@@ -146,4 +150,29 @@ it('confirms removal before changing a game association', async () => {
     ).toBeNull(),
   );
   alert.mockRestore();
+});
+
+it('creates game-level selections with an explicit scope and preserves numeric edit restrictions', async () => {
+  jest
+    .mocked(statsApi.createStat)
+    .mockResolvedValue({ ...stat, type: 'select', scope: 'match' });
+  const view = await render(<CreateStatScreen />);
+  await fireEvent.changeText(screen.getByLabelText('Name'), 'Map');
+  await fireEvent.changeText(screen.getByLabelText('Key'), 'map');
+  await fireEvent.press(screen.getByRole('radio', { name: 'Selection' }));
+  await fireEvent.press(
+    screen.getByLabelText('Applies to: Participant or player'),
+  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Each game' }));
+  await fireEvent.press(screen.getByText('Save changes'));
+  expect(statsApi.createStat).toHaveBeenCalledWith('token', {
+    name: 'Map',
+    key: 'map',
+    type: 'select',
+    scope: 'match',
+  });
+  await view.rerender(<EditStatScreen />);
+  await screen.findByLabelText('Name');
+  expect(screen.queryByRole('radio', { name: 'Selection' })).toBeNull();
+  expect(screen.queryByRole('radio', { name: 'MVP' })).toBeNull();
 });

@@ -111,6 +111,7 @@ impl ImportedTournament {
                 tournament_team_id: None,
                 status: p.status,
                 registered_at: since(id, &registered),
+                responses: super::no_responses(),
                 external_id: Some(p.external_id),
                 display_name: Some(p.display_name),
             });
@@ -141,6 +142,7 @@ impl ImportedTournament {
                 matches_per_group: d.matches_per_group,
                 advance_per_group: d.advance_per_group,
                 tiebreak: d.tiebreak,
+                rules: d.rules,
                 status: step.status,
                 created_at: since(step_id, &created),
                 updated_at: now.clone(),
@@ -170,6 +172,7 @@ impl ImportedTournament {
                         participant_id,
                         group_id,
                         points: member.points,
+                        seed: None,
                         final_rank: member.final_rank,
                         status: member.status,
                     });
@@ -185,6 +188,8 @@ impl ImportedTournament {
                         if let Some(&participant_id) = participant_ids.get(&entry.participant) {
                             model.match_participants.push(MatchParticipant {
                                 match_id,
+                                slot: None,
+                                games_won: None,
                                 participant_id,
                                 stats: entry.stats,
                                 points: entry.points,
@@ -201,6 +206,11 @@ impl ImportedTournament {
                         round: projected.round,
                         bracket: projected.bracket,
                         next_match_id: None,
+                        number: None,
+                        next_slot: None,
+                        loser_next_match_id: None,
+                        loser_next_slot: None,
+                        best_of: 1,
                         scheduled_at: None,
                         started_at: projected.started_at,
                         ended_at: projected.ended_at,

@@ -1,15 +1,18 @@
+import { Analytics01Icon, ArrowLeft01Icon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
 import { StatForm } from '@/components/stats/StatForm'
 import { Button } from '@/components/ui/button'
 import { createStat, getStat, updateStat } from '@/features/stats/api'
-import { isKeyTaken, statErrorKey } from '@/features/stats/errors'
+import { isKeyTaken, statErrorKey, statFieldErrors } from '@/features/stats/errors'
 import type { StatField, StatInput } from '@/features/stats/types'
 import { changedStatFields, statId } from '@/features/stats/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useDocumentTitle } from '@/hooks/use-document-title'
+import { Icon } from '@/components/ui/icon'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -72,7 +75,9 @@ export default function StatEditorPage() {
         })
       }
     } catch (error) {
+      const fields = statFieldErrors(error)
       if (isKeyTaken(error)) setServerErrors({ key: 'stats.errors.keyTaken' })
+      else if (fields) setServerErrors(fields)
       else {
         // Un 403 laisse penser que le rôle a changé : on relit la session.
         if (error instanceof ApiError && error.status === 403) void refreshRole()
@@ -84,10 +89,17 @@ export default function StatEditorPage() {
   }
 
   return (
-    <div className="grid w-full max-w-2xl gap-6 self-start">
-      <h1 className="text-3xl font-semibold tracking-tight">
-        {editing ? t('stats.edit') : t('stats.create')}
-      </h1>
+    <div className="grid w-full max-w-3xl gap-6 self-start">
+      <PageHero
+        icon={Analytics01Icon}
+        title={editing ? t('stats.edit') : t('stats.create')}
+        back={
+          <Link to="/stats" className={HERO_BACK}>
+            <Icon icon={ArrowLeft01Icon} size={16} />
+            {t('stats.returnToCatalog')}
+          </Link>
+        }
+      />
 
       {!valid ? (
         <StateMessage
@@ -126,9 +138,10 @@ export default function StatEditorPage() {
           key={state.data?.id ?? 'new'}
           initial={
             state.data
-              ? { name: state.data.name, key: state.data.key, type: state.data.type }
+              ? { name: state.data.name, key: state.data.key, type: state.data.type, scope: state.data.scope }
               : undefined
           }
+          editing={editing}
           submitLabel={editing ? t('common.save') : t('stats.create')}
           busy={busy}
           serverErrors={serverErrors}

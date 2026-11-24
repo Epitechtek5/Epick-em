@@ -1,14 +1,15 @@
-import { Cancel01Icon } from '@hugeicons/core-free-icons'
+import { Cancel01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { StateMessage } from '@/components/games/StateMessage'
+import { StatOptionsEditor } from '@/components/stats/StatOptionsEditor'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Label } from '@/components/ui/label'
 import { linkStat, listAllStats, listGameStats, unlinkStat } from '@/features/stats/api'
 import { statErrorKey } from '@/features/stats/errors'
-import { statTypeLabelKey } from '@/features/stats/labels'
+import { statScopeLabelKey, statTypeLabelKey } from '@/features/stats/labels'
 import type { Stat } from '@/features/stats/types'
 import { useAsyncResource } from '@/hooks/use-async-resource'
 import { useI18n, type MessageKey, type Params } from '@/i18n/context'
@@ -30,6 +31,8 @@ export function GameStatsSection({ gameId }: { gameId: string }) {
   const { state, reload } = useAsyncResource((signal) => listGameStats(gameId, signal), [gameId])
   const [feedback, setFeedback] = useState<Feedback | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Statistique `select` dont les valeurs sont en cours de modification (admin).
+  const [configuring, setConfiguring] = useState<string | null>(null)
 
   async function mutate(stat: Stat, action: 'link' | 'unlink') {
     setBusyId(stat.id)
@@ -96,26 +99,62 @@ export function GameStatsSection({ gameId }: { gameId: string }) {
       {linked.length > 0 ? (
         <ul aria-label={t('gameStats.list')} className="grid gap-2">
           {linked.map((stat) => (
-            <li
-              key={stat.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 ring-1 ring-foreground/10"
-            >
-              <div className="grid">
-                <span className="font-medium">{stat.name}</span>
-                <span className="text-sm text-muted-foreground">
-                  <code className="font-mono">{stat.key}</code> · {t(statTypeLabelKey(stat.type))} ({stat.type})
-                </span>
+            <li key={stat.id} className="grid gap-2 rounded-lg px-3 py-2 ring-1 ring-foreground/10">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="grid">
+                  <span className="font-medium">{stat.name}</span>
+                  <span className="text-sm text-muted-foreground">
+                    <code className="font-mono">{stat.key}</code> · {t(statTypeLabelKey(stat.type))} ({stat.type}) ·{' '}
+                    {t(statScopeLabelKey(stat.scope))}
+                  </span>
+                </div>
+                {isAdmin ? (
+                  <div className="flex flex-wrap gap-2">
+                    {stat.type === 'select' && configuring !== stat.id ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={t('gameStats.configureFor', { name: stat.name })}
+                        disabled={busyId !== null}
+                        onClick={() => {
+                          setFeedback(null)
+                          setConfiguring(stat.id)
+                        }}
+                      >
+                        <Icon icon={Settings02Icon} />
+                        {t('gameStats.configure')}
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      aria-label={t('gameStats.remove', { name: stat.name })}
+                      disabled={busyId === stat.id}
+                      onClick={() => mutate(stat, 'unlink')}
+                    >
+                      <Icon icon={Cancel01Icon} />
+                    </Button>
+                  </div>
+                ) : null}
               </div>
-              {isAdmin ? (
-                <Button
-                  variant="outline"
-                  size="icon"
-                  aria-label={t('gameStats.remove', { name: stat.name })}
-                  disabled={busyId === stat.id}
-                  onClick={() => mutate(stat, 'unlink')}
-                >
-                  <Icon icon={Cancel01Icon} />
-                </Button>
+              {stat.type === 'select' && configuring === stat.id ? (
+                <StatOptionsEditor
+                  gameId={gameId}
+                  stat={stat}
+                  onCancel={() => setConfiguring(null)}
+                  onSaved={() => {
+                    setConfiguring(null)
+                    setFeedback({ kind: 'success', key: 'gameStats.optionsSaved', params: { name: stat.name } })
+                    reload()
+                  }}
+                />
+              ) : stat.type === 'select' ? (
+                <p className="text-sm">
+                  <span className="text-muted-foreground">{t('gameStats.values')}{t('common.colon')} </span>
+                  {stat.options && stat.options.length > 0
+                    ? stat.options.map((option) => option.label).join(', ')
+                    : <span className="text-muted-foreground">{t('stats.noOptions')}</span>}
+                </p>
               ) : null}
             </li>
           ))}

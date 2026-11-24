@@ -16,7 +16,7 @@ import TournamentTransferScreen from '../src/screens/tournaments/TournamentTrans
 import { useAuth } from '../src/features/auth/session';
 import { useGameResource } from '../src/features/games/use-game-resource';
 import * as tournamentApi from '../src/features/tournaments/api';
-import * as tournamentFiles from '../src/features/tournaments/files';
+import { pickImportFile } from '../src/features/games/files';
 import i18n from '../src/i18n';
 
 jest.mock('../src/features/auth/session', () => ({ useAuth: jest.fn() }));
@@ -25,10 +25,16 @@ jest.mock('../src/features/games/use-game-resource', () => ({
 }));
 jest.mock('../src/features/tournaments/api');
 jest.mock('../src/features/tournaments/files');
+jest.mock('../src/features/games/files', () => ({
+  pickImportFile: jest.fn(),
+  GameFileError: class extends Error {},
+  fileErrorKey: jest.fn(() => null),
+}));
 jest.mock('../src/components/teams/game-filter-select', () => ({
   GameFilterSelect: () => null,
 }));
 jest.mock('expo-router', () => ({
+  useFocusEffect: jest.requireActual('react').useEffect,
   router: { push: jest.fn(), replace: jest.fn() },
   useLocalSearchParams: () => ({
     tournamentId: '22222222-2222-4222-8222-222222222222',
@@ -49,11 +55,25 @@ const tournament = {
   registration_open_at: null,
   registration_close_at: null,
   participant_type: 'solo',
-  team_size: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   max_participants: 32,
   team_scoring_mode: 'none',
   team_scoring_n: null,
   status: 'draft',
+  owner_id: null,
+  is_template: false,
+  check_in_settled_at: null,
   created_at: '',
   updated_at: '',
 };
@@ -61,6 +81,9 @@ const session = {
   user: { id, username: 'alice', role: 'user' as 'user' | 'admin' },
   token: 'token',
   initializing: false,
+  secondFactorRequired: false,
+  verifySecondFactor: jest.fn(),
+  completeGoogle: jest.fn(),
   signIn: jest.fn(),
   logout: jest.fn(),
   refreshUser: jest.fn(),
@@ -133,6 +156,7 @@ it('shows a registered team member their enrollment without owner actions', asyn
     tournament_team_id: '44444444-4444-4444-8444-444444444444',
     status: 'registered' as const,
     registered_at: '',
+    responses: {},
   };
   jest.mocked(useGameResource).mockReturnValue({
     data: {
@@ -140,7 +164,8 @@ it('shows a registered team member their enrollment without owner actions', asyn
         ...tournament,
         status: 'registration',
         participant_type: 'team',
-        team_size: 2,
+        team_min_starters: 2,
+        team_max_starters: 2,
       },
       gameName: 'Counter-Strike',
       participants: [participant],
@@ -244,6 +269,7 @@ it('checks in the signed-in participant through the API', async () => {
     tournament_team_id: null,
     status: 'registered' as const,
     registered_at: '',
+    responses: {},
   };
   jest.mocked(tournamentApi.checkInParticipant).mockResolvedValue(participant);
   jest.mocked(useGameResource).mockReturnValue({
@@ -276,6 +302,89 @@ it('checks in the signed-in participant through the API', async () => {
   );
 });
 
+it.each([
+  ['other-user', 'Retirer'],
+  [id, 'Se retirer'],
+])(
+  'uses readable response labels and the correct removal action for %s',
+  async (userId, action) => {
+    await i18n.changeLanguage('fr');
+    jest.mocked(useAuth).mockReturnValue({
+      ...session,
+      user: { ...session.user, role: 'admin' },
+    });
+    const participant = {
+      id,
+      user_id: userId,
+      tournament_team_id: null,
+      status: 'registered',
+      responses: { ingame_name: 'Alice', accepted: false },
+    };
+    jest.mocked(useGameResource).mockReturnValue({
+      data: {
+        tournament: {
+          ...tournament,
+          status: 'registration',
+          registration_fields: [
+            {
+              key: 'ingame_name',
+              label: 'Pseudo en jeu',
+              field_type: 'text',
+              required: true,
+              options: [],
+            },
+            {
+              key: 'accepted',
+              label: 'Accord',
+              field_type: 'boolean',
+              required: false,
+              options: [],
+            },
+          ],
+        },
+        participants: [participant],
+        allParticipants: [participant],
+        teams: [],
+        teamOptions: [],
+        referencedTeams: [],
+        names: ['Alice'],
+        loadedAt: Date.now(),
+      },
+      loading: false,
+      refreshing: false,
+      error: '',
+      reload: jest.fn(),
+      setData: jest.fn(),
+    });
+    await render(<TournamentParticipantsScreen />);
+    expect(screen.getByText('Pseudo en jeu: Alice')).toBeTruthy();
+    expect(screen.queryByText(/ingame_name:/)).toBeNull();
+    expect(screen.getByText(action)).toBeTruthy();
+    expect(screen.queryByText('Accord: false')).toBeNull();
+  },
+);
+
+it('displays the owner name instead of their identifier', async () => {
+  jest.mocked(useGameResource).mockReturnValue({
+    data: {
+      tournament: { ...tournament, owner_id: 'owner-identifier' },
+      ownerName: 'Tournament owner',
+      gameName: 'Game',
+      participants: [],
+      teamRegistrations: [],
+      loadedAt: Date.now(),
+    },
+    loading: false,
+    refreshing: false,
+    error: '',
+    reload: jest.fn(),
+    setData: jest.fn(),
+  });
+  await render(<TournamentDetailsScreen />);
+  expect(screen.getByText('Tournament owner')).toBeTruthy();
+  expect(screen.queryByText('owner-identifier')).toBeNull();
+});
+
 it('registers the current solo player without requiring a team', async () => {
   const reload = jest.fn().mockResolvedValue(undefined);
   jest.mocked(tournamentApi.registerParticipant).mockResolvedValue({
@@ -285,6 +394,7 @@ it('registers the current solo player without requiring a team', async () => {
     tournament_team_id: null,
     status: 'registered',
     registered_at: '',
+    responses: {},
   });
   jest.mocked(useGameResource).mockReturnValue({
     data: {
@@ -314,6 +424,7 @@ it('registers the current solo player without requiring a team', async () => {
     'token',
     id,
     undefined,
+    {},
   );
 });
 
@@ -334,7 +445,8 @@ it('explains why an owned team with the wrong starter count is ineligible', asyn
         ...tournament,
         status: 'registration',
         participant_type: 'team',
-        team_size: 3,
+        team_min_starters: 3,
+        team_max_starters: 3,
       },
       participants: [],
       allParticipants: [],
@@ -369,18 +481,18 @@ it('blocks transfer controls for a regular account', async () => {
   alert.mockRestore();
 });
 
-it('requires confirmation before opening an import file', async () => {
+it('opens the picker without a destructive confirmation and does not import on cancellation', async () => {
   jest
     .mocked(useAuth)
     .mockReturnValue({ ...session, user: { ...session.user, role: 'admin' } });
+  jest.mocked(pickImportFile).mockResolvedValue(null);
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
   await render(<TournamentTransferScreen />);
-  fireEvent.press(screen.getByText('Choose JSON / CSV file'));
-  expect(alert).toHaveBeenCalledWith(
-    expect.any(String),
-    expect.stringContaining('replace'),
-    expect.any(Array),
+  await act(async () =>
+    fireEvent.press(screen.getByText('Choose JSON / CSV file')),
   );
-  expect(tournamentFiles.pickAndImportTournaments).not.toHaveBeenCalled();
+  expect(pickImportFile).toHaveBeenCalledWith('tournaments');
+  expect(alert).not.toHaveBeenCalled();
+  expect(tournamentApi.importTournaments).not.toHaveBeenCalled();
   alert.mockRestore();
 });

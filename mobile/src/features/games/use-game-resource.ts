@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '@/features/auth/session';
+import { useTournamentSource } from '@/features/tournaments/source-context';
+import { ApiError } from '@/lib/api';
 import { gameErrorKey } from './errors';
 
 export function useGameResource<T>(
   load: (token: string) => Promise<T>,
   errorKey: (error: unknown) => string = gameErrorKey,
 ) {
-  const { token, refreshUser } = useAuth();
+  const { token, refreshUser, user } = useAuth();
+  const source = useTournamentSource();
+  const retain = Boolean(source);
   const tokenRef = useRef(token);
+  const retainedScope = useRef({
+    userId: user?.id,
+    load,
+    synchronizedAt: source?.last_success_at,
+  });
   const generation = useRef(0);
   const pending = useRef<Promise<void> | null>(null);
   const [data, setData] = useState<T | null>(null);
@@ -34,8 +43,14 @@ export function useGameResource<T>(
           const result = await Promise.resolve().then(() => load(accessToken));
           if (generation.current === requestGeneration) setData(result);
         } catch (caught) {
-          if (generation.current === requestGeneration)
+          if (generation.current === requestGeneration) {
+            if (
+              caught instanceof ApiError &&
+              [401, 403, 404].includes(caught.status)
+            )
+              setData(null);
             setError(errorKey(caught));
+          }
         } finally {
           if (generation.current === requestGeneration) {
             setLoading(false);
@@ -52,7 +67,17 @@ export function useGameResource<T>(
 
   useFocusEffect(
     useCallback(() => {
-      setData(null);
+      if (
+        !retain ||
+        retainedScope.current.userId !== user?.id ||
+        retainedScope.current.load !== load
+      )
+        setData(null);
+      retainedScope.current = {
+        userId: user?.id,
+        load,
+        synchronizedAt: source?.last_success_at,
+      };
       void reload();
       void refreshUser().catch(() => undefined);
       return () => {
@@ -60,7 +85,7 @@ export function useGameResource<T>(
         generation.current++;
         pending.current = null;
       };
-    }, [reload, refreshUser]),
+    }, [reload, refreshUser, retain, user?.id, source?.last_success_at, load]),
   );
 
   return { data, loading, refreshing, error, reload, setData };

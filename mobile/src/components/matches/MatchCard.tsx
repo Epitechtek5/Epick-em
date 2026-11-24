@@ -1,3 +1,4 @@
+import { useTournamentSource } from '@/features/tournaments/source-context';
 import { Pressable, View } from 'react-native';
 import { Text } from '@/components/ui/text';
 import { useTranslation } from '@/i18n';
@@ -14,10 +15,11 @@ export function MatchCard({
   onPress,
 }: {
   match: Match;
-  context: MatchContext;
+  context: Pick<MatchContext, 'matches' | 'names' | 'groups'>;
   onPress?: () => void;
 }) {
   const { t, i18n } = useTranslation();
+  const source = useTournamentSource();
   const group = context.groups.find((g) => g.group_id === match.group_id);
   const next =
     match.next_match_id && matchNumber(context.matches, match.next_match_id);
@@ -48,13 +50,17 @@ export function MatchCard({
             {context.names[p.participant_id] ?? t('steps.unknownParticipant')}
             {' · '}
             {p.result && t('matches.outcome.' + p.result) + ' · '}
-            {Object.keys(p.stats).length ||
-            p.points !== 0 ||
-            p.rank ||
-            p.result ||
-            match.status === 'finished'
-              ? t('steps.points', { points: p.points })
-              : t('matches.noResults')}
+            {source
+              ? 'score' in p.stats && typeof p.stats.score === 'number'
+                ? p.stats.score
+                : '—'
+              : Object.keys(p.stats).length ||
+                  p.points !== 0 ||
+                  p.rank ||
+                  p.result ||
+                  match.status === 'finished'
+                ? t('steps.points', { points: p.points })
+                : t('matches.noResults')}
           </Text>
         ))}
       {Array.from(

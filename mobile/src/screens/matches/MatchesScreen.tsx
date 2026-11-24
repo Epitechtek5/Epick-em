@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '@/features/auth/session';
+import { useTournamentAccess } from '@/features/tournaments/use-tournament-access';
 import { useMatchContext } from '@/features/matches/context';
 import { statuses, type MatchStatus } from '@/features/matches/types';
 import { elimination } from '@/features/matches/validation';
@@ -12,18 +12,26 @@ import { MatchBracket } from '@/components/matches/MatchBracket';
 import { StepOptionSelect } from '@/components/steps/option-select';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
-import { ScreenState } from '@/components/ui/feedback';
+import { FormMessage, ScreenState } from '@/components/ui/feedback';
 import { useTranslation } from '@/i18n';
 export default function MatchesScreen() {
   const { t } = useTranslation();
-  const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const [list, setList] = useState(false);
   const [group, setGroup] = useState('');
   const [status, setStatus] = useState<MatchStatus | ''>('');
   const state = useMatchContext(group || undefined, status || undefined);
   const { data, tournamentId, stepId } = state;
+  const { canReferee } = useTournamentAccess(tournamentId);
   if (!data) return <MatchState {...state} />;
+  const refreshNotice = state.error ? (
+    <View className="gap-2">
+      <FormMessage>{`${t(state.error)} · ${t('external.cached')}`}</FormMessage>
+      <Button variant="outline" onPress={() => void state.reload(true)}>
+        <Text>{t('common.retry')}</Text>
+      </Button>
+    </View>
+  ) : null;
   const params = { tournamentId, stepId };
   const bracketCompatible =
     elimination(data.step) && data.step.match_type === 'duel';
@@ -66,8 +74,9 @@ export default function MatchesScreen() {
         className="flex-1 gap-3 bg-background px-5 pt-5"
         style={{ paddingBottom: insets.bottom + 12 }}
       >
+        {refreshNotice}
         <View className="flex-row flex-wrap gap-2">
-          {user?.role === 'admin' && data.step.status === 'ongoing' ? (
+          {canReferee && data.step.status === 'ongoing' ? (
             <Button
               size="sm"
               onPress={() =>
@@ -110,7 +119,8 @@ export default function MatchesScreen() {
 
   return (
     <MatchPage>
-      {user?.role === 'admin' && data.step.status === 'ongoing' && (
+      {refreshNotice}
+      {canReferee && data.step.status === 'ongoing' && (
         <Button
           onPress={() =>
             router.push({

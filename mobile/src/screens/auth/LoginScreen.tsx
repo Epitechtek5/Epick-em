@@ -1,3 +1,4 @@
+import { GoogleSignInButton } from '@/components/google-sign-in-button';
 import { AuthScreen } from '@/components/auth-screen';
 import { PasswordInput } from '@/components/ui/password-input';
 import { FormMessage } from '@/components/ui/feedback';
@@ -14,13 +15,15 @@ import { useAuth } from '@/features/auth/session';
 import { ApiError } from '@/lib/api';
 import { AuthHeader } from '@/components/auth-header';
 import { normalizeEmail, validateEmail } from '@/features/auth/validation';
+import { useInvitationReturn } from '@/features/invitations/navigation';
 
 export default function LoginScreen() {
+  const { target } = useInvitationReturn();
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const { signIn, user, initializing } = useAuth();
+  const { signIn, user, initializing, secondFactorRequired } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   async function submit() {
@@ -55,7 +58,8 @@ export default function LoginScreen() {
       setSubmitting(false);
     }
   }
-  if (user) return <Redirect href="/" />;
+  if (secondFactorRequired) return <Redirect href="/second-factor" />;
+  if (user) return <Redirect href={target ?? '/'} />;
   return (
     <AuthScreen>
       <AuthHeader
@@ -129,6 +133,16 @@ export default function LoginScreen() {
             <ActivityIndicator accessibilityLabel={t('login.submitting')} />
           ) : null}
           <Text>{t(submitting ? 'login.submitting' : 'login.submit')}</Text>
+        </Button>
+
+        <GoogleSignInButton disabled={submitting || initializing} />
+
+        <Button
+          variant="outline"
+          onPress={() => router.push('/public-tournaments')}
+          accessibilityLabel={t('tournaments.public.browse')}
+        >
+          <Text>{t('tournaments.public.browse')}</Text>
         </Button>
 
         {error ? <FormMessage>{t(error)}</FormMessage> : null}

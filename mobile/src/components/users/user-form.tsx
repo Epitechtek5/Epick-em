@@ -21,7 +21,7 @@ import {
 } from '@/features/users/validation';
 
 interface UserFormProps {
-  user: User & { email?: string | null };
+  user: User & { email?: string | null; picture_url?: string | null };
   allowRoleEdit?: boolean;
   allowEmailEdit?: boolean;
   onSave: (changes: UpdateUserRequest) => Promise<void>;
@@ -37,6 +37,7 @@ export function UserForm({
   const [form, setForm] = useState<UserFormValues>({
     username: user.username,
     email: user.email ?? '',
+    pictureUrl: user.picture_url ?? '',
     password: '',
     confirmPassword: '',
     role: user.role,
@@ -52,13 +53,15 @@ export function UserForm({
     originalUser.id !== user.id ||
     originalUser.username !== user.username ||
     originalUser.role !== user.role ||
-    originalUser.email !== user.email
+    originalUser.email !== user.email ||
+    originalUser.picture_url !== user.picture_url
   ) {
     setOriginalUser(user);
     setForm((previous) => ({
       ...previous,
       username: user.username,
       email: user.email ?? '',
+      pictureUrl: user.picture_url ?? '',
       role: user.role,
     }));
   }
@@ -91,6 +94,11 @@ export function UserForm({
     const normalizedEmail = normalizeEmail(form.email);
     if (allowEmailEdit && normalizedEmail !== (user.email ?? '')) {
       changes.email = normalizedEmail;
+    }
+
+    const pictureUrl = form.pictureUrl.trim();
+    if (pictureUrl !== (user.picture_url ?? '')) {
+      changes.picture_url = pictureUrl;
     }
 
     if (form.password) {
@@ -168,6 +176,27 @@ export function UserForm({
           {errors.email ? <FormMessage>{t(errors.email)}</FormMessage> : null}
         </View>
       ) : null}
+
+      <View className="gap-2 border-t border-border pt-4">
+        <Text className="text-sm font-medium" nativeID="user-form-picture">
+          {t('account.pictureUrl')}
+        </Text>
+        <Text variant="muted">{t('account.pictureUrlHint')}</Text>
+        <Input
+          accessibilityLabel={t('account.pictureUrl')}
+          accessibilityLabelledBy="user-form-picture"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          invalid={Boolean(errors.pictureUrl)}
+          value={form.pictureUrl}
+          editable={!saving}
+          onChangeText={(value) => updateField('pictureUrl', value)}
+        />
+        {errors.pictureUrl ? (
+          <FormMessage>{t(errors.pictureUrl)}</FormMessage>
+        ) : null}
+      </View>
 
       <View className="gap-2 border-t border-border pt-4">
         <Text className="text-sm font-medium" nativeID="user-form-password">

@@ -46,6 +46,15 @@ impl Cache for RedisCache {
             .map_err(to_cache_error)
     }
 
+    async fn take(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError> {
+        // GETDEL (Redis 6.2+) : lecture et suppression atomiques.
+        redis::cmd("GETDEL")
+            .arg(key)
+            .query_async(&mut self.connection.clone())
+            .await
+            .map_err(to_cache_error)
+    }
+
     async fn delete(&self, keys: &[&str]) -> Result<(), CacheError> {
         if keys.is_empty() {
             return Ok(());

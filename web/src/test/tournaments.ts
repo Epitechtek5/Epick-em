@@ -18,6 +18,21 @@ export const SOLO: Tournament = {
   team_scoring_mode: 'sum',
   team_scoring_n: null,
   status: 'registration',
+  owner_id: null,
+  is_template: false,
+  check_in_settled_at: null,
+  mode: 'online',
+  location: null,
+  visibility: 'public',
+  rules: null,
+  team_min_starters: null,
+  team_max_starters: null,
+  team_max_substitutes: null,
+  registration_policy: 'open',
+  waiting_list_enabled: false,
+  registration_fields: [],
+  check_in_open_at: null,
+  check_in_close_at: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 }
@@ -29,6 +44,8 @@ export const TEAM_CUP: Tournament = {
   description: null,
   participant_type: 'team',
   team_size: 2,
+  team_min_starters: 2,
+  team_max_starters: 2,
   max_participants: 8,
   team_scoring_mode: 'none',
   status: 'draft',
@@ -41,6 +58,7 @@ export const P_ME: TournamentParticipant = {
   tournament_team_id: TT_MINE.id,
   status: 'registered',
   registered_at: '2026-11-01T10:00:00Z',
+  responses: {},
 }
 
 export const P_BOB: TournamentParticipant = {
@@ -50,6 +68,7 @@ export const P_BOB: TournamentParticipant = {
   tournament_team_id: null,
   status: 'checked_in',
   registered_at: '2026-11-01T11:00:00Z',
+  responses: {},
 }
 
 export const RULE_LINEAR: ScoringRule = {
@@ -91,6 +110,7 @@ export const STEP_POOLS: Step = {
   matches_per_group: 3,
   advance_per_group: 4,
   tiebreak: ['wins', 'best_placement'],
+  rules: { seeding: 'random', qualification: 'random', best_of: 1, best_of_by_round: {}, scoring: null },
   status: 'pending',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',

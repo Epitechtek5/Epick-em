@@ -34,6 +34,7 @@ export function tournamentErrorKey(error: unknown): string {
   if (error.status === 413) return 'tournaments.validation.fileSize';
   if (error.status === 409) {
     const known: Record<string, string> = {
+      externally_managed: 'external.readOnly',
       tournament_name_taken: 'tournaments.errors.nameTaken',
       scoring_rule_taken: 'tournaments.errors.ruleTaken',
       already_registered: 'tournaments.errors.alreadyRegistered',

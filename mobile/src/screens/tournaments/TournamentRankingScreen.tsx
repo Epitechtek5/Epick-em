@@ -1,3 +1,5 @@
+import ExternalCompetitionScreen from './ExternalCompetitionScreen';
+import { useTournamentSource } from '@/features/tournaments/source-context';
 import { useCallback } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
@@ -17,6 +19,7 @@ import { useTranslation } from '@/i18n';
 
 export default function TournamentRankingScreen() {
   const { t } = useTranslation();
+  const source = useTournamentSource();
   const { tournamentId } = useLocalSearchParams<{ tournamentId: string }>();
   const insets = useSafeAreaInsets();
   const load = useCallback(
@@ -28,6 +31,8 @@ export default function TournamentRankingScreen() {
       ]);
       const names = await Promise.all(
         players.map(async (player) => {
+          if (player.display_name) return player.display_name;
+          if (!player.user_id) return null;
           try {
             return (await getUser(token, player.user_id)).username;
           } catch {
@@ -43,7 +48,8 @@ export default function TournamentRankingScreen() {
     load,
     tournamentErrorKey,
   );
-  if (loading || error || !data)
+  if (source) return <ExternalCompetitionScreen initialTab="standings" />;
+  if (!data || loading || error)
     return (
       <ScreenState
         loading={loading}

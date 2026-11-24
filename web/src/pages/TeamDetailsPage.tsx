@@ -1,15 +1,17 @@
-import { ArrowLeft01Icon } from '@hugeicons/core-free-icons'
+import { ArrowLeft01Icon, GameController01Icon, UserGroupIcon, UserIcon } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
+import { HERO_BACK, PageHero } from '@/components/common/page-blocks'
 import { StateMessage } from '@/components/games/StateMessage'
+import { InvitationsSection } from '@/components/invitations/InvitationsSection'
 import { TeamMembersSection } from '@/components/teams/TeamMembersSection'
 import { TeamOverview } from '@/components/teams/TeamOverview'
-import { Button, buttonVariants } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { getGame } from '@/features/games/api'
 import { readNotice } from '@/features/games/notice'
-import { deleteTeam, getTeam } from '@/features/teams/api'
+import { deleteTeam, getTeam, listTeamMembers } from '@/features/teams/api'
 import { teamErrorKey } from '@/features/teams/errors'
 import { isUuid, ownsTeam } from '@/features/teams/validation'
 import { useAsyncResource } from '@/hooks/use-async-resource'
@@ -23,7 +25,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 export default function TeamDetailsPage() {
   const { id = '' } = useParams()
   const { t } = useI18n()
-  const { userId } = useAuth()
+  const { userId, isAdmin } = useAuth()
   const navigate = useNavigate()
   const notice = readNotice(useLocation().state)
   const valid = isUuid(id)
@@ -58,17 +60,17 @@ export default function TeamDetailsPage() {
   }
 
   const back = (
-    <Link to="/teams" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-      <Icon icon={ArrowLeft01Icon} />
+    <Link to="/teams" className={HERO_BACK}>
+      <Icon icon={ArrowLeft01Icon} size={16} />
       {t('teams.returnToList')}
     </Link>
   )
 
   if (!valid) {
     return (
-      <div className="grid w-full max-w-5xl gap-4 self-start">
-        <h1 className="text-3xl font-semibold tracking-tight">{t('teams.details')}</h1>
-        <StateMessage kind="error" action={back}>
+      <div className="grid w-full max-w-6xl gap-6 self-start">
+        <PageHero icon={UserGroupIcon} title={t('teams.details')} back={back} />
+        <StateMessage kind="error">
           {t('teams.errors.invalidId')}
         </StateMessage>
       </div>
@@ -83,8 +85,8 @@ export default function TeamDetailsPage() {
         : '…'
 
   return (
-    <div className="grid w-full max-w-5xl gap-8 self-start">
-      <div>{back}</div>
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      {!team ? <PageHero icon={UserGroupIcon} title={t('teams.details')} back={back} /> : null}
 
       {notice ? <StateMessage kind="success">{t(notice.key, notice.params)}</StateMessage> : null}
 
@@ -92,7 +94,6 @@ export default function TeamDetailsPage() {
 
       {state.status === 'error' ? (
         <>
-          <h1 className="text-3xl font-semibold tracking-tight">{t('teams.details')}</h1>
           <StateMessage
             kind="error"
             action={
@@ -115,14 +116,17 @@ export default function TeamDetailsPage() {
             details={[
               {
                 label: t('teams.game'),
+                icon: GameController01Icon,
                 value: <Link to={`/games/${team.game_id}`} className="text-primary underline underline-offset-4">{gameName}</Link>,
               },
               {
                 label: t('teams.owner'),
+                icon: UserIcon,
                 value: `${owners[team.owner_id] ?? t('teams.unknownUser')}${canManage ? ` (${t('teams.you')})` : ''}`,
               },
               { label: t('teams.identifier'), value: <span className="font-mono">{team.id}</span> },
             ]}
+            back={back}
             canManage={canManage}
             editTo={`/teams/${team.id}/edit`}
             deleteLabels={{
@@ -137,7 +141,26 @@ export default function TeamDetailsPage() {
             onRefresh={reload}
           />
           {!canManage ? <p className="text-sm text-muted-foreground">{t('teams.readOnly')}</p> : null}
-          <TeamMembersSection scope="team" teamId={team.id} ownerId={team.owner_id} canManage={canManage} />
+          <TeamMembersSection
+            scope="team"
+            teamId={team.id}
+            ownerId={team.owner_id}
+            canManage={canManage}
+            canAdd={isAdmin}
+          />
+          {canManage ? (
+            <InvitationsSection
+              type="team"
+              resourceId={team.id}
+              resourceName={team.name}
+              hint={t('invitations.manage.teamHint')}
+              loadExcluded={(signal) =>
+                listTeamMembers(team.id, signal).then((members) =>
+                  members.filter((member) => !member.left_at).map((member) => member.user_id),
+                )
+              }
+            />
+          ) : null}
         </>
       ) : null}
     </div>

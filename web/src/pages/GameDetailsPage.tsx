@@ -1,7 +1,15 @@
-import { ArrowLeft01Icon, Edit02Icon, RefreshIcon } from '@hugeicons/core-free-icons'
+import {
+  ArrowLeft01Icon,
+  Edit02Icon,
+  GameController01Icon,
+  Image01Icon,
+  InformationCircleIcon,
+  RefreshIcon,
+} from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
+import { FactTile, HERO_ACTION, HERO_BACK, PageHero, SectionCard } from '@/components/common/page-blocks'
 import { DeleteGameDialog } from '@/components/games/DeleteGameDialog'
 import { GameImage } from '@/components/games/GameImage'
 import { StateMessage } from '@/components/games/StateMessage'
@@ -17,6 +25,7 @@ import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useI18n, type MessageKey } from '@/i18n/context'
 import { ApiError } from '@/lib/api/http'
 import { useAuth } from '@/lib/auth/auth-context'
+import { cn } from '@/lib/utils'
 
 export default function GameDetailsPage() {
   const { id = '' } = useParams()
@@ -56,17 +65,17 @@ export default function GameDetailsPage() {
   }
 
   const back = (
-    <Link to="/games" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-      <Icon icon={ArrowLeft01Icon} />
+    <Link to="/games" className={HERO_BACK}>
+      <Icon icon={ArrowLeft01Icon} size={16} />
       {t('games.returnToCatalog')}
     </Link>
   )
 
   if (!valid) {
     return (
-      <div className="grid w-full max-w-5xl gap-4 self-start">
-        <h1 className="text-3xl font-semibold tracking-tight">{t('games.details')}</h1>
-        <StateMessage kind="error" action={back}>{t('games.errors.invalidId')}</StateMessage>
+      <div className="grid w-full max-w-6xl gap-6 self-start">
+        <PageHero icon={GameController01Icon} title={t('games.details')} back={back} />
+        <StateMessage kind="error">{t('games.errors.invalidId')}</StateMessage>
       </div>
     )
   }
@@ -75,10 +84,34 @@ export default function GameDetailsPage() {
   const primary = images[selected] ?? images[0]
 
   return (
-    <div className="grid w-full max-w-5xl gap-6 self-start">
-      <div>{back}</div>
+    <div className="grid w-full max-w-6xl gap-6 self-start">
+      <PageHero
+        icon={GameController01Icon}
+        title={game?.name ?? t('games.details')}
+        description={game ? <p className="whitespace-pre-line">{game.description || t('games.noDescription')}</p> : undefined}
+        back={back}
+      >
+        {game ? (
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t('games.adminActions')}>
+            <Button variant="outline" className={HERO_ACTION} onClick={reload}>
+              <Icon icon={RefreshIcon} />
+              {t('games.refresh')}
+            </Button>
+            {isAdmin ? (
+              <>
+                <Link to={`/games/${game.id}/edit`} className={cn(buttonVariants({ variant: 'outline' }), HERO_ACTION)}>
+                  <Icon icon={Edit02Icon} />
+                  {t('games.edit')}
+                </Link>
+                <DeleteGameDialog name={game.name} busy={deleting} onConfirm={remove} />
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </PageHero>
 
       {notice ? <StateMessage kind="success">{t(notice.key, notice.params)}</StateMessage> : null}
+      {deleteError ? <StateMessage kind="error">{t(deleteError)}</StateMessage> : null}
 
       {state.status === 'loading' ? (
         <StateMessage kind="loading">{t('games.loadingDetails')}</StateMessage>
@@ -98,8 +131,8 @@ export default function GameDetailsPage() {
       ) : null}
 
       {game ? (
-        <article className="grid gap-6 lg:grid-cols-2" aria-labelledby="game-title">
-          <div className="grid content-start gap-3">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <SectionCard id="game-gallery" icon={Image01Icon} title={t('games.images')}>
             <GameImage key={primary} src={primary} name={game.name} className="rounded-xl" />
             {images.length > 1 ? (
               <ul className="flex flex-wrap gap-2" aria-label={t('games.gallery')}>
@@ -118,38 +151,16 @@ export default function GameDetailsPage() {
                 ))}
               </ul>
             ) : null}
-          </div>
-
-          <div className="grid content-start gap-4">
-            <h1 id="game-title" className="text-3xl font-semibold tracking-tight">
-              {game.name}
-            </h1>
-            <p className="whitespace-pre-line text-muted-foreground">
-              {game.description || t('games.noDescription')}
-            </p>
-            <dl className="text-sm">
-              <dt className="font-medium">{t('games.identifier')}</dt>
-              <dd className="break-all font-mono text-muted-foreground">{game.id}</dd>
-            </dl>
-
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={reload}>
-                <Icon icon={RefreshIcon} />
-                {t('games.refresh')}
-              </Button>
-              {isAdmin ? (
-                <>
-                  <Link to={`/games/${game.id}/edit`} className={buttonVariants({ variant: 'outline' })}>
-                    <Icon icon={Edit02Icon} />
-                    {t('games.edit')}
-                  </Link>
-                  <DeleteGameDialog name={game.name} busy={deleting} onConfirm={remove} />
-                </>
-              ) : null}
-            </div>
-            {deleteError ? <StateMessage kind="error">{t(deleteError)}</StateMessage> : null}
-          </div>
-        </article>
+          </SectionCard>
+          <dl className="grid content-start gap-3">
+            <FactTile icon={InformationCircleIcon} label={t('games.identifier')}>
+              <span className="font-mono font-normal break-all">{game.id}</span>
+            </FactTile>
+            <FactTile icon={Image01Icon} label={t('games.images')}>
+              {images.length}
+            </FactTile>
+          </dl>
+        </div>
       ) : null}
 
       {game ? <GameStatsSection gameId={game.id} /> : null}

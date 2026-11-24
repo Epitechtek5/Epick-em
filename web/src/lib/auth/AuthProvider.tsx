@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 
 import {
   login as loginRequest,
@@ -7,7 +7,8 @@ import {
 } from '@/lib/api/auth'
 import { AuthContext, type AuthContextValue } from './auth-context'
 import { decodeClaims } from './jwt'
-import { refreshSession } from './session'
+import { clearSignOutReason, refreshSession } from './session'
+import { watchSessionExpiry } from './session-expiry'
 import { tokenStore } from './token-store'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -15,10 +16,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ou ferme la session de lui-même.
   const tokens = useSyncExternalStore(tokenStore.subscribe, tokenStore.get)
 
+  // Renouvelle la session avant l'expiration du jeton d'accès, et la ferme quand le
+  // serveur refuse le renouvellement.
+  useEffect(() => watchSessionExpiry(), [])
+
   const claims = useMemo(() => (tokens ? decodeClaims(tokens.accessToken) : null), [tokens])
 
   const login = useCallback(async (credentials: Credentials) => {
     const received = await loginRequest(credentials)
+    clearSignOutReason()
     tokenStore.set(received)
   }, [])
 

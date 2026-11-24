@@ -34,7 +34,27 @@ export default function AuthenticatedLayout() {
         ),
       }}
     >
+      <Stack.Screen
+        name="tournaments/external-import"
+        options={{ title: t('external.import') }}
+      />
+      <Stack.Screen
+        name="tournaments/external-imports"
+        options={{ title: t('external.imports') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/external"
+        options={{ title: t('external.competition') }}
+      />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="invitations/index"
+        options={{ title: t('invitations.title') }}
+      />
+      <Stack.Screen
+        name="invitations/create"
+        options={{ title: t('invitations.create') }}
+      />
       <Stack.Screen
         name="tournaments/create"
         options={{ title: t('tournaments.create') }}
@@ -62,6 +82,10 @@ export default function AuthenticatedLayout() {
       <Stack.Screen
         name="tournaments/[tournamentId]/ranking"
         options={{ title: t('tournaments.ranking') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/management"
+        options={{ title: t('tournaments.management.title') }}
       />
       <Stack.Screen
         name="tournaments/[tournamentId]/steps/index"
@@ -96,8 +120,16 @@ export default function AuthenticatedLayout() {
         options={{ title: t('matches.edit') }}
       />
       <Stack.Screen
+        name="tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/games/[number]"
+        options={{ title: t('matchGames.detail') }}
+      />
+      <Stack.Screen
         name="tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/results"
         options={{ title: t('matches.results') }}
+      />
+      <Stack.Screen
+        name="tournaments/[tournamentId]/steps/[stepId]/matches/[matchId]/workflow"
+        options={{ title: t('matchWorkflow.title') }}
       />
       <Stack.Screen
         name="teams/create"
@@ -164,6 +196,10 @@ export default function AuthenticatedLayout() {
       <Stack.Screen
         name="games/[id]/stats"
         options={{ title: t('stats.manageGame') }}
+      />
+      <Stack.Screen
+        name="games/[id]/stat-options/[statId]"
+        options={{ title: t('stats.configureOptions') }}
       />
       <Stack.Screen name="stats/index" options={{ title: t('stats.title') }} />
       <Stack.Screen
